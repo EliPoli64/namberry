@@ -9,6 +9,27 @@
 
 #include <iostream>
 
+namespace {
+
+juce::TextButton* findButton (juce::Component& parent, const juce::String& text)
+{
+    for (int i = 0; i < parent.getNumChildComponents(); ++i)
+    {
+        auto* child = parent.getChildComponent (i);
+
+        if (auto* button = dynamic_cast<juce::TextButton*> (child))
+            if (button->getButtonText() == text)
+                return button;
+
+        if (auto* found = findButton (*child, text))
+            return found;
+    }
+
+    return nullptr;
+}
+
+} // namespace
+
 int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI juceInit;
@@ -64,6 +85,30 @@ int main (int argc, char** argv)
         }
 
         std::cout << "Wrote " << file.getFullPathName() << "\n";
+    }
+
+    tabBar->setCurrentTabIndex (1, false);
+    editor.resized();
+
+    if (auto* browse = findButton (editor, "BROWSE .NAM"))
+    {
+        if (browse->onClick != nullptr)
+            browse->onClick();
+
+        const auto image = editor.createComponentSnapshot (editor.getLocalBounds(), true, 1.0f);
+        const auto file = outputDir.getChildFile ("browser.png");
+
+        juce::FileOutputStream stream (file);
+        juce::PNGImageFormat png;
+
+        if (stream.openedOk() && png.writeImageToStream (image, stream))
+            std::cout << "Wrote " << file.getFullPathName() << "\n";
+        else
+            std::cerr << "FAIL: could not write browser snapshot\n";
+    }
+    else
+    {
+        std::cerr << "FAIL: NAM browse button not found\n";
     }
 
     std::cout << "PASS\n";

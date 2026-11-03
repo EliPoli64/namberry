@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include "namberry/DirectoryBrowser.h"
 
 #include <cmath>
 #include <functional>
@@ -332,6 +333,10 @@ public:
             slider_.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 66, 18);
             slider_.setColour (juce::Slider::textBoxTextColourId, juce::Colour (kTextDim));
             slider_.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+
+            if (param != nullptr && param->getLabel().isNotEmpty())
+                slider_.setTextValueSuffix (" " + param->getLabel());
+
             slider_.setDoubleClickReturnValue (true,
                 param != nullptr ? param->convertFrom0to1 (param->getDefaultValue()) : 0.0);
             addAndMakeVisible (slider_);
@@ -845,13 +850,8 @@ class NamLoadBox : public juce::Component,
 {
 public:
     NamLoadBox (juce::String caption,
-                std::function<bool (const juce::File&)> loader,
-                std::function<juce::File()> getDirectory,
-                std::function<void (const juce::File&)> setDirectory)
-        : caption_ (std::move (caption)),
-          loader_ (std::move (loader)),
-          getDirectory_ (std::move (getDirectory)),
-          setDirectory_ (std::move (setDirectory))
+                std::function<bool (const juce::File&)> loader)
+        : caption_ (std::move (caption)), loader_ (std::move (loader))
     {
         addAndMakeVisible (name_);
         name_.setText ("No model loaded", juce::dontSendNotification);
@@ -860,8 +860,32 @@ public:
         name_.setColour (juce::Label::textColourId, juce::Colour (kTextDim));
 
         addAndMakeVisible (loadButton_);
-        loadButton_.setButtonText ("LOAD .NAM");
-        loadButton_.onClick = [this] { chooseFile(); };
+        loadButton_.setButtonText ("BROWSE .NAM");
+        loadButton_.onClick = [this]
+        {
+            if (onBrowse_ != nullptr)
+                onBrowse_();
+        };
+    }
+
+    void setOnBrowse (std::function<void()> callback)
+    {
+        onBrowse_ = std::move (callback);
+    }
+
+    bool loadFile (const juce::File& file) { return load (file); }
+
+    void setDisplayedFileName (const juce::String& name)
+    {
+        const auto display = name.isNotEmpty() ? name : juce::String ("No model loaded");
+
+        if (name_.getText() != display)
+        {
+            name_.setText (display, juce::dontSendNotification);
+            name_.setColour (juce::Label::textColourId,
+                             name.isNotEmpty() ? juce::Colour (kText)
+                                               : juce::Colour (kTextDim));
+        }
     }
 
     bool isInterestedInFileDrag (const juce::StringArray& files) override
@@ -907,49 +931,27 @@ public:
     }
 
 private:
-    void chooseFile()
-    {
-        const auto startDir = getDirectory_ != nullptr ? getDirectory_() : juce::File();
-
-        chooser_ = std::make_unique<juce::FileChooser> (
-            "Load NAM model", startDir, "*.nam");
-
-        chooser_->launchAsync (juce::FileBrowserComponent::openMode
-                                 | juce::FileBrowserComponent::canSelectFiles,
-                               [this] (const juce::FileChooser& fc)
-                               {
-                                   const auto file = fc.getResult();
-                                   if (file.existsAsFile())
-                                       load (file);
-                               });
-    }
-
-    void load (const juce::File& file)
+    bool load (const juce::File& file)
     {
         if (loader_ != nullptr && loader_ (file))
         {
-            name_.setText (file.getFileName(), juce::dontSendNotification);
-            name_.setColour (juce::Label::textColourId, juce::Colour (kText));
+            setDisplayedFileName (file.getFileName());
+            return true;
+        }
 
-            if (setDirectory_ != nullptr)
-                setDirectory_ (file.getParentDirectory());
-        }
-        else
-        {
-            juce::AlertWindow::showMessageBoxAsync (
-                juce::MessageBoxIconType::WarningIcon,
-                "Could not load model",
-                "NAMberry could not load: " + file.getFileName());
-        }
+        juce::AlertWindow::showMessageBoxAsync (
+            juce::MessageBoxIconType::WarningIcon,
+            "Could not load model",
+            "NAMberry could not load: " + file.getFileName());
+
+        return false;
     }
 
     juce::String caption_;
     std::function<bool (const juce::File&)> loader_;
-    std::function<juce::File()> getDirectory_;
-    std::function<void (const juce::File&)> setDirectory_;
+    std::function<void()> onBrowse_;
     juce::Label name_;
     juce::TextButton loadButton_;
-    std::unique_ptr<juce::FileChooser> chooser_;
     bool dragOver_ = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NamLoadBox)
@@ -958,20 +960,26 @@ private:
 //==============================================================================
 /// One of the four IR slots: load button, mix, pan and phase invert.
 class IrSlotRow : public juce::Component,
-                  public juce::FileDragAndDropTarget
+                  public juce::FileDragAndDropTarget,
+                  private juce::Timer
 {
 public:
     IrSlotRow (APVTS& state, int slot, NAMBerryProcessor& processor)
         : slot_ (slot), processor_ (processor)
     {
+        startTimer (500);
         addAndMakeVisible (title_);
         title_.setText ("IR " + juce::String (slot + 1), juce::dontSendNotification);
         title_.setFont (juce::FontOptions (12.0f, juce::Font::bold));
         title_.setColour (juce::Label::textColourId, juce::Colour (kText));
 
         addAndMakeVisible (loadButton_);
-        loadButton_.setButtonText ("Load IR");
-        loadButton_.onClick = [this] { chooseFile(); };
+        loadButton_.setButtonText ("BROWSE");
+        loadButton_.onClick = [this]
+        {
+            if (onBrowse_ != nullptr)
+                onBrowse_();
+        };
 
         addAndMakeVisible (fileName_);
         fileName_.setText ("empty", juce::dontSendNotification);
@@ -990,6 +998,26 @@ public:
         phaseLabel_.setColour (juce::Label::textColourId, juce::Colour (kText));
         phaseAttachment_ = std::make_unique<APVTS::ButtonAttachment> (
             state, "irPhase" + juce::String (slot), phase_);
+    }
+
+    void setOnBrowse (std::function<void()> callback)
+    {
+        onBrowse_ = std::move (callback);
+    }
+
+    bool loadFile (const juce::File& file) { return load (file); }
+
+    void setDisplayedFileName (const juce::String& name)
+    {
+        const auto display = name.isNotEmpty() ? name : juce::String ("empty");
+
+        if (fileName_.getText() != display)
+        {
+            fileName_.setText (display, juce::dontSendNotification);
+            fileName_.setColour (juce::Label::textColourId,
+                                 name.isNotEmpty() ? juce::Colour (kText)
+                                                   : juce::Colour (kTextDim));
+        }
     }
 
     bool isInterestedInFileDrag (const juce::StringArray& files) override
@@ -1067,36 +1095,26 @@ private:
         mixAttachments_.push_back (std::make_unique<APVTS::SliderAttachment> (state, id, slider));
     }
 
-    void chooseFile()
-    {
-        chooser_ = std::make_unique<juce::FileChooser> (
-            "Load impulse response", processor_.getIrDirectory(), "*.wav;*.aif;*.aiff");
-
-        chooser_->launchAsync (juce::FileBrowserComponent::openMode
-                                 | juce::FileBrowserComponent::canSelectFiles,
-                               [this] (const juce::FileChooser& fc)
-                               {
-                                   const auto file = fc.getResult();
-                                   if (file.existsAsFile())
-                                       load (file);
-                               });
-    }
-
-    void load (const juce::File& file)
+    bool load (const juce::File& file)
     {
         if (processor_.loadIr (slot_, file))
         {
-            fileName_.setText (file.getFileName(), juce::dontSendNotification);
-            fileName_.setColour (juce::Label::textColourId, juce::Colour (kText));
-            processor_.setIrDirectory (file.getParentDirectory());
+            setDisplayedFileName (file.getFileName());
+            return true;
         }
-        else
-        {
-            juce::AlertWindow::showMessageBoxAsync (
-                juce::MessageBoxIconType::WarningIcon,
-                "Could not load IR",
-                "NAMberry could not load: " + file.getFileName());
-        }
+
+        juce::AlertWindow::showMessageBoxAsync (
+            juce::MessageBoxIconType::WarningIcon,
+            "Could not load IR",
+            "NAMberry could not load: " + file.getFileName());
+
+        return false;
+    }
+
+    void timerCallback() override
+    {
+        if (auto* irLoader = processor_.getIrLoader())
+            setDisplayedFileName (irLoader->getLoadedFileName (slot_));
     }
 
     int slot_;
@@ -1107,7 +1125,7 @@ private:
     juce::Slider mix_, pan_;
     std::vector<std::unique_ptr<APVTS::SliderAttachment>> mixAttachments_;
     std::unique_ptr<APVTS::ButtonAttachment> phaseAttachment_;
-    std::unique_ptr<juce::FileChooser> chooser_;
+    std::function<void()> onBrowse_;
     bool dragOver_ = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (IrSlotRow)
@@ -1118,11 +1136,14 @@ private:
 class IrSlotGrid : public juce::Component
 {
 public:
-    IrSlotGrid (APVTS& state, NAMBerryProcessor& processor)
+    IrSlotGrid (APVTS& state, NAMBerryProcessor& processor,
+                std::function<void (IrSlotRow&)> openBrowser)
     {
         for (int slot = 0; slot < 4; ++slot)
         {
             auto card = std::make_unique<IrSlotRow> (state, slot, processor);
+            auto* raw = card.get();
+            raw->setOnBrowse ([openBrowser, raw] { openBrowser (*raw); });
             addAndMakeVisible (*card);
             cards_.push_back (std::move (card));
         }
@@ -1172,6 +1193,10 @@ NAMBerryEditor::NAMBerryEditor (NAMBerryProcessor& p)
 
     buildUi();
 
+    browser_ = std::make_unique<DirectoryBrowser>();
+    addChildComponent (browser_.get());
+    browser_->setVisible (false);
+
     setResizable (true, true);
     setResizeLimits (1000, 600, 4000, 1000);
     setSize (1280, 640);
@@ -1201,6 +1226,7 @@ void NAMBerryEditor::buildUi()
     tabBar_.clearTabs();
     tabPanels_.assign (5, {});
     allPanels_.clear();
+    nameUpdaters_.clear();
 
     auto& state = processor_.getValueTreeState();
     auto reduced = [this]() -> bool
@@ -1251,10 +1277,24 @@ void NAMBerryEditor::buildUi()
             {
                 return pedal ? processor_.loadNamPedalModel (file)
                              : processor_.loadNamModel (file);
-            },
-            [this] { return processor_.getNamDirectory(); },
-            [this] (const juce::File& directory) { processor_.setNamDirectory (directory); });
+            });
         auto* raw = box.get();
+        raw->setOnBrowse ([this, raw]
+        {
+            openBrowser (BrowserKind::Nam, [raw] (const juce::File& file)
+            {
+                raw->loadFile (file);
+            });
+        });
+
+        nameUpdaters_.push_back ([this, raw, pedal]
+        {
+            auto* loader = pedal ? processor_.getNamPedal() : processor_.getNamModel();
+
+            if (loader != nullptr)
+                raw->setDisplayedFileName (loader->getLoadedFileName());
+        });
+
         ownedControls_.push_back (std::move (box));
         return raw;
     };
@@ -1294,17 +1334,16 @@ void NAMBerryEditor::buildUi()
         noteLabel_.setColour (juce::Label::textColourId, juce::Colour (0xff86efac));
         noteLabel_.setColour (juce::Label::outlineColourId, juce::Colour (0xff2f6b4a));
         tuner->addRow (&noteLabel_, 46);
-        tuner->addItem (makeControl ("tuningOffset", "Offset"));
         tuner->setRowsFirst (true);
-        tuner->setFooter (makeFootswitch ("tuningBypass", tunerAccent), 82);
     }
 
-    if (auto* capo = makePanel (0, "CAPO", UnitStyle::Pedal, 2, 0,
-                                capoBody, capoAccent))
+    if (auto* pitch = makePanel (0, "PITCH", UnitStyle::Pedal, 2, 0,
+                                 capoBody, capoAccent))
     {
-        capo->addItem (makeControl ("capoFret", "Fret"));
-        capo->addItem (makeControl ("capoMix", "Mix"));
-        capo->setFooter (makeFootswitch ("capoBypass", capoAccent), 82);
+        pitch->addItem (makeControl ("capoFret", "Semitones"));
+        pitch->addItem (makeControl ("capoMix", "Mix"));
+        pitch->addItem (makeControl ("pitchEngine", "PSOLA", ParamControl::Kind::Toggle));
+        pitch->setFooter (makeFootswitch ("capoBypass", capoAccent), 82);
     }
 
     if (auto* gate = makePanel (0, "GATE", UnitStyle::Pedal, 2, 0,
@@ -1415,7 +1454,15 @@ void NAMBerryEditor::buildUi()
         bypass->setLabelFontSize (12.5f);
         ir->addRow (bypass, 64);
 
-        auto grid = std::make_unique<IrSlotGrid> (state, processor_);
+        auto grid = std::make_unique<IrSlotGrid> (
+            state, processor_,
+            [this] (IrSlotRow& row)
+            {
+                openBrowser (BrowserKind::Ir, [this, &row] (const juce::File& file)
+                {
+                    row.loadFile (file);
+                });
+            });
         auto* rawGrid = grid.get();
         ownedControls_.push_back (std::move (grid));
         ir->addRow (rawGrid, 350);
@@ -1552,6 +1599,46 @@ void NAMBerryEditor::layoutContent()
                       contentHeight + 2 * margin);
 }
 
+void NAMBerryEditor::openBrowser (BrowserKind kind,
+                                  std::function<void (const juce::File&)> onFileChosen)
+{
+    if (browser_ == nullptr)
+        return;
+
+    const bool nam = kind == BrowserKind::Nam;
+    const auto root = nam ? processor_.getNamDirectory()
+                          : processor_.getIrDirectory();
+
+    juce::StringArray extensions;
+
+    if (nam)
+    {
+        extensions.add (".nam");
+    }
+    else
+    {
+        extensions.add (".wav");
+        extensions.add (".aif");
+        extensions.add (".aiff");
+    }
+
+    browser_->open (nam ? "NAM BROWSER" : "IR BROWSER",
+                    extensions,
+                    root,
+                    [this, nam] (const juce::File& directory)
+                    {
+                        if (nam)
+                            processor_.setNamDirectory (directory);
+                        else
+                            processor_.setIrDirectory (directory);
+                    },
+                    std::move (onFileChosen));
+
+    browser_->setBounds (getLocalBounds());
+    browser_->setVisible (true);
+    browser_->toFront (true);
+}
+
 void NAMBerryEditor::resized()
 {
     auto r = getLocalBounds();
@@ -1587,6 +1674,9 @@ void NAMBerryEditor::resized()
 
     viewport_.setBounds (r.reduced (4, 2));
     layoutContent();
+
+    if (browser_ != nullptr)
+        browser_->setBounds (getLocalBounds());
 }
 
 void NAMBerryEditor::paint (juce::Graphics& g)
@@ -1632,6 +1722,9 @@ void NAMBerryEditor::timerCallback()
         if (note.isNotEmpty() && note != noteLabel_.getText())
             noteLabel_.setText (note, juce::dontSendNotification);
     }
+
+    for (auto& updater : nameUpdaters_)
+        updater();
 }
 
 } // namespace namberry

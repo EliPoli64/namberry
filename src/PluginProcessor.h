@@ -60,6 +60,9 @@ public:
     juce::File getIrDirectory() const;
     void setIrDirectory (const juce::File& directory);
 
+    // Restores the last selected amp/pedal model and IR files.
+    void restoreSavedFiles();
+
     // Getters for editor display
     DropTuner* getDropTuner() { return dropTuner_.get(); }
     Compressor* getCompressor() { return compressor_.get(); }

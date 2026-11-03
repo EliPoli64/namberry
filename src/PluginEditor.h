@@ -3,10 +3,13 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "PluginProcessor.h"
 
+#include <functional>
 #include <memory>
 #include <vector>
 
 namespace namberry {
+
+class DirectoryBrowser;
 
 class NAMBerryEditor : public juce::AudioProcessorEditor,
                        private juce::Timer,
@@ -20,10 +23,14 @@ public:
     void resized() override;
 
 private:
+    enum class BrowserKind { Nam, Ir };
+
     void timerCallback() override;
     void changeListenerCallback (juce::ChangeBroadcaster* source) override;
     void buildUi();
     void layoutContent();
+    void openBrowser (BrowserKind kind,
+                      std::function<void (const juce::File&)> onFileChosen);
 
     NAMBerryProcessor& processor_;
     std::unique_ptr<juce::LookAndFeel_V4> lnf_;
@@ -37,6 +44,8 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> reducedMotionAttachment_;
 
     std::vector<std::unique_ptr<juce::Component>> ownedControls_;
+    std::vector<std::function<void()>> nameUpdaters_;
+    std::unique_ptr<DirectoryBrowser> browser_;
     std::vector<std::vector<juce::Component*>> tabPanels_;
     std::vector<juce::Component*> allPanels_;
     int currentTabIndex_ = 0;

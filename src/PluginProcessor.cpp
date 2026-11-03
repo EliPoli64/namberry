@@ -12,13 +12,6 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
 
-    // ---- Drop Tuner ----
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "tuningOffset", "Tuning Offset",
-        juce::NormalisableRange<float>(-12.0f, 0.0f, 0.1f), 0.0f));
-    params.push_back(std::make_unique<juce::AudioParameterBool>(
-        "tuningBypass", "Tuner Bypass", false));
-
     // ---- Noise Gate ----
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "gateThreshold", "Gate Threshold",
@@ -32,14 +25,17 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         "gateBypass", "Gate Bypass", false));
 
-    // ---- Digital Capo ----
+    // ---- Shared pitch stage (capo + drop tune) ----
     params.push_back(std::make_unique<juce::AudioParameterInt>(
-        "capoFret", "Capo Fret", -12, 12, 0));
+        "capoFret", "Pitch Semitones", -12, 12, 0));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "capoMix", "Capo Mix",
-        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 1.0f));
+        "capoMix", "Pitch Mix",
+        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 100.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("%")));
     params.push_back(std::make_unique<juce::AudioParameterBool>(
-        "capoBypass", "Capo Bypass", false));
+        "capoBypass", "Pitch Bypass", false));
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        "pitchEngine", "PSOLA Engine", false));
 
     // ---- Compressor ----
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
@@ -323,6 +319,8 @@ void NAMBerryProcessor::prepareToPlay (double sampleRate, int maxSamplesPerBlock
     preAmpEQ_->prepare(spec);
     postAmpEQ_->prepare(spec);
     postEffects_->prepare (spec);
+
+    restoreSavedFiles();
 }
 
 void NAMBerryProcessor::releaseResources()
@@ -340,27 +338,32 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
 
     //==============================================================================
     // Signal chain order (see spec.md §3.1):
-    // Input → DropTuner → DigitalCapo → NoiseGate → Compressor → NAM Pedal →
-    // Pre-Amp EQ → NAM Amp → Post-Amp EQ → IR Loader → Post Effects → Master
+    // Input → Tuner (detect) → Pitch (capo/drop) → NoiseGate → Compressor →
+    // NAM Pedal → Pre-Amp EQ → NAM Amp → Post-Amp EQ → IR Loader → Post FX → Master
     //==============================================================================
 
-    // 1. Drop Tuner
-    {
-        auto* param = apvts_.getRawParameterValue("tuningBypass");
-        bool bypass = param->load() > 0.5f;
-        dropTuner_->setBypass(bypass);
-        auto* offsetParam = apvts_.getRawParameterValue("tuningOffset");
-        dropTuner_->setTuningOffsetSemitones(offsetParam->load());
-        dropTuner_->processBlock(buffer, midiMessages);
-    }
+    // 1. Tuner (detection/display only; the shared pitch stage does the shifting)
+    dropTuner_->processBlock(buffer, midiMessages);
 
-    // 2. Digital Capo (placed with the tuner at the head of the chain)
+    // 2. Shared pitch stage for the digital capo and drop tuning
     {
-        const bool capoBypassed = apvts_.getRawParameterValue("capoBypass")->load() > 0.5f;
-        digitalCapo_->setBypass(capoBypassed);
-        digitalCapo_->setFretPosition(static_cast<int>(apvts_.getRawParameterValue("capoFret")->load()));
-        digitalCapo_->setMix(apvts_.getRawParameterValue("capoMix")->load());
-        digitalCapo_->processBlock(buffer, midiMessages);
+        const bool pitchBypassed = apvts_.getRawParameterValue("capoBypass")->load() > 0.5f;
+        const float semitones = apvts_.getRawParameterValue("capoFret")->load();
+        const float mix = apvts_.getRawParameterValue("capoMix")->load() / 100.0f;
+        const bool psola = apvts_.getRawParameterValue("pitchEngine")->load() > 0.5f;
+
+        digitalCapo_->setBypass (pitchBypassed);
+        digitalCapo_->setSemitones (semitones);
+        digitalCapo_->setMix (mix);
+        digitalCapo_->setEngine (psola ? DigitalCapo::Engine::Psola
+                                       : DigitalCapo::Engine::DualTap);
+
+        const float period = dropTuner_->getDetectedPeriodSamples();
+
+        if (period > 0.0f)
+            digitalCapo_->setPitchPeriodSamples (period);
+
+        digitalCapo_->processBlock (buffer, midiMessages);
     }
 
     // 3. Noise Gate
@@ -556,17 +559,90 @@ void NAMBerryProcessor::setStateInformation (const void* data, int sizeInBytes)
 //==============================================================================
 bool NAMBerryProcessor::loadNamModel (const juce::File& file)
 {
-    return namModel_->loadModel(file);
+    const bool loaded = namModel_->loadModel(file);
+
+    if (loaded && settings_ != nullptr)
+    {
+        settings_->setValue ("ampModelPath", file.getFullPathName());
+        settings_->saveIfNeeded();
+    }
+
+    return loaded;
 }
 
 bool NAMBerryProcessor::loadNamPedalModel (const juce::File& file)
 {
-    return namPedal_->loadModel(file);
+    const bool loaded = namPedal_->loadModel(file);
+
+    if (loaded && settings_ != nullptr)
+    {
+        settings_->setValue ("pedalModelPath", file.getFullPathName());
+        settings_->saveIfNeeded();
+    }
+
+    return loaded;
 }
 
 bool NAMBerryProcessor::loadIr (int slot, const juce::File& file)
 {
-    return irLoader_->loadIr(slot, file);
+    const bool loaded = irLoader_->loadIr(slot, file);
+
+    if (loaded && settings_ != nullptr)
+    {
+        settings_->setValue ("irSlot" + juce::String (slot) + "Path",
+                             file.getFullPathName());
+        settings_->saveIfNeeded();
+    }
+
+    return loaded;
+}
+
+void NAMBerryProcessor::restoreSavedFiles()
+{
+    if (settings_ == nullptr)
+        return;
+
+    auto restoreNam = [this] (const juce::String& key, bool pedal)
+    {
+        auto* loader = pedal ? namPedal_.get() : namModel_.get();
+
+        if (loader == nullptr || loader->hasModel())
+            return;
+
+        const auto path = settings_->getValue (key);
+
+        if (path.isEmpty())
+            return;
+
+        const juce::File file (path);
+
+        if (file.existsAsFile())
+        {
+            if (pedal)
+                loadNamPedalModel (file);
+            else
+                loadNamModel (file);
+        }
+    };
+
+    restoreNam ("ampModelPath", false);
+    restoreNam ("pedalModelPath", true);
+
+    if (irLoader_ != nullptr)
+    {
+        for (int slot = 0; slot < 4; ++slot)
+        {
+            const auto path = settings_->getValue ("irSlot" + juce::String (slot) + "Path");
+
+            if (path.isEmpty())
+                continue;
+
+            const juce::File file (path);
+
+            if (file.existsAsFile())
+                irLoader_->loadIr (slot, file);
+        }
+    }
 }
 
 //==============================================================================

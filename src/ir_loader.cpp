@@ -53,6 +53,7 @@ bool IrLoader::loadIr (int slot, const juce::File& irFile)
                               juce::dsp::Convolution::Normalise::yes);
 
     loaded_[static_cast<size_t>(slot)] = true;
+    irFiles_[static_cast<size_t>(slot)] = irFile;
     mix_[static_cast<size_t>(slot)] = 1.0f;
     return true;
 }
@@ -159,6 +160,13 @@ bool IrLoader::getSlotPhaseInvert (int slot) const
 bool IrLoader::isSlotLoaded (int slot) const
 {
     return (slot >= 0 && slot < kNumSlots) && loaded_[static_cast<size_t>(slot)];
+}
+
+juce::String IrLoader::getLoadedFileName (int slot) const
+{
+    return (slot >= 0 && slot < kNumSlots)
+        ? irFiles_[static_cast<size_t>(slot)].getFileName()
+        : juce::String();
 }
 
 } // namespace namberry
