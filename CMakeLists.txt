@@ -49,16 +49,27 @@ juce_generate_juce_header(NAMBerry)
 target_sources(NAMBerry PRIVATE
     src/PluginProcessor.cpp
     src/PluginEditor.cpp
+    src/directory_browser.cpp
     src/nam_model_loader.cpp
     src/ir_loader.cpp
     src/multi_band_eq.cpp
     src/drop_tuner.cpp
     src/digital_capo.cpp
+    src/pitch_shifter.cpp
+    src/pitch_shift_engines.cpp
     src/compressor.cpp
     src/noise_gate.cpp
+    src/post_effects.cpp
 )
 
-target_include_directories(NAMBerry PRIVATE src include)
+target_include_directories(NAMBerry
+    PRIVATE
+        src
+        include
+    PUBLIC
+        "${CMAKE_SOURCE_DIR}/deps/signalsmith-stretch"
+        "${CMAKE_SOURCE_DIR}/deps/signalsmith-linear/include"
+)
 
 # --- Link Libraries ---
 target_link_libraries(NAMBerry
@@ -92,4 +103,66 @@ if(NAM_AVAILABLE)
         EIGEN_MAX_ALIGN_BYTES=0
         EIGEN_DONT_VECTORIZE
     )
+endif()
+
+# --- Offline render smoke test ---
+juce_add_console_app(NAMBerryOfflineTest
+    PRODUCT_NAME "NAMBerryOfflineTest"
+)
+
+target_sources(NAMBerryOfflineTest PRIVATE tests/offline_render.cpp)
+target_include_directories(NAMBerryOfflineTest PRIVATE src include)
+
+target_link_libraries(NAMBerryOfflineTest
+    PRIVATE
+        NAMBerry
+        juce::juce_audio_utils
+        juce::juce_audio_processors
+        juce::juce_audio_basics
+        juce::juce_gui_basics
+        juce::juce_gui_extra
+        juce::juce_dsp
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+)
+
+target_compile_definitions(NAMBerryOfflineTest PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+)
+
+if(NAM_AVAILABLE)
+    target_link_libraries(NAMBerryOfflineTest PRIVATE ${NAM_LINK_TARGET})
+    target_include_directories(NAMBerryOfflineTest PRIVATE "${NA_DIR}")
+endif()
+
+# --- UI snapshot tool (renders each tab to PNG headlessly) ---
+juce_add_console_app(NAMBerryUiSnapshot
+    PRODUCT_NAME "NAMBerryUiSnapshot"
+)
+
+target_sources(NAMBerryUiSnapshot PRIVATE tests/ui_snapshot.cpp)
+target_include_directories(NAMBerryUiSnapshot PRIVATE src include)
+
+target_link_libraries(NAMBerryUiSnapshot
+    PRIVATE
+        NAMBerry
+        juce::juce_audio_utils
+        juce::juce_audio_processors
+        juce::juce_audio_basics
+        juce::juce_gui_basics
+        juce::juce_gui_extra
+        juce::juce_dsp
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+)
+
+target_compile_definitions(NAMBerryUiSnapshot PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+)
+
+if(NAM_AVAILABLE)
+    target_link_libraries(NAMBerryUiSnapshot PRIVATE ${NAM_LINK_TARGET})
+    target_include_directories(NAMBerryUiSnapshot PRIVATE "${NA_DIR}")
 endif()
