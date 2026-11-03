@@ -1,0 +1,589 @@
+# NAMberry
+
+NAMberry is an all-in-one NAM-based guitar amp and effects plugin. It combines a NAM amp capture, a second NAM pedal/preamp capture, four blendable IR slots, dynamics, dual multi-band EQs, modulation/delay/reverb, and a low-latency pitch stage for capo and drop tuning.
+
+The goal is to stop treating an amp capture as a single plugin in a long external chain. Load two captures, four cabinets, and a complete studio-style effects chain in one stereo plugin, with fast model browsing and a hardware-inspired interface.
+
+> The pedal is not a generic waveshaper. It is a **second NAM model**, loaded independently from the amp.
+
+---
+
+## Why this exists
+
+NAM captures sound excellent, but the surrounding workflow is usually fragmented:
+
+- one plugin for the amp capture,
+- another for a pedal capture,
+- another for IRs,
+- separate gate/compressor/EQ plugins,
+- separate modulation/delay/reverb plugins,
+- manual file browsing for every model,
+- and no simple capo/drop-tune stage.
+
+NAMberry packages all of that into one plugin:
+
+- **Two NAM captures** — one amp, one pedal/preamp.
+- **Four IR slots** with per-slot mix, pan and phase.
+- **A complete chain** — tuner, pitch stage, gate, compressor, pedal, pre-amp EQ, amp, post-amp EQ, IR, post effects, master.
+- **Fast model management** — in-app NAM/IR browsers, two separate persisted roots, previous/next arrows, and drag-and-drop.
+- **Persistent choices** — the selected amp, pedal and all four IR files are restored on the next session.
+- **Low-latency pitch** — 5 ms DualTap and PSOLA engines for capo and drop tuning.
+- **A usable tuner** — a strobe wheel with cents deviation and an editable reference frequency (440, 432, etc.).
+- **Stereo correctness** — the NAM stages are mono models, summed and copied to both channels; the dry path is always centred.
+
+---
+
+## Signal chain
+
+The chain runs left to right through the five editor tabs:
+
+```
+Input
+  → Tuner (detection only)
+  → Pitch (capo / drop tune)
+  → Noise Gate
+  → Compressor
+  → NAM Pedal / Preamp
+  → Pre-Amp EQ
+  → NAM Amp
+  → Post-Amp EQ
+  → 4-Slot IR Loader
+  → Post FX (Chorus / Flanger / Phaser / Delay / Reverb)
+  → Master Output
+```
+
+### Tabs
+
+| Tab | Contents |
+|---|---|
+| **Pre FX** | Tuner, Pitch, Gate, Compressor, NAM Pedal, Pre-Amp EQ |
+| **Amp** | NAM amp model, Power, Gain, Bass, Mid, Treble, Presence, Depth, Output |
+| **Post EQ** | 3-band post-amp EQ |
+| **IR** | Four IR slots with mix, pan, phase, browse and arrows |
+| **Post FX** | Chorus, Flanger, Phaser, Delay, Reverb, Master output |
+
+The header contains the **Reduced Motion** preference. The engine is user-selected; there is no automatic engine switching.
+
+---
+
+## Implementation
+
+### NAM inference
+
+`NamModelLoader` wraps `NeuralAudio::NeuralModel` and is used twice:
+
+- `namModel_` — the amp,
+- `namPedal_` — the pedal/preamp.
+
+NAM models are mono and stateful. Each loader sums all input channels to mono, runs one model, applies the tone stack, and copies the result to every output channel. This avoids the distortion that occurs when L and R are fed through the same stateful model separately.
+
+Both loaders use the same tone-stack implementation (bass, mid and treble); the amp additionally exposes presence and depth:
+
+- bass low shelf,
+- mid peak,
+- treble high shelf,
+- presence high shelf (amp),
+- depth low shelf (amp).
+
+### Pitch stage (capo + drop tune)
+
+The capo and drop tune share one pitch stage:
+
+- **One semitones control**: −12…+12.
+- **Mix**: 0–100 % wet.
+- **Engine toggle**: DualTap or PSOLA.
+- **5 ms latency**, reported to the host.
+- **No automatic routing**: the selected engine is used for every semitone.
+
+Two engines are implemented:
+
+| Engine | Behaviour |
+|---|---|
+| **DualTap** | Period-synchronised time-domain shifter. Accurate across the whole range and the recommended choice for downshifts. |
+| **PSOLA** | Pitch-synchronous overlap-add. Clean on upward/single-note material; downward shifts at 5 ms are limited. |
+
+The pitch period comes from a dedicated detector with an 80 ms analysis window, decimated autocorrelation, first-peak selection, parabolic interpolation, confidence and median smoothing. It detects low E and drop tunings independently of the host block size.
+
+The dry path is delayed by the engine latency and **mono-summed**, so the dry signal is always centred. The stage only runs when active; bypassed or 0-semitone states output the delayed dry signal.
+
+The Signalsmith Stretch/Linear pair is vendored and kept for future/optional use, but the current UI uses DualTap and PSOLA.
+
+### Tuner
+
+`DropTuner` is detection-only:
+
+- 80 ms analysis window,
+- first-peak autocorrelation with confidence,
+- note name and cents deviation,
+- editable **reference frequency** (400–480 Hz, default 440 Hz).
+
+The reference affects the note/cents display only; the pitch engines use the measured period. The UI draws a strobe wheel: the bands rotate with the cents error, turn green near zero, amber within ±10 cents, and red beyond that.
+
+### IR loader
+
+`IrLoader` uses four `juce::dsp::Convolution` instances:
+
+- per-slot mix,
+- per-slot stereo pan,
+- per-slot phase invert,
+- dry/wet blend,
+- bypass.
+
+### Dynamics and EQ
+
+- `NoiseGate` — linked peak detector, attack/release, bypass.
+- `Compressor` — attack, release, threshold, ratio, makeup, optional Tight low-band sidechain.
+- `MultiBandEQ` — low shelf, mid peak, high shelf; used for Pre-EQ and Post-EQ.
+
+### Post effects
+
+`PostEffects` uses JUCE DSP:
+
+- `juce::dsp::Chorus` for chorus,
+- a second chorus with a short centre delay and feedback for flanger,
+- `juce::dsp::Phaser`,
+- `juce::dsp::DelayLine` with feedback and mix,
+- `juce::dsp::Reverb`.
+
+Switching the delay off clears its delay line, so old feedback cannot reappear when it is switched back on. Bypassing the whole post-FX block also clears the delay tail.
+
+### File management and persistence
+
+- Two separate roots: one for NAM models, one for IRs.
+- In-app `DirectoryBrowser` supports folder traversal, `SET ROOT...`, `LOAD`, double-click, and extension filtering.
+- Previous/next arrows on the amp, pedal and IR fields step through matching files in the current file’s folder.
+- Drag-and-drop works for `.nam` and IR files.
+- Selected amp, pedal and all four IR paths are persisted and restored automatically.
+- Settings are stored in a per-user `PropertiesFile`:
+  - Linux: `~/.config/NAMBerry/NAMBerry.settings`
+  - macOS/Windows: under the standard user application-data directory, in `NAMBerry/NAMBerry.settings`.
+
+DAW project state stores all parameter values through `AudioProcessorValueTreeState`; the model/IR paths and roots live in the per-user settings file.
+
+### UI
+
+The editor is JUCE-native and hardware-inspired:
+
+- left-to-right signal chain in a horizontally scrollable viewport,
+- pedal enclosures, an amp head and rack units,
+- large 48 px hardware controls (the browser list is desktop-sized),
+- footswitch LEDs show **active** (not bypassed) state,
+- the Reduced Motion preference disables the hover-glow animation,
+- a numeric reference field for the tuner.
+
+`ui-spec.md` records an earlier Qt 6/QML exploration, but the shipped implementation uses JUCE native components. Qt Quick was not available in the build environment, and embedding a second event loop in a plugin was not practical.
+
+---
+
+## Technologies
+
+| Area | Technology |
+|---|---|
+| Language | C++20 |
+| Plugin framework | JUCE **8.0.6** |
+| Formats | VST3, Standalone |
+| NAM inference | **NeuralAudio** (with NeuralAmpModelerCore, RTNeural and its submodules) |
+| IR convolution | `juce::dsp::Convolution` |
+| EQ / dynamics | JUCE `dsp::IIR`, custom compressor/gate |
+| Post FX | JUCE `dsp::Chorus`, `dsp::Phaser`, `dsp::DelayLine`, `dsp::Reverb` |
+| Pitch | Custom DualTap and PSOLA engines; optional Signalsmith Stretch/Linear kept in `deps/` |
+| Settings | JUCE `PropertiesFile` |
+| Build | CMake 3.22+, CMake presets, helper scripts |
+| Tests | JUCE console apps: offline render and headless UI snapshots |
+
+Third-party components:
+
+- JUCE — https://juce.com
+- NeuralAudio — https://github.com/mikeoliphant/NeuralAudio
+- NeuralAmpModelerCore — https://github.com/sdatkinson/NeuralAmpModelerCore
+- Signalsmith Stretch — https://github.com/signalsmith-audio/signalsmith-stretch
+- Signalsmith Linear — https://github.com/signalsmith-audio/linear
+
+---
+
+## Project layout
+
+```
+CMakeLists.txt
+CMakePresets.json
+README.md
+spec.md                 # product / DSP specification
+ui-spec.md              # earlier Qt/QML UI exploration (not the shipped UI)
+
+src/
+  PluginProcessor.*     # signal chain, parameters, persistence/restore
+  PluginEditor.*        # hardware-style editor
+  directory_browser.*   # in-app NAM / IR browser
+  nam_model_loader.cpp
+  pitch_shifter.cpp     # optional Signalsmith wrapper
+  pitch_shift_engines.cpp
+  digital_capo.cpp      # shared pitch stage
+  drop_tuner.cpp
+  ir_loader.cpp
+  multi_band_eq.cpp
+  compressor.cpp
+  noise_gate.cpp
+  post_effects.cpp
+
+include/namberry/
+  NamModelLoader.h
+  PitchShifter.h
+  PitchShiftEngines.h
+  DigitalCapo.h
+  DropTuner.h
+  IrLoader.h
+  MultiBandEQ.h
+  Compressor.h
+  NoiseGate.h
+  PostEffects.h
+  DirectoryBrowser.h
+
+tests/
+  offline_render.cpp    # DSP / detector / persistence tests
+  ui_snapshot.cpp       # renders the UI tabs and browsers to PNG
+
+scripts/
+  build-standalone.sh
+  build-vst3.sh
+
+JUCE/                   # cloned, ignored by git
+deps/                   # cloned, ignored by git
+```
+
+---
+
+## Building
+
+### Prerequisites
+
+- CMake 3.22 or newer.
+- A C++20 compiler.
+- Git.
+- JUCE 8.0.6 cloned into `JUCE/`.
+- NeuralAudio cloned into `deps/NeuralAudio` with submodules.
+- Signalsmith Stretch and Linear cloned into `deps/`.
+
+```bash
+git clone --depth 1 --branch 8.0.6 \
+  https://github.com/juce-framework/JUCE.git JUCE
+
+git clone --depth 1 --recurse-submodules \
+  https://github.com/mikeoliphant/NeuralAudio.git deps/NeuralAudio
+
+git clone --depth 1 \
+  https://github.com/signalsmith-audio/signalsmith-stretch.git deps/signalsmith-stretch
+
+git clone --depth 1 \
+  https://github.com/signalsmith-audio/linear.git deps/signalsmith-linear
+```
+
+`JUCE/` and `deps/` are ignored by git; they must be present locally for a build.
+
+#### Linux packages
+
+On Fedora:
+
+```bash
+sudo dnf install cmake gcc-c++ git alsa-lib-devel \
+  freetype-devel fontconfig-devel \
+  libX11-devel libXext-devel libXrandr-devel libXinerama-devel \
+  libXcursor-devel libXcomposite-devel libXrender-devel \
+  libXfixes-devel libXau-devel libXdmcp-devel libxcb-devel
+```
+
+On Debian/Ubuntu:
+
+```bash
+sudo apt install build-essential cmake git libasound2-dev \
+  libfreetype6-dev libfontconfig1-dev \
+  libx11-dev libxext-dev libxrandr-dev libxinerama-dev \
+  libxcursor-dev libxcomposite-dev libxrender-dev \
+  libxfixes-dev libxau-dev libxdmcp-dev libxcb1-dev
+```
+
+macOS needs the Xcode command-line tools. Windows needs Visual Studio 2022 and CMake.
+
+> The helper scripts detect a local `/tmp/sysroot` used on machines without the Linux `-devel` packages. That directory is a local workaround, not part of the repository. On a fully provisioned machine the sysroot branch is skipped.
+
+### Configure and build
+
+Using presets:
+
+```bash
+cmake --preset standalone
+cmake --build --preset standalone
+```
+
+```bash
+cmake --preset vst3
+cmake --build --preset vst3
+```
+
+Using scripts:
+
+```bash
+./scripts/build-standalone.sh
+./scripts/build-vst3.sh
+```
+
+Add `--clean` to either script to wipe its build directory first.
+
+Artifacts:
+
+| Target | Path |
+|---|---|
+| Standalone | `build-standalone/NAMBerry_artefacts/Release/Standalone/NAMberry` |
+| VST3 | `build-vst3/NAMBerry_artefacts/Release/VST3/NAMberry.vst3` |
+
+The `build/` tree is used by the direct CMake/agent build and for the test targets:
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target NAMBerry_VST3 NAMBerry_Standalone
+```
+
+The presets and helper scripts use the Unix Makefiles generator. On Windows, configure with the Visual Studio generator (or adjust the preset) instead.
+
+### Install the VST3
+
+Copy `NAMberry.vst3` to:
+
+- Linux: `~/.vst3/`
+- macOS: `~/Library/Audio/Plug-Ins/VST3/`
+- Windows: `C:\Program Files\Common Files\VST3\`
+
+Then rescan plugins in the DAW.
+
+---
+
+## Using NAMberry
+
+### First run
+
+1. Open the **Standalone** app, or insert the VST3 on a stereo track.
+2. In the Standalone, choose the audio device, sample rate and buffer size.
+3. Load an amp model in the **Amp** tab.
+4. Optionally load a pedal model in **Pre FX → PEDAL**.
+5. Load one or more IRs in the **IR** tab.
+6. Play.
+
+The plugin is stereo in / stereo out. The NAM stages are mono internally and copied to both channels; the dry path is centred.
+
+### Loading models and IRs
+
+Each loader has a **BROWSE** button, a filename, and previous/next arrows.
+
+- **NAM amp**: Amp tab → **AMP MODEL** → **BROWSE .NAM**.
+- **NAM pedal**: Pre FX → **PEDAL** → **BROWSE .NAM**.
+- **IR slots**: IR tab → **BROWSE** on the required slot.
+
+The browser:
+
+1. Opens at the saved NAM or IR root.
+2. Shows folders first, then matching files.
+3. Double-click a folder to enter; `UP` goes to the parent; `ROOT` returns to the root.
+4. `SET ROOT...` chooses and persists a new root folder.
+5. Select a file and press `LOAD`, or double-click it.
+
+The two roots are completely separate:
+
+- NAM root for amp and pedal models.
+- IR root for all four IR slots.
+
+**Previous/next arrows** step through the matching files in the currently loaded file’s folder. The selection wraps at the ends. The amp, pedal and each IR slot remember their own selected path.
+
+You can also drag `.nam` and IR files directly onto the corresponding loader/field.
+
+The plugin restores the last selected amp, pedal and all four slots when it next starts, provided the files still exist.
+
+### Tuner
+
+The Tuner pedal contains a strobe wheel:
+
+- The wheel rotates with the cents deviation.
+- Green: within ±2 cents.
+- Amber: within ±10 cents.
+- Red: further out.
+- The centre shows the note and cents, e.g. `A3 23.4 c`.
+- **Ref Hz** is an editable numeric field:
+  - Allowed range 400–480 Hz.
+  - Default 440.0 Hz.
+  - Type a value (432, 440, 441, 442, etc.), press **Enter** or click away.
+  - **Escape** restores the current value.
+
+The reference affects the note and cents display. It does not transpose audio.
+
+### Pitch (capo / drop tune)
+
+The shared **PITCH** pedal controls both capo and drop tuning:
+
+| Control | Meaning |
+|---|---|
+| **Semitones** | −12…+12; 0 = no shift |
+| **Mix** | 0–100 % wet (default 100 %) |
+| **PSOLA** | Off = DualTap; On = PSOLA |
+| **Footswitch** | Bypass |
+
+- **DualTap** is recommended for downward shifts and general use.
+- **PSOLA** is cleaner on upward/single-note material but is weaker on downward shifts at 5 ms.
+- The engine is always selected by the user; there is no automatic fallback.
+
+The pitch stage reports **5 ms latency** to the host. The dry path is delayed by the same amount.
+
+### Amp
+
+- Load the amp `.nam` with **AMP MODEL**.
+- Power, Gain, Bass, Mid, Treble, Presence, Depth, Output.
+- The tone stack runs after the model.
+
+### Pedal
+
+- Load the pedal/preamp `.nam` with **PEDAL MODEL**.
+- Gain, Bass, Mid, Treble, Output.
+- Bypass footswitch.
+- The pedal is a second NAM model, not a waveshaper.
+
+### Gate and compressor
+
+- **Gate**: threshold, attack, release, bypass.
+- **Compressor**: threshold, ratio, attack, release, makeup, Tight, bypass. Tight derives the detector from a low-passed sidechain.
+
+### EQs
+
+Both Pre-EQ and Post-EQ use three bands: low shelf, mid peak, high shelf with frequency, gain and Q.
+
+### IR
+
+Four independent slots, each with:
+
+- loaded IR filename,
+- **BROWSE** and previous/next arrows,
+- mix,
+- pan,
+- phase invert.
+
+The slots sum into the cabinet output. The default IR mix is 100 % wet; the IR section has its own bypass.
+
+### Post FX
+
+- Chorus: mix, rate, depth, bypass.
+- Flanger: mix, rate, depth, feedback, bypass.
+- Phaser: mix, rate, depth, bypass.
+- Delay: mix, time, feedback, bypass.
+- Reverb: mix, decay, width, bypass.
+- Master output.
+
+Switching the delay off discards its feedback tail.
+
+### Reduced Motion
+
+The header toggle disables the panel hover-glow animation for users who prefer reduced motion. It is saved with the plugin state.
+
+### State and settings
+
+- DAW projects save all parameter values with the plugin.
+- The per-user settings file saves:
+  - NAM root,
+  - IR root,
+  - last amp model path,
+  - last pedal model path,
+  - last IR path for each of the four slots.
+
+If a saved file has moved, the loader shows no model/empty until it is reloaded; the path remains in the settings for when it returns.
+
+---
+
+## Tests
+
+Build the test tools:
+
+```bash
+cmake --build build --target NAMBerryOfflineTest NAMBerryUiSnapshot
+```
+
+### Offline DSP tests
+
+```bash
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --detector
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --pitch
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --detected-stage
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --dry-center
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --delay-reset
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --reference
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --persist
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --dirs
+```
+
+Run the full chain with a model:
+
+```bash
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest /path/to/model.nam
+```
+
+What they cover:
+
+- `--detector`: pitch detection across 82.41–440 Hz.
+- `--pitch`: engine accuracy with a known period.
+- `--detected-stage`: detector → pitch stage.
+- `--dry-center`: verifies both channels are identical when fully dry.
+- `--delay-reset`: verifies the delay tail is discarded on bypass.
+- `--reference`: verifies 432/440 Hz reference behaviour.
+- `--persist`: restores selected amp, pedal and IR paths; expects local sample files and skips if they are missing.
+- `--dirs`: sets the two root directories.
+- `<model.nam>`: full processor with a NAM model.
+
+### UI snapshots
+
+```bash
+./build/NAMBerryUiSnapshot_artefacts/Release/NAMBerryUiSnapshot /tmp/namberry-ui
+```
+
+Writes:
+
+```
+pre-fx.png
+amp.png
+post-eq.png
+ir.png
+post-fx.png
+browser.png
+browser-ir.png
+```
+
+The snapshot tool is headless and does not need a DAW.
+
+---
+
+## Known limitations
+
+- **5 ms pitch latency is constant and reported**, even when the pitch stage is bypassed. This keeps host delay compensation stable. The dry path is delayed to match.
+- The **Standalone app** does not apply host-style plugin delay compensation; the 5 ms pitch-stage latency is audible there. DAWs compensate it.
+- **PSOLA downshifts at 5 ms are limited**, especially on low notes; use DualTap for drop tunings. There is intentionally no automatic engine switch.
+- A 5 ms window is shorter than the period of low E, A and D; some artifacts on those notes are inherent to the latency target.
+- NAM model latency is not separately reported by the plugin; only the pitch-stage latency is reported.
+- The plugin is **stereo in / stereo out only**.
+- Model and IR paths are **per-user settings**, not embedded in the DAW project. Moving a project to another machine may require reloading them.
+- `ui-spec.md` is an earlier Qt/QML exploration; the shipped UI is JUCE-native.
+- No NAM models or IR files are included. Use your own `.nam` captures and WAV/AIFF IRs.
+- The repository contains no project `LICENSE` file yet; add one before redistributing.
+
+---
+
+## Third-party licences
+
+- **JUCE 8.0.6** — see `JUCE/LICENSE.md`; JUCE is available under AGPLv3 or a commercial licence.
+- **NeuralAudio** — MIT (Mike Oliphant). Its submodules (NeuralAmpModelerCore, RTNeural, etc.) retain their own licences.
+- **Signalsmith Stretch / Linear** — MIT (Signalsmith Audio).
+- NAM model files and IR captures are supplied by the user and are not part of this repository.
+
+Check the relevant upstream repositories before distributing binaries.
+
+---
+
+## Credits
+
+- NAM / NeuralAmpModelerCore by Steven Atkinson and contributors.
+- NeuralAudio by Mike Oliphant.
+- JUCE by Raw Material Software.
+- Signalsmith Stretch/Linear by Geraint Luff / Signalsmith Audio.
+- The guitar community who create and share NAM captures and IRs.
