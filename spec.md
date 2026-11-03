@@ -50,7 +50,7 @@ Output Volume → Output
 - **DSP Modules** (Each as a separate class derived from `juce::dsp::ProcessorBase` or similar):
   - `NoiseGate`
   - `Compressor` (multi-band or single-band with sidechain)
-  - `Overdrive` (waveshaping with tone control)
+  - `NamPedalLoader` (second NAM model for pedal/preamp captures — not a waveshaper)
   - `MultiBandEQ` (at least 3 bands: Low, Mid, High, with shelving/peaking options)
   - `NamModelLoader` (wraps `NeuralAmpModelerCore` / `NeuralAudio`)
   - `IrLoader` (4 slots, each with an `dsp::Convolution` instance)
@@ -95,9 +95,13 @@ Output Volume → Output
   - Use a feed-forward compressor with attack, release, threshold, ratio, and makeup gain.
   - For the "Tight" mode, implement a low-band sidechain filter (e.g., band-pass around 80–150 Hz) so the compressor is triggered primarily by low-end transients.
 
-### 4.5 Overdrive
-- **Goal**: Add a warm, pedal-like drive before the amp.
-- **Implementation**: Use a simple non-linear waveshaper (e.g., `std::tanh` or a diode curve) followed by a tone control (low-pass filter) and a level control.
+### 4.5 Pedal / Preamp (NAM Model) & Overdrive
+- **Goal**: Add a warm, pedal-like drive before the amp — implemented as a **NAM model**, not a generic waveshaper.
+- **Implementation**:
+  - The pedal/preamp stage is a **second `NamModelLoader` instance** that loads a `.nam` pedal or preamp capture (e.g., overdrive, distortion, boost, fuzz).
+  - Exposes Gain and Output controls plus a bypass toggle, mirroring the amp loader's `NeuralAudio::NeuralModel` usage.
+  - Placed after the NAM Amp Loader per the stereo signal flow (and bypassable when no pedal model is loaded).
+  - A built-in `std::tanh` waveshaper is **not** used for this stage: tone and character come entirely from the loaded NAM model.
 
 ### 4.6 Modulation (Chorus/Phaser/Flanger)
 - **Goal**: Provide classic modulation effects.
