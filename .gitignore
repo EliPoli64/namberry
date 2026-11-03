@@ -1,0 +1,34 @@
+# Build artifacts
+build/
+*.vst3
+*.component
+*.aaxplugin
+*.lv2
+
+# IDE specific
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# JUCE specific
+JUCE/modules/
+JUCE/extras/
+/JUCE/build/
+
+# Binary and library files
+*.so
+*.dylib
+*.dll
+*.exe
+
+# User specific
+*.log
+
+# NeuraLabs
+deps/NeuralAmpModelerCore/build/
+deps/NeuralAudio/
+deps/NeuralAmpModelerCore/.git/
+
+# CI/CD
+.github/workflows/*.yml.key
