@@ -1,9 +1,16 @@
-# Build artifacts
+# Build artifacts / dirs
 build/
+build-*/
+cmake-build-*/
+NAMBerry_artefacts/
 *.vst3
 *.component
 *.aaxplugin
 *.lv2
+
+# Third-party dependencies (fetched/cloned, not vendored)
+/JUCE/
+/deps/
 
 # IDE specific
 .idea/
@@ -11,24 +18,17 @@ build/
 *.swp
 *.swo
 
-# JUCE specific
-JUCE/modules/
-JUCE/extras/
-/JUCE/build/
-
 # Binary and library files
 *.so
 *.dylib
 *.dll
 *.exe
+*.a
+*.o
 
-# User specific
+# Logs / user data
 *.log
 
-# NeuraLabs
-deps/NeuralAmpModelerCore/build/
-deps/NeuralAudio/
-deps/NeuralAmpModelerCore/.git/
-
-# CI/CD
-.github/workflows/*.yml.key
+# Local sysroot / pkg-config staging used for offline builds
+/tmp/pc/
+/tmp/sysroot/
