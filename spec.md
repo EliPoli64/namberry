@@ -20,6 +20,7 @@
 | **NAM Inference** | **NeuralAmpModelerCore** or **NeuralAudio** | `NeuralAmpModelerCore` is the official high-performance DSP library for running `.nam` models (WaveNet, LSTM, ConvNet, Linear). `NeuralAudio` is an alternative that offers A1/A2 support with a simpler API and MIT license. |
 | **Build System** | **CMake** (v3.22+) | Enables reproducible cross-platform builds and static linking of JUCE modules and third-party dependencies. |
 | **IR Loading** | **JUCE `dsp::Convolution`** | Built-in JUCE module for zero-latency, real-time convolution with support for loading WAV/AIFF files. |
+| **Drop Tuner / Digital Capo** | **JUCE `dsp::Process`** + custom pitch detection/transposition | Drop tuner detects fundamental frequency and provides semi-tone tuning down control; Digital capo simulates a guitar capo by transposing pitch up by specified fret count. Both are placed early/mid-chain for correct signal flow. |
 | **UI** | **JUCE `Component`** / **Visage** (optional) | JUCE’s native UI components are sufficient; Visage can be used for GPU-accelerated custom rendering if needed. |
 
 ---
@@ -29,8 +30,8 @@
 ### 3.1 Signal Flow (Stereo Path)
 
 ```
-Input → Input Gain → Noise Gate → Compressor → Overdrive →
-Pre-Amp EQ (Multi-Band) → NAM Amp Loader (with Gain/Presence/Depth) →
+Input → Input Gain → DropTuner → Noise Gate → Compressor → Overdrive →
+Pre-Amp EQ (Multi-Band) → DigitalCapo → NAM Amp Loader (with Gain/Presence/Depth) →
 NAM Pedal/Preamp Loader (Optional) →
 4-Slot IR Loader (Blend/Mix) →
 Post-Amp EQ (Multi-Band) →
@@ -56,6 +57,8 @@ Output Volume → Output
   - `ModulationFX` (Chorus/Phaser/Flanger, selectable or mixable)
   - `Delay` (stereo, with feedback, mix, time)
   - `Reverb` (algorithmic or convolution-based)
+  - `DropTuner` (polyphonic/monophonic pitch detection, tuning down control)
+  - `DigitalCapo` (fret position control, pitch transposition)
 
 ---
 
@@ -110,7 +113,29 @@ Output Volume → Output
 
 ### 4.8 Reverb
 - **Goal**: Add ambience.
-- **Implementation**: Use JUCE’s `juce::Reverb` (algorithmic) for a lightweight, real-time-safe reverb. Parameters: Room Size, Damping, Wet, Dry, Width.
+- **Implementation**: Use JUCE's `juce::Reverb` (algorithmic) for a lightweight, real-time-safe reverb. Parameters: Room Size, Damping, Wet, Dry, Width.
+
+### 4.9 DropTuner
+- **Goal**: Detect input pitch and provide tuning-down control for guitar drop tunings (e.g., dropped D, dropped C#).
+- **Implementation**:
+  - Uses FFT-based fundamental frequency detection on the input signal.
+  - Displays the detected note name (e.g., "E2", "A4") and frequency in Hz.
+  - **Tuning Offset**: A control parameter (in semitones, typically 0 to -12) that transposes the output frequency down by the selected amount.
+  - **True Bypass**: A switch that bypasses the pitch detection entirely, passing the input signal through unchanged.
+  - The tuner is placed at the start of the signal chain (after Input Gain) so it receives a clean, unprocessed signal for accurate note detection.
+  - The tuning offset can be automated via the host for real-time tuning changes during performance.
+- **Controls**: Detected note name, detected frequency, tuning offset (semitones), bypass switch.
+
+### 4.10 DigitalCapo
+- **Goal**: Simulate a guitar capo by transposing the pitch up by the selected number of frets.
+- **Implementation**:
+  - **Fret Position**: A parameter ranging from 0 (no capo) to 12 (full octave capo). Each fret increases the pitch by one semitone.
+  - **Mix/Dry-Wet**: Controls the blend between the original (dry) signal and the transposed (wet) signal, allowing users to mix the capo effect subtly or fully.
+  - The digital capo is placed after the Pre-Amp EQ but before the NAM Amp Loader, so the amp model receives the capo-transposed signal—modeling the amp at the raised pitch, which is the musically correct behavior for capo usage.
+  - The mix parameter allows users to blend the capo effect with the dry signal for creative tonal options.
+- **Controls**: Fret position (0-12), mix level (0-100%).
+
+---
 
 ---
 
