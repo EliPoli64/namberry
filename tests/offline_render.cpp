@@ -13,6 +13,7 @@
 
 #include <cmath>
 #include <iostream>
+#include <tuple>
 
 namespace {
 
@@ -490,12 +491,123 @@ int runDryCenterTest()
     return maxDiff < 1.0e-6f ? 0 : 2;
 }
 
+int runReferenceTest()
+{
+    constexpr double sampleRate = 48000.0;
+    constexpr int blockSize = 512;
+    constexpr double inputFrequency = 432.0;
+
+    auto detect = [] (float reference)
+    {
+        namberry::DropTuner tuner;
+        juce::dsp::ProcessSpec spec;
+        spec.sampleRate = sampleRate;
+        spec.maximumBlockSize = blockSize;
+        spec.numChannels = 2;
+        tuner.prepare (spec);
+        tuner.setReferenceFrequency (reference);
+
+        juce::AudioBuffer<float> buffer (2, blockSize);
+        juce::MidiBuffer midi;
+        double phase = 0.0;
+
+        for (int block = 0; block < 220; ++block)
+        {
+            for (int i = 0; i < blockSize; ++i)
+            {
+                const float s = 0.2f * static_cast<float> (std::sin (phase));
+                phase += 2.0 * juce::MathConstants<double>::pi * inputFrequency / sampleRate;
+                buffer.setSample (0, i, s);
+                buffer.setSample (1, i, s);
+            }
+
+            tuner.processBlock (buffer, midi);
+        }
+
+        return std::make_tuple (tuner.getDetectedNote(),
+                                tuner.getCentsDeviation(),
+                                tuner.getReferenceFrequency());
+    };
+
+    const auto at432 = detect (432.0f);
+    const auto at440 = detect (440.0f);
+
+    const bool pass432 = std::abs (std::get<1> (at432)) < 2.0f;
+    const bool pass440 = std::abs (std::get<1> (at440) + 31.8f) < 2.0f;
+    const bool noteOk = std::get<0> (at432) == "A4" && std::get<0> (at440) == "A4";
+    const bool passed = pass432 && pass440 && noteOk;
+
+    std::cout << "ref 432: note=" << std::get<0> (at432)
+              << " cents=" << std::get<1> (at432)
+              << " | ref 440: note=" << std::get<0> (at440)
+              << " cents=" << std::get<1> (at440)
+              << " " << (passed ? "PASS" : "FAIL") << "\n";
+
+    return passed ? 0 : 2;
+}
+
+int runDelayResetTest()
+{
+    constexpr double sampleRate = 48000.0;
+    constexpr int blockSize = 4096;
+
+    namberry::PostEffects fx;
+    juce::dsp::ProcessSpec spec;
+    spec.sampleRate = sampleRate;
+    spec.maximumBlockSize = blockSize;
+    spec.numChannels = 2;
+    fx.prepare (spec);
+    fx.setBypass (false);
+    fx.setDelayBypass (false);
+    fx.setDelayMix (1.0f);
+    fx.setDelayTimeMs (50.0f);
+    fx.setDelayFeedback (0.8f);
+
+    juce::AudioBuffer<float> buffer (2, blockSize);
+    juce::MidiBuffer midi;
+    buffer.clear();
+    buffer.setSample (0, 0, 1.0f);
+    buffer.setSample (1, 0, 1.0f);
+    fx.processBlock (buffer, midi);
+
+    float echoEnergy = 0.0f;
+    for (int i = 2400; i < blockSize; ++i)
+        echoEnergy += std::abs (buffer.getSample (0, i));
+
+    // Switch the delay off: this must discard the existing feedback tail.
+    fx.setDelayBypass (true);
+
+    buffer.clear();
+    fx.processBlock (buffer, midi);
+
+    // Re-enable with silence: no old echo may reappear.
+    fx.setDelayBypass (false);
+    buffer.clear();
+    fx.processBlock (buffer, midi);
+
+    float remaining = 0.0f;
+    for (int i = 0; i < blockSize; ++i)
+        remaining += std::abs (buffer.getSample (0, i));
+
+    const bool passed = echoEnergy > 1.0e-5f && remaining < 1.0e-7f;
+
+    std::cout << "delay echo energy=" << echoEnergy
+              << " after bypass=" << remaining
+              << " " << (passed ? "PASS" : "FAIL") << "\n";
+
+    return passed ? 0 : 2;
+}
+
 int runPersistenceTest()
 {
+    const juce::File namRoot ("/home/elipoli/Downloads/amps/NAMs");
     const juce::File model ("/home/elipoli/Downloads/amps/NAMs/1. BASS/DG ADAM/ADAM Clean.nam");
+    const juce::File pedal ("/home/elipoli/Downloads/amps/NAMs/PEDALS/Dirty-Tree.nam");
     const juce::File ir ("/home/elipoli/Downloads/amps/IRs/cab Marshall 1960 celestion G12T75 sm57.wav");
+    const juce::File ir2 ("/home/elipoli/Downloads/amps/IRs/Matchless 2x12 G12H30 sm57.wav");
 
-    if (! model.existsAsFile() || ! ir.existsAsFile())
+    if (! namRoot.isDirectory() || ! model.existsAsFile() || ! pedal.existsAsFile()
+        || ! ir.existsAsFile() || ! ir2.existsAsFile())
     {
         std::cout << "persistence test SKIP: test files not found\n";
         return 0;
@@ -505,10 +617,12 @@ int runPersistenceTest()
         namberry::NAMBerryProcessor processor;
         processor.setPlayConfigDetails (2, 2, 48000, 512);
         processor.prepareToPlay (48000, 512);
-        processor.setNamDirectory (model.getParentDirectory());
+        processor.setNamDirectory (namRoot);
         processor.setIrDirectory (ir.getParentDirectory());
         processor.loadNamModel (model);
+        processor.loadNamPedalModel (pedal);
         processor.loadIr (0, ir);
+        processor.loadIr (1, ir2);
     }
 
     namberry::NAMBerryProcessor restored;
@@ -516,18 +630,25 @@ int runPersistenceTest()
     restored.prepareToPlay (48000, 512);
 
     const bool ampLoaded = restored.getNamModel()->hasModel();
+    const bool pedalLoaded = restored.getNamPedal()->hasModel();
     const bool irLoaded = restored.getIrLoader()->isSlotLoaded (0);
-    const bool namRoot = restored.getNamDirectory() == model.getParentDirectory();
-    const bool irRoot = restored.getIrDirectory() == ir.getParentDirectory();
+    const bool ir2Loaded = restored.getIrLoader()->isSlotLoaded (1);
+    const bool namRootOk = restored.getNamDirectory() == namRoot;
+    const bool irRootOk = restored.getIrDirectory() == ir.getParentDirectory();
 
     std::cout << "restored amp=" << ampLoaded
               << " (" << restored.getNamModel()->getLoadedFileName() << ")"
-              << " ir=" << irLoaded
+              << " pedal=" << pedalLoaded
+              << " (" << restored.getNamPedal()->getLoadedFileName() << ")"
+              << " ir0=" << irLoaded
               << " (" << restored.getIrLoader()->getLoadedFileName (0) << ")"
-              << " namRoot=" << namRoot
-              << " irRoot=" << irRoot << "\n";
+              << " ir1=" << ir2Loaded
+              << " (" << restored.getIrLoader()->getLoadedFileName (1) << ")"
+              << " namRoot=" << namRootOk
+              << " irRoot=" << irRootOk << "\n";
 
-    const bool passed = ampLoaded && irLoaded && namRoot && irRoot;
+    const bool passed = ampLoaded && pedalLoaded && irLoaded && ir2Loaded
+                     && namRootOk && irRootOk;
     std::cout << (passed ? "PASS" : "FAIL") << "\n";
     return passed ? 0 : 2;
 }
@@ -536,6 +657,12 @@ int runPersistenceTest()
 
 int main (int argc, char** argv)
 {
+    if (argc > 1 && juce::String (argv[1]) == "--reference")
+        return runReferenceTest();
+
+    if (argc > 1 && juce::String (argv[1]) == "--delay-reset")
+        return runDelayResetTest();
+
     if (argc > 1 && juce::String (argv[1]) == "--persist")
         return runPersistenceTest();
 

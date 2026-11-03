@@ -31,6 +31,8 @@ public:
     float getSlotPan (int slot) const;
     bool  getSlotPhaseInvert (int slot) const;
     bool  isSlotLoaded (int slot) const;
+    juce::String getLoadedFileName (int slot) const;
+    juce::File getLoadedFile (int slot) const;
 
 private:
     static constexpr int kNumSlots = 4;
@@ -40,6 +42,7 @@ private:
     std::array<float, kNumSlots> mix_ {};
     std::array<float, kNumSlots> pan_ {};
     std::array<bool, kNumSlots> phaseInvert_ {};
+    std::array<juce::File, kNumSlots> irFiles_ {};
 
     juce::AudioBuffer<float> wet_[kNumSlots];
     double sampleRate_ = 44100.0;

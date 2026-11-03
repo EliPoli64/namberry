@@ -49,6 +49,33 @@ void drawBrushedPanel (juce::Graphics& g, juce::Rectangle<float> b,
         g.drawHorizontalLine ((int) y, b.getX() + 2.0f, b.getRight() - 2.0f);
 }
 
+juce::Array<juce::File> listMatchingFiles (const juce::File& directory,
+                                           const juce::StringArray& extensions)
+{
+    juce::Array<juce::File> files;
+
+    if (! directory.isDirectory())
+        return files;
+
+    for (auto entry : juce::RangedDirectoryIterator (
+             directory, false, "*", juce::File::findFiles))
+    {
+        const auto file = entry.getFile();
+
+        for (const auto& extension : extensions)
+        {
+            if (file.hasFileExtension (extension))
+            {
+                files.add (file);
+                break;
+            }
+        }
+    }
+
+    files.sort();
+    return files;
+}
+
 //==============================================================================
 /// Metal knobs, toggle switches and brushed buttons for the whole editor.
 class HardwareLookAndFeel : public juce::LookAndFeel_V4
@@ -293,6 +320,233 @@ private:
     APVTS& state_;
     juce::String paramId_;
     juce::Button& button_;
+};
+
+//==============================================================================
+/// Strobe-style tuning wheel. The strobe bands rotate with the cents error;
+/// when the note is in tune they line up with the fixed top pointer.
+class TuningWheel : public juce::Component
+{
+public:
+    void setState (float cents, const juce::String& note, float referenceHz)
+    {
+        if (! std::isfinite (cents))
+            cents = 0.0f;
+
+        targetCents_ = juce::jlimit (-100.0f, 100.0f, cents);
+        note_ = note;
+        referenceHz_ = referenceHz;
+        hasNote_ = note.isNotEmpty() && note != "---";
+
+        if (! hasNote_)
+            targetCents_ = 0.0f;
+
+        displayCents_ += (targetCents_ - displayCents_) * 0.35f;
+        repaint();
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto bounds = getLocalBounds().toFloat();
+        const float size = juce::jmin (bounds.getWidth(), bounds.getHeight());
+        auto circle = juce::Rectangle<float> (size, size).withCentre (bounds.getCentre());
+        const float radius = size * 0.5f - 2.0f;
+
+        if (radius < 10.0f)
+            return;
+
+        g.setColour (juce::Colours::black.withAlpha (0.45f));
+        g.fillEllipse (circle.translated (0.0f, 3.0f));
+
+        g.setGradientFill (juce::ColourGradient (
+            juce::Colour (0xff26262c), circle.getCentreX(), circle.getY(),
+            juce::Colour (0xff0b0b0d), circle.getCentreX(), circle.getBottom(), false));
+        g.fillEllipse (circle);
+
+        g.setColour (juce::Colour (0xff34343a));
+        g.drawEllipse (circle, 1.5f);
+
+        // Tick ring.
+        for (int i = 0; i < 36; ++i)
+        {
+            const float angle = (float) i / 36.0f * juce::MathConstants<float>::twoPi;
+            const auto dir = juce::Point<float> (std::sin (angle), -std::cos (angle));
+            const float inner = radius - ((i % 3 == 0) ? 12.0f : 7.0f);
+
+            g.setColour (i % 3 == 0 ? juce::Colour (0xff71717a)
+                                    : juce::Colour (0xff3f3f46));
+            g.drawLine ({ circle.getCentre() + dir * inner,
+                          circle.getCentre() + dir * (radius - 2.0f) }, 1.0f);
+        }
+
+        const auto tuning = tuningColour();
+        const float rotation = displayCents_ * 6.0f
+                             * juce::MathConstants<float>::pi / 180.0f;
+
+        // Rotating strobe bands.
+        for (int i = 0; i < 12; ++i)
+        {
+            const float angle = rotation + (float) i / 12.0f
+                              * juce::MathConstants<float>::twoPi;
+            const auto dir = juce::Point<float> (std::sin (angle), -std::cos (angle));
+
+            g.setColour (tuning.withAlpha (hasNote_ ? 0.9f : 0.2f));
+            g.drawLine ({ circle.getCentre() + dir * (radius * 0.54f),
+                          circle.getCentre() + dir * (radius * 0.86f) }, 3.0f);
+        }
+
+        // Fixed top pointer.
+        juce::Path pointer;
+        pointer.addTriangle (circle.getCentreX() - 6.0f, circle.getY() + 2.0f,
+                             circle.getCentreX() + 6.0f, circle.getY() + 2.0f,
+                             circle.getCentreX(), circle.getY() + 14.0f);
+        g.setColour (juce::Colour (0xfff4f4f5));
+        g.fillPath (pointer);
+
+        // Centre readout.
+        auto centre = circle.reduced (radius * 0.34f);
+        g.setGradientFill (juce::ColourGradient (
+            juce::Colour (0xff17171a), centre.getCentreX(), centre.getY(),
+            juce::Colour (0xff09090b), centre.getCentreX(), centre.getBottom(), false));
+        g.fillEllipse (centre);
+        g.setColour (juce::Colour (0xff34343a));
+        g.drawEllipse (centre, 1.0f);
+
+        g.setColour (tuning);
+        g.setFont (juce::FontOptions (26.0f, juce::Font::bold));
+        g.drawFittedText (hasNote_ ? note_ : "---",
+                          centre.toNearestInt().removeFromTop (38),
+                          juce::Justification::centred, 1);
+
+        juce::String centsText = "---";
+
+        if (hasNote_)
+            centsText = std::abs (targetCents_) < 2.0f
+                ? "IN TUNE"
+                : juce::String (targetCents_, 1) + " c";
+
+        g.setColour (juce::Colour (kTextDim));
+        g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        g.drawFittedText (centsText,
+                          centre.toNearestInt().removeFromBottom (20),
+                          juce::Justification::centred, 1);
+
+        g.setColour (juce::Colour (kTextDim).withAlpha (0.8f));
+        g.setFont (juce::FontOptions (9.0f));
+        g.drawText ("REF " + juce::String (referenceHz_, 1) + " Hz",
+                    circle.toNearestInt().removeFromBottom (12),
+                    juce::Justification::centred);
+    }
+
+private:
+    juce::Colour tuningColour() const
+    {
+        if (! hasNote_)
+            return juce::Colour (kTextDim);
+
+        if (std::abs (targetCents_) < 2.0f)
+            return juce::Colour (0xff4ade80);
+
+        if (std::abs (targetCents_) < 10.0f)
+            return juce::Colour (0xfffbbf24);
+
+        return juce::Colour (0xfff87171);
+    }
+
+    float targetCents_ = 0.0f;
+    float displayCents_ = 0.0f;
+    float referenceHz_ = 440.0f;
+    juce::String note_ { "---" };
+    bool hasNote_ = false;
+};
+
+//==============================================================================
+/// A numeric reference-frequency field (typed value, not a knob).
+class ReferenceField : public juce::Component
+{
+public:
+    ReferenceField (APVTS& state, const juce::String& paramId,
+                    const juce::String& labelText)
+    {
+        addAndMakeVisible (label_);
+        label_.setText (labelText, juce::dontSendNotification);
+        label_.setJustificationType (juce::Justification::centred);
+        label_.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        label_.setColour (juce::Label::textColourId, juce::Colour (kText));
+
+        addAndMakeVisible (editor_);
+        editor_.setMultiLine (false);
+        editor_.setJustification (juce::Justification::centred);
+        editor_.setFont (juce::FontOptions (18.0f, juce::Font::bold));
+        editor_.setInputRestrictions (7, "0123456789.");
+        editor_.setSelectAllWhenFocused (true);
+        editor_.setColour (juce::TextEditor::backgroundColourId,
+                           juce::Colour (0xff121214));
+        editor_.setColour (juce::TextEditor::textColourId,
+                           juce::Colour (0xfff4f4f5));
+        editor_.setColour (juce::TextEditor::outlineColourId,
+                           juce::Colour (kPanelLine));
+        editor_.setColour (juce::TextEditor::focusedOutlineColourId,
+                           juce::Colour (kAccent));
+        editor_.onReturnKey = [this] { commit(); };
+        editor_.onFocusLost = [this] { commit(); };
+        editor_.onEscapeKey = [this]
+        {
+            editor_.setText (juce::String (currentHz_, 1),
+                             juce::dontSendNotification);
+            editor_.giveAwayKeyboardFocus();
+        };
+
+        if (auto* param = state.getParameter (paramId))
+        {
+            attachment_ = std::make_unique<juce::ParameterAttachment> (
+                *param,
+                [this] (float hz)
+                {
+                    currentHz_ = hz;
+
+                    if (! editor_.hasKeyboardFocus (true))
+                        editor_.setText (juce::String (hz, 1),
+                                         juce::dontSendNotification);
+                });
+            attachment_->sendInitialUpdate();
+        }
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds();
+        label_.setBounds (r.removeFromTop (16));
+
+        editor_.setBounds (r.withSizeKeepingCentre (120, 42));
+    }
+
+private:
+    void commit()
+    {
+        const auto text = editor_.getText().trim();
+
+        if (text.isEmpty())
+        {
+            editor_.setText (juce::String (currentHz_, 1),
+                             juce::dontSendNotification);
+            return;
+        }
+
+        const float hz = juce::jlimit (400.0f, 480.0f, text.getFloatValue());
+
+        if (attachment_ != nullptr)
+            attachment_->setValueAsCompleteGesture (hz);
+
+        editor_.setText (juce::String (hz, 1), juce::dontSendNotification);
+    }
+
+    juce::Label label_;
+    juce::TextEditor editor_;
+    std::unique_ptr<juce::ParameterAttachment> attachment_;
+    float currentHz_ = 440.0f;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ReferenceField)
 };
 
 //==============================================================================
@@ -850,14 +1104,24 @@ class NamLoadBox : public juce::Component,
 {
 public:
     NamLoadBox (juce::String caption,
-                std::function<bool (const juce::File&)> loader)
-        : caption_ (std::move (caption)), loader_ (std::move (loader))
+                std::function<bool (const juce::File&)> loader,
+                std::function<juce::File()> getRootDirectory,
+                std::function<juce::File()> getCurrentFile)
+        : caption_ (std::move (caption)),
+          loader_ (std::move (loader)),
+          getRootDirectory_ (std::move (getRootDirectory)),
+          getCurrentFile_ (std::move (getCurrentFile))
     {
         addAndMakeVisible (name_);
         name_.setText ("No model loaded", juce::dontSendNotification);
         name_.setJustificationType (juce::Justification::centred);
         name_.setFont (juce::FontOptions (10.5f));
         name_.setColour (juce::Label::textColourId, juce::Colour (kTextDim));
+
+        addAndMakeVisible (prevButton_);
+        prevButton_.setButtonText ("<");
+        prevButton_.setTooltip ("Previous .nam file in this folder");
+        prevButton_.onClick = [this] { browse (-1); };
 
         addAndMakeVisible (loadButton_);
         loadButton_.setButtonText ("BROWSE .NAM");
@@ -866,6 +1130,11 @@ public:
             if (onBrowse_ != nullptr)
                 onBrowse_();
         };
+
+        addAndMakeVisible (nextButton_);
+        nextButton_.setButtonText (">");
+        nextButton_.setTooltip ("Next .nam file in this folder");
+        nextButton_.onClick = [this] { browse (1); };
     }
 
     void setOnBrowse (std::function<void()> callback)
@@ -927,14 +1196,47 @@ public:
         auto r = getLocalBounds().reduced (4);
         r.removeFromTop (12);
         name_.setBounds (r.removeFromTop (16));
-        loadButton_.setBounds (r.reduced (2));
+        loadButton_.setBounds (r.removeFromTop (48).reduced (2));
+        r.removeFromTop (2);
+
+        auto arrows = r.removeFromTop (48);
+        prevButton_.setBounds (arrows.removeFromLeft (48));
+        nextButton_.setBounds (arrows.removeFromRight (48));
     }
 
 private:
+    void browse (int delta)
+    {
+        const auto current = currentFile_.existsAsFile()
+            ? currentFile_
+            : (getCurrentFile_ != nullptr ? getCurrentFile_() : juce::File());
+
+        const auto root = getRootDirectory_ != nullptr ? getRootDirectory_()
+                                                       : juce::File();
+        const auto directory = current.existsAsFile()
+            ? current.getParentDirectory()
+            : root;
+
+        const auto files = listMatchingFiles (directory, juce::StringArray { ".nam" });
+
+        if (files.isEmpty())
+            return;
+
+        int index = files.indexOf (current);
+
+        if (index < 0)
+            index = delta > 0 ? 0 : files.size() - 1;
+        else
+            index = (index + delta + files.size()) % files.size();
+
+        load (files[index]);
+    }
+
     bool load (const juce::File& file)
     {
         if (loader_ != nullptr && loader_ (file))
         {
+            currentFile_ = file;
             setDisplayedFileName (file.getFileName());
             return true;
         }
@@ -949,9 +1251,12 @@ private:
 
     juce::String caption_;
     std::function<bool (const juce::File&)> loader_;
+    std::function<juce::File()> getRootDirectory_;
+    std::function<juce::File()> getCurrentFile_;
     std::function<void()> onBrowse_;
+    juce::File currentFile_;
     juce::Label name_;
-    juce::TextButton loadButton_;
+    juce::TextButton prevButton_, loadButton_, nextButton_;
     bool dragOver_ = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NamLoadBox)
@@ -981,10 +1286,23 @@ public:
                 onBrowse_();
         };
 
+        addAndMakeVisible (prevButton_);
+        prevButton_.setButtonText ("<");
+        prevButton_.setTooltip ("Previous IR in this folder");
+        prevButton_.onClick = [this] { browse (-1); };
+
+        addAndMakeVisible (nextButton_);
+        nextButton_.setButtonText (">");
+        nextButton_.setTooltip ("Next IR in this folder");
+        nextButton_.onClick = [this] { browse (1); };
+
         addAndMakeVisible (fileName_);
         fileName_.setText ("empty", juce::dontSendNotification);
         fileName_.setFont (juce::FontOptions (11.0f));
         fileName_.setColour (juce::Label::textColourId, juce::Colour (kTextDim));
+
+        if (auto* irLoader = processor.getIrLoader())
+            setDisplayedFileName (irLoader->getLoadedFileName (slot));
 
         buildKnob (state, "irMix" + juce::String (slot), "Mix", mix_, mixLabel_);
         buildKnob (state, "irPan" + juce::String (slot), "Pan", pan_, panLabel_);
@@ -1057,8 +1375,15 @@ public:
         title_.setBounds (top.removeFromLeft (50));
         fileName_.setBounds (top);
 
-        auto left = r.removeFromLeft (96);
-        loadButton_.setBounds (left.withSizeKeepingCentre (88, 56));
+        auto left = r.removeFromLeft (108);
+        auto stack = left.withSizeKeepingCentre (102, 110);
+        loadButton_.setBounds (stack.removeFromTop (56));
+        stack.removeFromTop (6);
+
+        auto arrows = stack.removeFromTop (48);
+        prevButton_.setBounds (arrows.removeFromLeft (48));
+        arrows.removeFromLeft (6);
+        nextButton_.setBounds (arrows.removeFromLeft (48));
 
         auto phaseCol = r.removeFromRight (60);
         auto toggleArea = phaseCol.withTrimmedBottom (18);
@@ -1095,10 +1420,39 @@ private:
         mixAttachments_.push_back (std::make_unique<APVTS::SliderAttachment> (state, id, slider));
     }
 
+    void browse (int delta)
+    {
+        auto* irLoader = processor_.getIrLoader();
+        const auto current = currentFile_.existsAsFile()
+            ? currentFile_
+            : (irLoader != nullptr ? irLoader->getLoadedFile (slot_)
+                                   : juce::File());
+
+        const auto directory = current.existsAsFile()
+            ? current.getParentDirectory()
+            : processor_.getIrDirectory();
+
+        const auto files = listMatchingFiles (
+            directory, juce::StringArray { ".wav", ".aif", ".aiff" });
+
+        if (files.isEmpty())
+            return;
+
+        int index = files.indexOf (current);
+
+        if (index < 0)
+            index = delta > 0 ? 0 : files.size() - 1;
+        else
+            index = (index + delta + files.size()) % files.size();
+
+        load (files[index]);
+    }
+
     bool load (const juce::File& file)
     {
         if (processor_.loadIr (slot_, file))
         {
+            currentFile_ = file;
             setDisplayedFileName (file.getFileName());
             return true;
         }
@@ -1119,8 +1473,9 @@ private:
 
     int slot_;
     NAMBerryProcessor& processor_;
+    juce::File currentFile_;
     juce::Label title_, fileName_, mixLabel_, panLabel_, phaseLabel_;
-    juce::TextButton loadButton_;
+    juce::TextButton prevButton_, loadButton_, nextButton_;
     juce::ToggleButton phase_;
     juce::Slider mix_, pan_;
     std::vector<std::unique_ptr<APVTS::SliderAttachment>> mixAttachments_;
@@ -1194,6 +1549,7 @@ NAMBerryEditor::NAMBerryEditor (NAMBerryProcessor& p)
     buildUi();
 
     browser_ = std::make_unique<DirectoryBrowser>();
+    browser_->setName ("DirectoryBrowser");
     addChildComponent (browser_.get());
     browser_->setVisible (false);
 
@@ -1201,7 +1557,7 @@ NAMBerryEditor::NAMBerryEditor (NAMBerryProcessor& p)
     setResizeLimits (1000, 600, 4000, 1000);
     setSize (1280, 640);
 
-    startTimerHz (10);
+    startTimerHz (30);
 }
 
 NAMBerryEditor::~NAMBerryEditor()
@@ -1227,6 +1583,7 @@ void NAMBerryEditor::buildUi()
     tabPanels_.assign (5, {});
     allPanels_.clear();
     nameUpdaters_.clear();
+    tunerUpdater_ = {};
 
     auto& state = processor_.getValueTreeState();
     auto reduced = [this]() -> bool
@@ -1277,8 +1634,19 @@ void NAMBerryEditor::buildUi()
             {
                 return pedal ? processor_.loadNamPedalModel (file)
                              : processor_.loadNamModel (file);
+            },
+            [this] { return processor_.getNamDirectory(); },
+            [this, pedal]
+            {
+                auto* loader = pedal ? processor_.getNamPedal()
+                                     : processor_.getNamModel();
+                return loader != nullptr ? loader->getLoadedFile() : juce::File();
             });
         auto* raw = box.get();
+
+        if (auto* loaderNow = pedal ? processor_.getNamPedal() : processor_.getNamModel())
+            raw->setDisplayedFileName (loaderNow->getLoadedFileName());
+
         raw->setOnBrowse ([this, raw]
         {
             openBrowser (BrowserKind::Nam, [raw] (const juce::File& file)
@@ -1327,14 +1695,31 @@ void NAMBerryEditor::buildUi()
     if (auto* tuner = makePanel (0, "TUNER", UnitStyle::Pedal, 1, 0,
                                  tunerBody, tunerAccent))
     {
-        noteLabel_.setText ("---", juce::dontSendNotification);
-        noteLabel_.setJustificationType (juce::Justification::centred);
-        noteLabel_.setFont (juce::FontOptions (24.0f, juce::Font::bold));
-        noteLabel_.setColour (juce::Label::backgroundColourId, juce::Colour (0xff07160e));
-        noteLabel_.setColour (juce::Label::textColourId, juce::Colour (0xff86efac));
-        noteLabel_.setColour (juce::Label::outlineColourId, juce::Colour (0xff2f6b4a));
-        tuner->addRow (&noteLabel_, 46);
+        auto wheel = std::make_unique<TuningWheel>();
+        auto* rawWheel = wheel.get();
+        ownedControls_.push_back (std::move (wheel));
+
+        tuner->addRow (rawWheel, 170);
         tuner->setRowsFirst (true);
+
+        auto reference = std::make_unique<ReferenceField> (
+            state, "tuningReference", "Ref Hz");
+        auto* rawReference = reference.get();
+        ownedControls_.push_back (std::move (reference));
+        tuner->addRow (rawReference, 70);
+
+        if (auto* t = processor_.getDropTuner())
+            rawWheel->setState (t->getCentsDeviation(),
+                                t->getDetectedNote(),
+                                t->getReferenceFrequency());
+
+        tunerUpdater_ = [this, rawWheel]
+        {
+            if (auto* tuner = processor_.getDropTuner())
+                rawWheel->setState (tuner->getCentsDeviation(),
+                                    tuner->getDetectedNote(),
+                                    tuner->getReferenceFrequency());
+        };
     }
 
     if (auto* pitch = makePanel (0, "PITCH", UnitStyle::Pedal, 2, 0,
@@ -1375,7 +1760,7 @@ void NAMBerryEditor::buildUi()
         pedal->addItem (makeControl ("pedalMid", "Mid"));
         pedal->addItem (makeControl ("pedalTreble", "Treble"));
         pedal->addItem (makeControl ("pedalOutput", "Output"));
-        pedal->addRow (makeNamBox ("PEDAL MODEL", true), 92);
+        pedal->addRow (makeNamBox ("PEDAL MODEL", true), 140);
         pedal->setFooter (makeFootswitch ("pedalBypass", pedalAccent), 82);
     }
 
@@ -1414,7 +1799,7 @@ void NAMBerryEditor::buildUi()
         amp->addItem (addAmpControl ("ampPresence", "Presence"));
         amp->addItem (addAmpControl ("ampDepth", "Depth"));
         amp->addItem (addAmpControl ("ampOutput", "Output"));
-        amp->addRow (makeNamBox ("AMP MODEL", false), 92);
+        amp->addRow (makeNamBox ("AMP MODEL", false), 140);
     }
 
     // 3. Post EQ rack --------------------------------------------------------
@@ -1716,12 +2101,8 @@ void NAMBerryEditor::paint (juce::Graphics& g)
 
 void NAMBerryEditor::timerCallback()
 {
-    if (auto* tuner = processor_.getDropTuner())
-    {
-        const auto note = tuner->getDetectedNote();
-        if (note.isNotEmpty() && note != noteLabel_.getText())
-            noteLabel_.setText (note, juce::dontSendNotification);
-    }
+    if (tunerUpdater_)
+        tunerUpdater_();
 
     for (auto& updater : nameUpdaters_)
         updater();

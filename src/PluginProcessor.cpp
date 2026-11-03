@@ -12,6 +12,12 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
 
+    // ---- Tuner reference ----
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "tuningReference", "Tuning Reference",
+        juce::NormalisableRange<float>(400.0f, 480.0f, 0.1f), 440.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("Hz")));
+
     // ---- Noise Gate ----
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "gateThreshold", "Gate Threshold",
@@ -343,6 +349,9 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     //==============================================================================
 
     // 1. Tuner (detection/display only; the shared pitch stage does the shifting)
+    if (auto* reference = apvts_.getRawParameterValue ("tuningReference"))
+        dropTuner_->setReferenceFrequency (reference->load());
+
     dropTuner_->processBlock(buffer, midiMessages);
 
     // 2. Shared pitch stage for the digital capo and drop tuning

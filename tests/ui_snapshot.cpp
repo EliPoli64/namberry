@@ -7,9 +7,26 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <cmath>
 #include <iostream>
 
 namespace {
+
+juce::Component* findChildByName (juce::Component& parent, const juce::String& name)
+{
+    for (int i = 0; i < parent.getNumChildComponents(); ++i)
+    {
+        auto* child = parent.getChildComponent (i);
+
+        if (child->getName() == name)
+            return child;
+
+        if (auto* found = findChildByName (*child, name))
+            return found;
+    }
+
+    return nullptr;
+}
 
 juce::TextButton* findButton (juce::Component& parent, const juce::String& text)
 {
@@ -43,6 +60,27 @@ int main (int argc, char** argv)
     namberry::NAMBerryProcessor processor;
     processor.setPlayConfigDetails (2, 2, 48000, 512);
     processor.prepareToPlay (48000, 512);
+
+    // Prime the tuner so the snapshot shows a live note/cents reading.
+    {
+        juce::AudioBuffer<float> buffer (2, 512);
+        juce::MidiBuffer midi;
+        double phase = 0.0;
+
+        for (int block = 0; block < 200; ++block)
+        {
+            for (int i = 0; i < 512; ++i)
+            {
+                const float s = 0.2f * static_cast<float> (
+                    std::sin (phase));
+                phase += 2.0 * juce::MathConstants<double>::pi * 223.0 / 48000.0;
+                buffer.setSample (0, i, s);
+                buffer.setSample (1, i, s);
+            }
+
+            processor.processBlock (buffer, midi);
+        }
+    }
 
     namberry::NAMBerryEditor editor (processor);
     editor.setSize (1280, 640);
@@ -109,6 +147,33 @@ int main (int argc, char** argv)
     else
     {
         std::cerr << "FAIL: NAM browse button not found\n";
+    }
+
+    if (auto* browser = findChildByName (editor, "DirectoryBrowser"))
+        browser->setVisible (false);
+
+    tabBar->setCurrentTabIndex (3, false);
+    editor.resized();
+
+    if (auto* browse = findButton (editor, "BROWSE"))
+    {
+        if (browse->onClick != nullptr)
+            browse->onClick();
+
+        const auto image = editor.createComponentSnapshot (editor.getLocalBounds(), true, 1.0f);
+        const auto file = outputDir.getChildFile ("browser-ir.png");
+
+        juce::FileOutputStream stream (file);
+        juce::PNGImageFormat png;
+
+        if (stream.openedOk() && png.writeImageToStream (image, stream))
+            std::cout << "Wrote " << file.getFullPathName() << "\n";
+        else
+            std::cerr << "FAIL: could not write IR browser snapshot\n";
+    }
+    else
+    {
+        std::cerr << "FAIL: IR browse button not found\n";
     }
 
     std::cout << "PASS\n";

@@ -169,4 +169,11 @@ juce::String IrLoader::getLoadedFileName (int slot) const
         : juce::String();
 }
 
+juce::File IrLoader::getLoadedFile (int slot) const
+{
+    return (slot >= 0 && slot < kNumSlots)
+        ? irFiles_[static_cast<size_t>(slot)]
+        : juce::File();
+}
+
 } // namespace namberry

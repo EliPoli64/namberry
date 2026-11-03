@@ -3,26 +3,26 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_dsp/juce_dsp.h>
 
-#include <memory>
+#include "namberry/PitchShiftEngines.h"
 
 namespace namberry {
 
-class PitchShifter;
-
-/// Digital capo: transposes pitch by N semitones (-12..+12, 0 = no shift).
-/// Negative values tune down, positive values act like a capo.
+/// Shared pitch stage for the digital capo and drop tuner.
+/// Supports two low-latency engines (dual-tap and PSOLA) with a smooth toggle.
 class DigitalCapo
 {
 public:
-    DigitalCapo();
-    ~DigitalCapo();
+    enum class Engine { DualTap, Psola };
+
+    DigitalCapo() = default;
+    ~DigitalCapo() = default;
 
     void prepare (const juce::dsp::ProcessSpec& spec);
     void processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi);
     void reset();
 
-    void setFretPosition (int fret);
-    int getFretPosition() const { return fretPosition_; }
+    void setSemitones (float semitones);
+    float getSemitones() const { return semitones_; }
 
     void setMix (float mix);
     float getMix() const { return mix_; }
@@ -30,33 +30,44 @@ public:
     void setBypass (bool bypassed) { bypass_ = bypassed; }
     bool isBypassed() const { return bypass_; }
 
-    /// Latency introduced by the pitch shifter, in samples. The processor
-    /// reports this to the host.
+    void setEngine (Engine engine) { engine_ = engine; }
+    Engine getEngine() const { return engine_; }
+
+    void setPitchPeriodSamples (float periodSamples);
+
+    /// Latency introduced by the pitch engine, in samples.
     int getLatencySamples() const noexcept { return latencySamples_; }
     bool isActive() const noexcept { return active_; }
 
-    struct Params { int fretPosition = 0; float mix = 1.0f; bool bypass = false; };
-    Params getParams() const { return { fretPosition_, mix_, bypass_ }; }
+    struct Params { float semitones = 0.0f; float mix = 1.0f; bool bypass = false; };
+    Params getParams() const { return { semitones_, mix_, bypass_ }; }
     void setParams (const Params& p);
 
 private:
-    std::unique_ptr<PitchShifter> shifter_;
+    DualTapPitchShifter dualTap_;
+    PsolaPitchShifter psola_;
+
+    juce::AudioBuffer<float> wetDual_;
+    juce::AudioBuffer<float> wetPsola_;
 
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None> dryDelay_;
-    juce::AudioBuffer<float> wetBuffer_;
-
     juce::SmoothedValue<float> mixSmoothed_;
     juce::SmoothedValue<float> semitoneSmoothed_;
+    juce::SmoothedValue<float> engineMixSmoothed_;
 
     double sampleRate_ = 44100.0;
     int maxBlockSize_ = 512;
     int latencySamples_ = 0;
-    int fretPosition_ = 0;
+    float semitones_ = 0.0f;
     float mix_ = 1.0f;
+    float pitchPeriodSamples_ = 0.0f;
     bool bypass_ = false;
     bool active_ = false;
     bool prepared_ = false;
+    bool periodReady_ = false;
     int activationSamplesRemaining_ = 0;
+
+    Engine engine_ = Engine::DualTap;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DigitalCapo)
 };

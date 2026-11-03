@@ -110,6 +110,7 @@ void DirectoryBrowser::refresh()
     entries_.insert (entries_.end(), directories.begin(), directories.end());
     entries_.insert (entries_.end(), files.begin(), files.end());
 
+    list_.deselectAllRows();
     list_.updateContent();
     pathLabel_.setText (current_.getFullPathName(), juce::dontSendNotification);
     pathLabel_.setTooltip (current_.getFullPathName());

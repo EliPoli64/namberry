@@ -20,7 +20,14 @@ public:
     void processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi);
     void reset();
 
-    void setBypass (bool bypassed) { bypass_ = bypassed; }
+    void setBypass (bool bypassed)
+    {
+        if (bypassed && ! bypass_)
+            delayLine_.reset();
+
+        bypass_ = bypassed;
+    }
+
     bool isBypassed() const { return bypass_; }
 
     void setChorusMix (float value);
@@ -42,7 +49,17 @@ public:
     void setDelayMix (float value);
     void setDelayTimeMs (float value);
     void setDelayFeedback (float value);
-    void setDelayBypass (bool value) { delayBypass_ = value; }
+    void setDelayBypass (bool value)
+    {
+        if (value != delayBypass_)
+        {
+            delayBypass_ = value;
+
+            // Switching the delay off discards its existing feedback tail.
+            if (value)
+                delayLine_.reset();
+        }
+    }
 
     void setReverbMix (float value);
     void setReverbDecay (float value);

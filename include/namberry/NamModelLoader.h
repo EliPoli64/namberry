@@ -52,6 +52,7 @@ public:
     bool hasModel() const { return hasModelFlag_.load(); }
 
     juce::String getLoadedFileName() const;
+    juce::File getLoadedFile() const { return modelFile_; }
 
 private:
     void resetState();

@@ -39,12 +39,12 @@ private:
     juce::Component content_;
     juce::TabbedButtonBar tabBar_;
 
-    juce::Label noteLabel_;
     juce::ToggleButton reducedMotionButton_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> reducedMotionAttachment_;
 
     std::vector<std::unique_ptr<juce::Component>> ownedControls_;
     std::vector<std::function<void()>> nameUpdaters_;
+    std::function<void()> tunerUpdater_;
     std::unique_ptr<DirectoryBrowser> browser_;
     std::vector<std::vector<juce::Component*>> tabPanels_;
     std::vector<juce::Component*> allPanels_;
