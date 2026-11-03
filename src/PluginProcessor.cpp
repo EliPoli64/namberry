@@ -144,13 +144,22 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
         "ampOutput", "Amp Output",
         juce::NormalisableRange<float>(0.0f, 5.0f, 0.01f), 1.0f));
 
+    // ---- Master output ----
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "masterOutput", "Master Output",
+        juce::NormalisableRange<float>(-60.0f, 6.0f, 0.1f), 0.0f));
+
+    // ---- UI preference: reduced motion ----
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        "reducedMotion", "Reduced Motion", false));
+
     // ---- IR Loader (4 slots) ----
     for (int slot = 0; slot < 4; ++slot)
     {
         const auto idx = juce::String(slot);
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
             "irMix" + idx, "IR " + idx + " Mix",
-            juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.0f));
+            juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 1.0f));
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
             "irPan" + idx, "IR " + idx + " Pan",
             juce::NormalisableRange<float>(-1.0f, 1.0f, 0.001f), 0.0f));
@@ -217,7 +226,7 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     //==============================================================================
     // Signal chain order:
     // Input → DropTuner → NoiseGate → Compressor → Pre-Amp EQ → DigitalCapo →
-    // NAM Amp → NAM Pedal → Post-Amp EQ → IR Loader → Output
+    // NAM Amp → NAM Pedal → IR Loader → Post-Amp EQ → Master Output
     //==============================================================================
 
     // 1. Drop Tuner
@@ -321,6 +330,13 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
             apvts_.getRawParameterValue("postEqGain2")->load(),
             apvts_.getRawParameterValue("postEqQ2")->load());
         postAmpEQ_->processBlock(buffer, midiMessages);
+    }
+
+    // 8. Master output
+    {
+        const float gainDb = apvts_.getRawParameterValue("masterOutput")->load();
+        const float gain = juce::Decibels::decibelsToGain(gainDb);
+        buffer.applyGain(gain);
     }
 }
 

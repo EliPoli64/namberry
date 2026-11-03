@@ -5,11 +5,17 @@
 
 #include <NeuralAudio/NeuralModel.h>
 
+#include <atomic>
 #include <memory>
+#include <vector>
 
 namespace namberry {
 
 /// Wrapper around NeuralAudio::NeuralModel for loading and running .nam models.
+///
+/// NAM models are mono. All input channels are summed to a single mono stream,
+/// run through one model, and the result is copied to every output channel.
+/// (Feeding L and R through the same stateful model separately distorts badly.)
 class NamModelLoader
 {
 public:
@@ -35,9 +41,13 @@ public:
     float getPresence() const { return presence_; }
     float getDepth() const { return depth_; }
     float getOutputLevel() const { return outputLevel_; }
-    bool hasModel() const { return model_ != nullptr; }
+    bool hasModel() const { return hasModelFlag_.load(); }
+
+    juce::String getLoadedFileName() const;
 
 private:
+    void resetState();
+
     // Parameters
     float gain_ = 1.0f;
     float presence_ = 0.5f;
@@ -47,18 +57,22 @@ private:
     // NeuralAudio model + loader
     NeuralAudio::NeuralModelLoader loader_;
     std::unique_ptr<NeuralAudio::NeuralModel> model_;
+    mutable juce::SpinLock modelLock_;
+
+    juce::File modelFile_;
+    std::atomic<bool> hasModelFlag_ { false };
+    int modelSampleRate_ = 0;
 
     // Audio state
     double sampleRate_ = 44100.0;
     size_t maxBufferSize_ = 512;
-
-    // Warm-up handling
     int receptiveFieldSize_ = 0;
     size_t silentSamples_ = 0;
-    bool smartBypassed_ = true;
+    bool smartBypassed_ = false;
 
-    // Scratch buffer for mono in/out (models may be mono)
-    std::vector<float> scratch_;
+    // Mono working buffers (input and model output).
+    std::vector<float> monoIn_;
+    std::vector<float> monoOut_;
 };
 
 } // namespace namberry

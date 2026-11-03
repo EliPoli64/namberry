@@ -1,105 +1,169 @@
 #include "namberry/NamModelLoader.h"
 
-#include <cmath>
 #include <algorithm>
+#include <cmath>
 
 namespace namberry {
 
 NamModelLoader::NamModelLoader()
 {
-    scratch_.resize(maxBufferSize_, 0.0f);
+    monoIn_.assign (maxBufferSize_, 0.0f);
+    monoOut_.assign (maxBufferSize_, 0.0f);
 }
 
 NamModelLoader::~NamModelLoader() = default;
 
-bool NamModelLoader::loadModel(const juce::File& modelFile)
+//==============================================================================
+void NamModelLoader::resetState()
 {
-    if (!modelFile.existsAsFile())
+    silentSamples_ = 0;
+    smartBypassed_ = receptiveFieldSize_ > 0;
+}
+
+bool NamModelLoader::loadModel (const juce::File& modelFile)
+{
+    if (! modelFile.existsAsFile())
     {
-        juce::Logger::getCurrentLogger()->writeToLog(
+        juce::Logger::getCurrentLogger()->writeToLog (
             "NAMBerry: model file does not exist: " + modelFile.getFullPathName());
         return false;
     }
 
-    // Give the loader our current sample rate/buffer settings.
-    loader_.SetExternalSampleRate(static_cast<int>(sampleRate_));
-    loader_.SetDefaultMaxAudioBufferSize(static_cast<int>(maxBufferSize_));
+    loader_.SetExternalSampleRate (static_cast<int> (sampleRate_));
+    loader_.SetDefaultMaxAudioBufferSize (static_cast<int> (maxBufferSize_));
 
     std::unique_ptr<NeuralAudio::NeuralModel> newModel;
+
     try
     {
-        newModel.reset(loader_.CreateFromFile(
-            std::filesystem::path(modelFile.getFullPathName().toStdString())));
+        newModel.reset (loader_.CreateFromFile (
+            std::filesystem::path (modelFile.getFullPathName().toStdString())));
     }
     catch (const std::exception& e)
     {
-        juce::Logger::getCurrentLogger()->writeToLog(
-            juce::String("NAMBerry: exception loading model: ") + e.what());
+        juce::Logger::getCurrentLogger()->writeToLog (
+            juce::String ("NAMBerry: exception loading model: ") + e.what());
         return false;
     }
 
     if (newModel == nullptr)
     {
-        juce::Logger::getCurrentLogger()->writeToLog(
+        juce::Logger::getCurrentLogger()->writeToLog (
             "NAMBerry: failed to load model: " + modelFile.getFullPathName());
         return false;
     }
 
-    newModel->SetMaxAudioBufferSize(static_cast<int>(maxBufferSize_));
-    receptiveFieldSize_ = newModel->GetReceptiveFieldSize();
+    newModel->SetMaxAudioBufferSize (static_cast<int> (maxBufferSize_));
 
-    model_ = std::move(newModel);
+    {
+        const juce::SpinLock::ScopedLockType lock (modelLock_);
 
-    silentSamples_ = 0;
-    smartBypassed_ = receptiveFieldSize_ > 0; // only need warm-up if model has a receptive field
+        model_ = std::move (newModel);
+        receptiveFieldSize_ = model_->GetReceptiveFieldSize();
+        resetState();
+
+        modelFile_ = modelFile;
+        modelSampleRate_ = static_cast<int> (sampleRate_);
+        hasModelFlag_.store (true);
+    }
 
     return true;
 }
 
-void NamModelLoader::prepare(const juce::dsp::ProcessSpec& spec){
+//==============================================================================
+void NamModelLoader::prepare (const juce::dsp::ProcessSpec& spec)
+{
     sampleRate_ = spec.sampleRate;
-    maxBufferSize_ = spec.maximumBlockSize;
+    maxBufferSize_ = static_cast<size_t> (juce::jmax (1u, spec.maximumBlockSize));
 
-    loader_.SetExternalSampleRate(static_cast<int>(sampleRate_));
-    loader_.SetDefaultMaxAudioBufferSize(static_cast<int>(maxBufferSize_));
+    loader_.SetExternalSampleRate (static_cast<int> (sampleRate_));
+    loader_.SetDefaultMaxAudioBufferSize (static_cast<int> (maxBufferSize_));
+
+    monoIn_.assign (maxBufferSize_, 0.0f);
+    monoOut_.assign (maxBufferSize_, 0.0f);
+
+    // The model is built for a specific sample rate (WaveNet dilations are
+    // adjusted for oversampling). Rebuild it if the device rate changed.
+    if (hasModelFlag_.load() && modelFile_.existsAsFile()
+        && modelSampleRate_ != static_cast<int> (sampleRate_))
+    {
+        loadModel (modelFile_);
+        return;
+    }
+
+    const juce::SpinLock::ScopedLockType lock (modelLock_);
 
     if (model_ != nullptr)
-        model_->SetMaxAudioBufferSize(static_cast<int>(maxBufferSize_));
+    {
+        model_->SetMaxAudioBufferSize (static_cast<int> (maxBufferSize_));
+        receptiveFieldSize_ = model_->GetReceptiveFieldSize();
+    }
 
-    scratch_.assign(maxBufferSize_, 0.0f);
-
-    silentSamples_ = 0;
-    smartBypassed_ = (model_ != nullptr) && (receptiveFieldSize_ > 0);
+    resetState();
 }
 
-void NamModelLoader::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& /*midi*/)
+void NamModelLoader::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& /*midi*/)
 {
-    if (buffer.getNumChannels() == 0 || buffer.getNumSamples() == 0)
+    const int numChannels = buffer.getNumChannels();
+    const int numSamples  = buffer.getNumSamples();
+
+    if (numChannels == 0 || numSamples == 0)
         return;
 
-    // No model: pass through silently (dry) so the chain keeps working.
-    if (model_ == nullptr)
+    // No model: pass the dry signal through unchanged.
+    if (! hasModelFlag_.load() || model_ == nullptr)
         return;
+
+    // If a model is being swapped in on the message thread, pass the dry
+    // signal for this block rather than blocking the audio thread.
+    const juce::SpinLock::ScopedTryLockType lock (modelLock_);
+    if (! lock.isLocked())
+        return;
+
+    const size_t n = static_cast<size_t> (numSamples);
+
+    if (monoIn_.size() < n) monoIn_.resize (n, 0.0f);
+    if (monoOut_.size() < n) monoOut_.resize (n, 0.0f);
+
+    // --- Sum all input channels to mono (averaged to keep headroom) ---
+    std::fill (monoIn_.begin(), monoIn_.begin() + static_cast<std::ptrdiff_t> (n), 0.0f);
+
+    for (int ch = 0; ch < numChannels; ++ch)
+    {
+        const float* data = buffer.getReadPointer (ch);
+        for (size_t i = 0; i < n; ++i)
+            monoIn_[i] += data[i];
+    }
+
+    const float channelScale = 1.0f / static_cast<float> (numChannels);
+
+    // --- Input gain ---
+    const float inputGain = gain_ * channelScale;
+    for (size_t i = 0; i < n; ++i)
+        monoIn_[i] *= inputGain;
 
     // --- Warm-up with silence (WaveNet receptive field) ---
-    if (smartBypassed_)
+    if (receptiveFieldSize_ > 0 && smartBypassed_)
     {
         bool allSilent = true;
-        for (int ch = 0; ch < buffer.getNumChannels() && allSilent; ++ch)
+        for (size_t i = 0; i < n; ++i)
         {
-            const float* d = buffer.getReadPointer(ch);
-            for (int i = 0; i < buffer.getNumSamples(); ++i)
-                if (std::abs(d[i]) > 0.001f) { allSilent = false; break; }
+            if (std::abs (monoIn_[i]) > 0.001f)
+            {
+                allSilent = false;
+                break;
+            }
         }
 
         if (allSilent)
         {
-            silentSamples_ += static_cast<size_t>(buffer.getNumSamples());
-            if (silentSamples_ >= static_cast<size_t>(receptiveFieldSize_))
+            silentSamples_ += n;
+            if (silentSamples_ >= static_cast<size_t> (receptiveFieldSize_))
                 smartBypassed_ = false;
         }
         else
         {
+            silentSamples_ = 0;
             smartBypassed_ = false;
         }
 
@@ -110,33 +174,50 @@ void NamModelLoader::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
         }
     }
 
-    // --- Input gain ---
-    buffer.applyGain(gain_);
+    // --- Run the mono model, chunked to its max buffer size ---
+    size_t offset = 0;
+    size_t remaining = n;
 
-    // --- Run model per channel (models are typically mono) ---
-    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+    while (remaining > 0)
     {
-        float* data = buffer.getWritePointer(ch);
-        const int n = buffer.getNumSamples();
+        const size_t chunk = juce::jmin (remaining, maxBufferSize_);
 
-        if (scratch_.size() < static_cast<size_t>(n))
-            scratch_.resize(static_cast<size_t>(n), 0.0f);
+        if (monoOut_.size() < offset + chunk)
+            monoOut_.resize (offset + chunk, 0.0f);
 
-        // Models are mono; run each channel independently through the same model.
-        model_->Process(data, scratch_.data(), static_cast<size_t>(n));
-        std::copy(scratch_.begin(), scratch_.begin() + n, data);
+        model_->Process (monoIn_.data() + offset,
+                         monoOut_.data() + offset,
+                         chunk);
+
+        offset += chunk;
+        remaining -= chunk;
     }
 
-    // --- Output level ---
-    buffer.applyGain(outputLevel_);
+    // --- Output level, then send the same mono result to every channel ---
+    const float outGain = outputLevel_;
+
+    for (int ch = 0; ch < numChannels; ++ch)
+    {
+        float* data = buffer.getWritePointer (ch);
+        for (size_t i = 0; i < n; ++i)
+            data[i] = monoOut_[i] * outGain;
+    }
 }
 
 void NamModelLoader::reset()
 {
+    const juce::SpinLock::ScopedLockType lock (modelLock_);
+
     if (model_ != nullptr)
         model_->Prewarm();
-    silentSamples_ = 0;
-    smartBypassed_ = (model_ != nullptr) && (receptiveFieldSize_ > 0);
+
+    resetState();
+}
+
+//==============================================================================
+juce::String NamModelLoader::getLoadedFileName() const
+{
+    return hasModelFlag_.load() ? modelFile_.getFileName() : juce::String();
 }
 
 void NamModelLoader::setGain(float gain)             { gain_ = juce::jlimit(0.0f, 5.0f, gain); }

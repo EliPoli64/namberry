@@ -64,6 +64,24 @@ void IrLoader::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&
     if (numChannels == 0 || numSamples == 0)
         return;
 
+    // If no slot is loaded/mixed in, pass the dry signal through unchanged.
+    // (Previously the buffer was always cleared, which muted the whole chain
+    // until an IR was loaded.)
+    bool anyActive = false;
+    float maxMix = 0.0f;
+    for (int s = 0; s < kNumSlots; ++s)
+    {
+        const float m = mix_[static_cast<size_t>(s)];
+        if (loaded_[static_cast<size_t>(s)] && m > 0.0f)
+        {
+            anyActive = true;
+            maxMix = juce::jmax (maxMix, m);
+        }
+    }
+
+    if (! anyActive)
+        return;
+
     // Keep a dry copy because we rebuild the output from the slot mix.
     juce::AudioBuffer<float> dry (numChannels, numSamples);
     dry.makeCopyOf (buffer);
@@ -100,6 +118,14 @@ void IrLoader::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&
             buffer.addFrom (ch, 0, wet.getReadPointer (ch), numSamples,
                             phase * mix * chGain);
         }
+    }
+
+    // Blend the dry signal back in: full dry at mix 0, full wet at mix 1.
+    const float dryGain = juce::jlimit (0.0f, 1.0f, 1.0f - maxMix);
+    if (dryGain > 0.0f)
+    {
+        for (int ch = 0; ch < numChannels; ++ch)
+            buffer.addFrom (ch, 0, dry.getReadPointer (ch), numSamples, dryGain);
     }
 }
 
