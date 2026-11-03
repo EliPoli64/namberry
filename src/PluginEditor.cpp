@@ -491,7 +491,8 @@ private:
 
 //==============================================================================
 NAMBerryEditor::NAMBerryEditor (NAMBerryProcessor& p)
-    : AudioProcessorEditor (&p), processor_ (p)
+    : AudioProcessorEditor (&p), processor_ (p),
+      tabBar_ (juce::TabbedButtonBar::TabsAtBottom)
 {
     // --- Theme -------------------------------------------------------------
     auto scheme = juce::LookAndFeel_V4::getDarkColourScheme();
@@ -519,6 +520,12 @@ NAMBerryEditor::NAMBerryEditor (NAMBerryProcessor& p)
     reducedMotionAttachment_ = std::make_unique<APVTS::ButtonAttachment> (
         processor_.getValueTreeState(), "reducedMotion", reducedMotionButton_);
 
+    tabBar_.setColour (juce::TabbedButtonBar::tabOutlineColourId, juce::Colour (kPanelLine));
+    tabBar_.setColour (juce::TabbedButtonBar::frontTextColourId, juce::Colour (kText));
+    tabBar_.setColour (juce::TabbedButtonBar::tabTextColourId, juce::Colour (kTextDim));
+    tabBar_.addChangeListener (this);
+    addAndMakeVisible (tabBar_);
+
     // --- Signal chain ------------------------------------------------------
     viewport_.setViewedComponent (&content_, false);
     viewport_.setScrollBarsShown (false, true);
@@ -537,13 +544,27 @@ NAMBerryEditor::NAMBerryEditor (NAMBerryProcessor& p)
 
 NAMBerryEditor::~NAMBerryEditor()
 {
+    tabBar_.removeChangeListener (this);
     stopTimer();
     setLookAndFeel (nullptr);
+}
+
+void NAMBerryEditor::changeListenerCallback (juce::ChangeBroadcaster* source)
+{
+    if (source == &tabBar_)
+    {
+        currentTabIndex_ = tabBar_.getCurrentTabIndex();
+        layoutContent();
+    }
 }
 
 //==============================================================================
 void NAMBerryEditor::buildUi()
 {
+    tabBar_.clearTabs();
+    tabPanels_.assign (5, {});
+    allPanels_.clear();
+
     auto& state = processor_.getValueTreeState();
     auto reduced = [this]() -> bool
     {
@@ -552,12 +573,14 @@ void NAMBerryEditor::buildUi()
         return value != nullptr && value->load() > 0.5f;
     };
 
-    auto makePanel = [this, &reduced] (const juce::String& title, int cols,
+    auto makePanel = [this, &reduced] (int tabIndex, const juce::String& title, int cols,
                                        int width = 0) -> SectionPanel*
     {
         auto panel = std::make_unique<SectionPanel> (title, cols, width, reduced);
         auto* raw = panel.get();
         ownedControls_.push_back (std::move (panel));
+        tabPanels_[tabIndex].push_back (raw);
+        allPanels_.push_back (raw);
         content_.addAndMakeVisible (raw);
         return raw;
     };
@@ -586,8 +609,16 @@ void NAMBerryEditor::buildUi()
         return raw;
     };
 
-    // 1. Tuner --------------------------------------------------------------
-    if (auto* tuner = makePanel ("TUNER", 1))
+    tabBar_.clearTabs();
+    tabBar_.addTab ("Pre FX", juce::Colour (0xff1c1c20), -1);
+    tabBar_.addTab ("Amp", juce::Colour (0xff1c1c20), -1);
+    tabBar_.addTab ("Post EQ", juce::Colour (0xff1c1c20), -1);
+    tabBar_.addTab ("IR", juce::Colour (0xff1c1c20), -1);
+    tabBar_.addTab ("Post FX", juce::Colour (0xff1c1c20), -1);
+    tabBar_.setCurrentTabIndex (currentTabIndex_, false);
+
+    // 1. Channel chain ------------------------------------------------------
+    if (auto* tuner = makePanel (0, "TUNER", 1))
     {
         noteLabel_.setText ("---", juce::dontSendNotification);
         noteLabel_.setJustificationType (juce::Justification::centred);
@@ -598,8 +629,7 @@ void NAMBerryEditor::buildUi()
         tuner->addItem (makeControl ("tuningBypass", "Bypass", ParamControl::Kind::Toggle));
     }
 
-    // 2. Noise gate ---------------------------------------------------------
-    if (auto* gate = makePanel ("GATE", 2))
+    if (auto* gate = makePanel (0, "GATE", 2))
     {
         gate->addItem (makeControl ("gateThreshold", "Threshold"));
         gate->addItem (makeControl ("gateAttack", "Attack"));
@@ -607,8 +637,7 @@ void NAMBerryEditor::buildUi()
         gate->addItem (makeControl ("gateBypass", "Bypass", ParamControl::Kind::Toggle));
     }
 
-    // 3. Compressor ---------------------------------------------------------
-    if (auto* comp = makePanel ("COMP", 2))
+    if (auto* comp = makePanel (0, "COMP", 2))
     {
         comp->addItem (makeControl ("compThreshold", "Threshold"));
         comp->addItem (makeControl ("compRatio", "Ratio"));
@@ -616,12 +645,13 @@ void NAMBerryEditor::buildUi()
         comp->addItem (makeControl ("compRelease", "Release"));
         comp->addItem (makeControl ("compMakeup", "Makeup"));
         comp->addItem (makeControl ("compTight", "Tight", ParamControl::Kind::Toggle));
+        comp->addItem (makeControl ("compBypass", "Off", ParamControl::Kind::Toggle));
     }
 
-    // 4. Pre-amp EQ ---------------------------------------------------------
-    if (auto* preEq = makePanel ("PRE-EQ", 3))
+    if (auto* preEq = makePanel (0, "PRE-EQ", 3))
     {
         const char* bandNames[] = { "Low", "Mid", "High" };
+        preEq->addItem (makeControl ("preEqBypass", "Bypass", ParamControl::Kind::Toggle));
         for (int band = 0; band < 3; ++band)
         {
             const auto i = juce::String (band);
@@ -631,25 +661,34 @@ void NAMBerryEditor::buildUi()
         }
     }
 
-    // 5. Digital capo -------------------------------------------------------
-    if (auto* capo = makePanel ("CAPO", 2))
+    // 2. Capo and output ----------------------------------------------------
+    if (auto* capo = makePanel (0, "CAPO", 2))
     {
         capo->addItem (makeControl ("capoFret", "Fret"));
         capo->addItem (makeControl ("capoMix", "Mix"));
+        capo->addItem (makeControl ("capoBypass", "Bypass", ParamControl::Kind::Toggle));
     }
 
-    // 6. NAM amp ------------------------------------------------------------
-    if (auto* amp = makePanel ("NAM AMP", 2))
+    if (auto* output = makePanel (0, "OUTPUT", 1))
     {
+        output->addItem (makeControl ("masterOutput", "Master"));
+    }
+
+    // 3. Amp and pedal ------------------------------------------------------
+    if (auto* amp = makePanel (1, "AMP", 7, 690))
+    {
+        amp->addItem (makeControl ("ampBypass", "Bypass", ParamControl::Kind::Toggle));
         amp->addItem (makeControl ("ampGain", "Gain"));
+        amp->addItem (makeControl ("ampBass", "Bass"));
+        amp->addItem (makeControl ("ampMid", "Mid"));
+        amp->addItem (makeControl ("ampTreble", "Treble"));
         amp->addItem (makeControl ("ampPresence", "Presence"));
         amp->addItem (makeControl ("ampDepth", "Depth"));
         amp->addItem (makeControl ("ampOutput", "Output"));
         amp->addRow (makeNamBox ("AMP MODEL", false), 92);
     }
 
-    // 7. NAM pedal ----------------------------------------------------------
-    if (auto* pedal = makePanel ("NAM PEDAL", 2))
+    if (auto* pedal = makePanel (0, "PEDAL", 2))
     {
         pedal->addItem (makeControl ("pedalGain", "Gain"));
         pedal->addItem (makeControl ("pedalOutput", "Output"));
@@ -657,22 +696,11 @@ void NAMBerryEditor::buildUi()
         pedal->addRow (makeNamBox ("PEDAL MODEL", true), 92);
     }
 
-    // 8. IR cabinet ---------------------------------------------------------
-    if (auto* ir = makePanel ("IR CAB", 1, 340))
-    {
-        for (int slot = 0; slot < 4; ++slot)
-        {
-            auto row = std::make_unique<IrSlotRow> (state, slot, processor_);
-            auto* raw = row.get();
-            ownedControls_.push_back (std::move (row));
-            ir->addRow (raw, 96);
-        }
-    }
-
-    // 9. Post-amp EQ --------------------------------------------------------
-    if (auto* postEq = makePanel ("POST-EQ", 3))
+    // 4. Post amp EQ ---------------------------------------------------------
+    if (auto* postEq = makePanel (2, "POST AMP EQ", 3))
     {
         const char* bandNames[] = { "Low", "Mid", "High" };
+        postEq->addItem (makeControl ("postEqBypass", "Bypass", ParamControl::Kind::Toggle));
         for (int band = 0; band < 3; ++band)
         {
             const auto i = juce::String (band);
@@ -682,9 +710,67 @@ void NAMBerryEditor::buildUi()
         }
     }
 
-    // 10. Output ------------------------------------------------------------
-    if (auto* output = makePanel ("OUTPUT", 1))
-        output->addItem (makeControl ("masterOutput", "Master"));
+    // 5. Cabinet ------------------------------------------------------------
+    if (auto* ir = makePanel (3, "IR CAB", 1, 340))
+    {
+        ir->addItem (makeControl ("irBypass", "Bypass", ParamControl::Kind::Toggle));
+        for (int slot = 0; slot < 4; ++slot)
+        {
+            auto row = std::make_unique<IrSlotRow> (state, slot, processor_);
+            auto* raw = row.get();
+            ownedControls_.push_back (std::move (row));
+            ir->addRow (raw, 96);
+        }
+    }
+
+    // 6. Post effects --------------------------------------------------------
+    if (auto* chorus = makePanel (4, "CHORUS", 2))
+    {
+        chorus->addItem (makeControl ("chorusBypass", "Bypass", ParamControl::Kind::Toggle));
+        chorus->addItem (makeControl ("chorusMix", "Mix"));
+        chorus->addItem (makeControl ("chorusRate", "Rate"));
+        chorus->addItem (makeControl ("chorusDepth", "Depth"));
+    }
+
+    if (auto* flanger = makePanel (4, "FLANGER", 2))
+    {
+        flanger->addItem (makeControl ("flangerBypass", "Bypass", ParamControl::Kind::Toggle));
+        flanger->addItem (makeControl ("flangerMix", "Mix"));
+        flanger->addItem (makeControl ("flangerRate", "Rate"));
+        flanger->addItem (makeControl ("flangerDepth", "Depth"));
+        flanger->addItem (makeControl ("flangerFeedback", "Feedback"));
+    }
+
+    if (auto* phaser = makePanel (4, "PHASER", 2))
+    {
+        phaser->addItem (makeControl ("phaserBypass", "Bypass", ParamControl::Kind::Toggle));
+        phaser->addItem (makeControl ("phaserMix", "Mix"));
+        phaser->addItem (makeControl ("phaserRate", "Rate"));
+        phaser->addItem (makeControl ("phaserDepth", "Depth"));
+    }
+
+    if (auto* delay = makePanel (4, "DELAY", 2))
+    {
+        delay->addItem (makeControl ("delayBypass", "Bypass", ParamControl::Kind::Toggle));
+        delay->addItem (makeControl ("delayMix", "Mix"));
+        delay->addItem (makeControl ("delayTimeMs", "Time"));
+        delay->addItem (makeControl ("delayFeedback", "Feedback"));
+    }
+
+    if (auto* reverb = makePanel (4, "REVERB", 2))
+    {
+        reverb->addItem (makeControl ("reverbBypass", "Bypass", ParamControl::Kind::Toggle));
+        reverb->addItem (makeControl ("reverbMix", "Mix"));
+        reverb->addItem (makeControl ("reverbDecay", "Decay"));
+        reverb->addItem (makeControl ("reverbWidth", "Width"));
+    }
+
+    if (auto* misc = makePanel (4, "MISC", 1))
+    {
+        misc->addItem (makeControl ("reducedMotion", "Reduced Motion", ParamControl::Kind::Toggle));
+    }
+
+    layoutContent();
 }
 
 //==============================================================================
@@ -693,17 +779,21 @@ void NAMBerryEditor::layoutContent()
     constexpr int gap = 8;
     constexpr int margin = 8;
 
-    int x = margin;
+    for (auto* panel : allPanels_)
+        panel->setVisible (false);
 
+    int x = margin;
     const int contentHeight = juce::jmax (420, viewport_.getHeight() - 2 * margin);
 
-    for (auto& control : ownedControls_)
+    for (auto* panel : tabPanels_[currentTabIndex_])
     {
-        if (auto* panel = dynamic_cast<SectionPanel*> (control.get()))
-        {
-            panel->setBounds (x, margin, panel->preferredWidth(), contentHeight);
-            x += panel->preferredWidth() + gap;
-        }
+        auto* section = dynamic_cast<SectionPanel*> (panel);
+        if (section == nullptr)
+            continue;
+
+        section->setVisible (true);
+        section->setBounds (x, margin, section->preferredWidth(), contentHeight);
+        x += section->preferredWidth() + gap;
     }
 
     content_.setSize (x + margin, contentHeight + 2 * margin);
@@ -713,9 +803,11 @@ void NAMBerryEditor::resized()
 {
     auto r = getLocalBounds();
 
-    // Header controls (48 px tall target).
     auto header = r.removeFromTop (60);
     reducedMotionButton_.setBounds (header.removeFromRight (190).withSizeKeepingCentre (180, 48));
+
+    auto tabArea = r.removeFromBottom (42);
+    tabBar_.setBounds (tabArea.reduced (4, 0));
 
     viewport_.setBounds (r.reduced (4, 2));
     layoutContent();
@@ -734,7 +826,7 @@ void NAMBerryEditor::paint (juce::Graphics& g)
 
     g.setColour (juce::Colour (kAccent));
     g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-    g.drawFittedText ("TUNER  \xe2\x86\x92  GATE  \xe2\x86\x92  COMP  \xe2\x86\x92  PRE-EQ  \xe2\x86\x92  CAPO  \xe2\x86\x92  AMP  \xe2\x86\x92  PEDAL  \xe2\x86\x92  IR  \xe2\x86\x92  POST-EQ  \xe2\x86\x92  OUT",
+    g.drawFittedText ("PRE FX  \xe2\x86\x92  AMP  \xe2\x86\x92  POST EQ  \xe2\x86\x92  IR  \xe2\x86\x92  POST FX",
                       header.reduced (180, 0),
                       juce::Justification::centred, 1);
 

@@ -104,6 +104,9 @@ void NamModelLoader::prepare (const juce::dsp::ProcessSpec& spec)
 
 void NamModelLoader::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& /*midi*/)
 {
+    if (bypass_)
+        return;
+
     const int numChannels = buffer.getNumChannels();
     const int numSamples  = buffer.getNumSamples();
 

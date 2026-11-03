@@ -36,6 +36,8 @@ public:
     void setPresence(float presence);
     void setDepth(float depth);
     void setOutputLevel(float level);
+    void setBypass(bool bypassed) { bypass_ = bypassed; }
+    bool isBypassed() const { return bypass_; }
 
     float getGain() const { return gain_; }
     float getPresence() const { return presence_; }
@@ -69,6 +71,7 @@ private:
     int receptiveFieldSize_ = 0;
     size_t silentSamples_ = 0;
     bool smartBypassed_ = false;
+    bool bypass_ = false;
 
     // Mono working buffers (input and model output).
     std::vector<float> monoIn_;

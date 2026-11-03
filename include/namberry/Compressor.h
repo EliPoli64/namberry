@@ -22,6 +22,8 @@ public:
     void setRatio (float ratio);
     void setMakeupGainDb (float gainDb);
     void setTightMode (bool enabled);
+    void setBypass (bool bypassed) { bypass_ = bypassed; }
+    bool isBypassed() const { return bypass_; }
     bool isTightMode() const { return tightMode_; }
 
     struct Params
@@ -32,6 +34,7 @@ public:
         float ratio = 4.0f;
         float makeupGainDb = 0.0f;
         bool tightMode = false;
+        bool bypass = false;
     };
     Params getParams() const;
     void setParams (const Params& p);
@@ -44,6 +47,7 @@ private:
     float ratio_ = 4.0f;
     float makeupGainDb_ = 0.0f;
     bool tightMode_ = false;
+    bool bypass_ = false;
 
     float env_ = 0.0f;          // envelope detector state
     float sidechainLp_ = 0.0f;  // low-band sidechain state

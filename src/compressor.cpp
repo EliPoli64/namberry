@@ -21,7 +21,7 @@ void Compressor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffe
 {
     const int numChannels = buffer.getNumChannels();
     const int numSamples  = buffer.getNumSamples();
-    if (numChannels == 0 || numSamples == 0)
+    if (bypass_ || numChannels == 0 || numSamples == 0)
         return;
 
     const float threshLin = std::pow (10.0f, thresholdDb_ / 20.0f);
@@ -78,7 +78,7 @@ void Compressor::setTightMode (bool enabled)        { tightMode_ = enabled; }
 
 Compressor::Params Compressor::getParams() const
 {
-    return { attackMs_, releaseMs_, thresholdDb_, ratio_, makeupGainDb_, tightMode_ };
+    return { attackMs_, releaseMs_, thresholdDb_, ratio_, makeupGainDb_, tightMode_, bypass_ };
 }
 
 void Compressor::setParams (const Params& p)
@@ -89,6 +89,7 @@ void Compressor::setParams (const Params& p)
     setRatio (p.ratio);
     setMakeupGainDb (p.makeupGainDb);
     setTightMode (p.tightMode);
+    setBypass (p.bypass);
 }
 
 } // namespace namberry

@@ -38,6 +38,8 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "capoMix", "Capo Mix",
         juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        "capoBypass", "Capo Bypass", false));
 
     // ---- Compressor ----
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
@@ -57,18 +59,23 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
         juce::NormalisableRange<float>(-60.0f, 60.0f, 0.1f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         "compTight", "Comp Tight", false));
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        "compBypass", "Comp Bypass", false));
 
     // ---- NAM Pedal / Preamp (separate .nam model) ----
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "pedalGain", "Pedal Gain",
-        juce::NormalisableRange<float>(0.0f, 5.0f, 0.01f), 1.0f));
+        juce::NormalisableRange<float>(-12.0f, 12.0f, 0.1f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "pedalOutput", "Pedal Output",
-        juce::NormalisableRange<float>(0.0f, 5.0f, 0.01f), 1.0f));
+        juce::NormalisableRange<float>(-12.0f, 12.0f, 0.1f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         "pedalBypass", "Pedal Bypass", true));
 
     // ---- Pre-Amp EQ (3 bands) ----
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        "preEqBypass", "Pre EQ Bypass", false));
+
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "preEqFreq0", "Pre EQ Low Freq",
         juce::NormalisableRange<float>(20.0f, 200.0f, 1.0f), 200.0f));
@@ -100,6 +107,9 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
         juce::NormalisableRange<float>(0.1f, 10.0f, 0.01f), 1.0f));
 
     // ---- Post-Amp EQ (3 bands) ----
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        "postEqBypass", "Post EQ Bypass", false));
+
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "postEqFreq0", "Post EQ Low Freq",
         juce::NormalisableRange<float>(20.0f, 200.0f, 1.0f), 200.0f));
@@ -131,9 +141,20 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
         juce::NormalisableRange<float>(0.1f, 10.0f, 0.01f), 1.0f));
 
     // ---- NAM Amp controls ----
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        "ampBypass", "Amp Bypass", false));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "ampGain", "Amp Gain",
-        juce::NormalisableRange<float>(0.0f, 5.0f, 0.01f), 1.0f));
+        juce::NormalisableRange<float>(-12.0f, 12.0f, 0.1f), 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "ampBass", "Amp Bass",
+        juce::NormalisableRange<float>(-12.0f, 12.0f, 0.1f), 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "ampMid", "Amp Mid",
+        juce::NormalisableRange<float>(-12.0f, 12.0f, 0.1f), 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "ampTreble", "Amp Treble",
+        juce::NormalisableRange<float>(-12.0f, 12.0f, 0.1f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "ampPresence", "Amp Presence",
         juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f), 0.5f));
@@ -142,7 +163,7 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
         juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f), 0.5f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "ampOutput", "Amp Output",
-        juce::NormalisableRange<float>(0.0f, 5.0f, 0.01f), 1.0f));
+        juce::NormalisableRange<float>(-12.0f, 12.0f, 0.1f), 0.0f));
 
     // ---- Master output ----
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
@@ -150,8 +171,75 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
         juce::NormalisableRange<float>(-60.0f, 6.0f, 0.1f), 0.0f));
 
     // ---- UI preference: reduced motion ----
+    // ---- Post effects ----
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        "chorusBypass", "Chorus Bypass", true));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "chorusMix", "Chorus Mix",
+        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.2f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "chorusRate", "Chorus Rate",
+        juce::NormalisableRange<float>(0.1f, 10.0f, 0.01f), 1.5f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "chorusDepth", "Chorus Depth",
+        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.35f));
+
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        "flangerBypass", "Flanger Bypass", true));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "flangerMix", "Flanger Mix",
+        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.2f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "flangerRate", "Flanger Rate",
+        juce::NormalisableRange<float>(0.1f, 10.0f, 0.01f), 0.8f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "flangerDepth", "Flanger Depth",
+        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.5f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "flangerFeedback", "Flanger Feedback",
+        juce::NormalisableRange<float>(-1.0f, 1.0f, 0.01f), 0.35f));
+
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        "phaserBypass", "Phaser Bypass", true));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "phaserMix", "Phaser Mix",
+        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.2f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "phaserRate", "Phaser Rate",
+        juce::NormalisableRange<float>(0.1f, 10.0f, 0.01f), 0.7f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "phaserDepth", "Phaser Depth",
+        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.5f));
+
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        "delayBypass", "Delay Bypass", true));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "delayMix", "Delay Mix",
+        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.25f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "delayTimeMs", "Delay Time",
+        juce::NormalisableRange<float>(10.0f, 2000.0f, 1.0f), 200.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "delayFeedback", "Delay Feedback",
+        juce::NormalisableRange<float>(-1.0f, 1.0f, 0.01f), 0.4f));
+
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        "reverbBypass", "Reverb Bypass", true));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "reverbMix", "Reverb Mix",
+        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.2f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "reverbDecay", "Reverb Decay",
+        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.5f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "reverbWidth", "Reverb Width",
+        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.7f));
+
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         "reducedMotion", "Reduced Motion", false));
+
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        "irBypass", "IR Bypass", false));
 
     // ---- IR Loader (4 slots) ----
     for (int slot = 0; slot < 4; ++slot)
@@ -187,6 +275,7 @@ NAMBerryProcessor::NAMBerryProcessor()
     irLoader_ = std::make_unique<IrLoader>();
     preAmpEQ_ = std::make_unique<MultiBandEQ>();
     postAmpEQ_ = std::make_unique<MultiBandEQ>();
+    postEffects_ = std::make_unique<PostEffects>();
 }
 
 NAMBerryProcessor::~NAMBerryProcessor() = default;
@@ -208,6 +297,7 @@ void NAMBerryProcessor::prepareToPlay (double sampleRate, int maxSamplesPerBlock
     irLoader_->prepare(spec);
     preAmpEQ_->prepare(spec);
     postAmpEQ_->prepare(spec);
+    postEffects_->prepare (spec);
 }
 
 void NAMBerryProcessor::releaseResources()
@@ -250,6 +340,8 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
 
     // 2. Compressor
     {
+        const bool compBypassed = apvts_.getRawParameterValue("compBypass")->load() > 0.5f;
+        compressor_->setBypass(compBypassed);
         compressor_->setAttackMs(apvts_.getRawParameterValue("compAttack")->load());
         compressor_->setReleaseMs(apvts_.getRawParameterValue("compRelease")->load());
         compressor_->setThresholdDb(apvts_.getRawParameterValue("compThreshold")->load());
@@ -259,8 +351,37 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         compressor_->processBlock(buffer, midiMessages);
     }
 
-    // 3. Pre-Amp EQ
+    // 3. Digital Capo
     {
+        const bool capoBypassed = apvts_.getRawParameterValue("capoBypass")->load() > 0.5f;
+        digitalCapo_->setBypass(capoBypassed);
+        digitalCapo_->setFretPosition(static_cast<int>(apvts_.getRawParameterValue("capoFret")->load()));
+        digitalCapo_->setMix(apvts_.getRawParameterValue("capoMix")->load());
+        digitalCapo_->processBlock(buffer, midiMessages);
+    }
+
+    // 4. NAM Pedal / Preamp model (optional, bypassable) — runs before the amp section
+    {
+        const bool pedalBypassed = apvts_.getRawParameterValue("pedalBypass")->load() > 0.5f;
+        if (!pedalBypassed && namPedal_->hasModel())
+        {
+            const float pedalGainDb = apvts_.getRawParameterValue("pedalGain")->load();
+            const float pedalOutputDb = apvts_.getRawParameterValue("pedalOutput")->load();
+            namPedal_->setBypass(false);
+            namPedal_->setGain(juce::Decibels::decibelsToGain(pedalGainDb));
+            namPedal_->setOutputLevel(juce::Decibels::decibelsToGain(pedalOutputDb));
+            namPedal_->processBlock(buffer, midiMessages);
+        }
+        else
+        {
+            namPedal_->setBypass(true);
+        }
+    }
+
+    // 5. Pre-Amp EQ
+    {
+        const bool preEqBypassed = apvts_.getRawParameterValue("preEqBypass")->load() > 0.5f;
+        preAmpEQ_->setBypass(preEqBypassed);
         preAmpEQ_->setBandParameters(0,
             apvts_.getRawParameterValue("preEqFreq0")->load(),
             apvts_.getRawParameterValue("preEqGain0")->load(),
@@ -276,35 +397,23 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         preAmpEQ_->processBlock(buffer, midiMessages);
     }
 
-    // 4. Digital Capo
+    // 6. NAM Amp Model
     {
-        digitalCapo_->setFretPosition(static_cast<int>(apvts_.getRawParameterValue("capoFret")->load()));
-        digitalCapo_->setMix(apvts_.getRawParameterValue("capoMix")->load());
-        digitalCapo_->processBlock(buffer, midiMessages);
-    }
-
-    // 5. NAM Amp Model
-    {
-        namModel_->setGain(apvts_.getRawParameterValue("ampGain")->load());
+        const bool ampBypassed = apvts_.getRawParameterValue("ampBypass")->load() > 0.5f;
+        const float ampGainDb = apvts_.getRawParameterValue("ampGain")->load();
+        const float ampOutputDb = apvts_.getRawParameterValue("ampOutput")->load();
+        namModel_->setBypass(ampBypassed);
+        namModel_->setGain(juce::Decibels::decibelsToGain(ampGainDb));
         namModel_->setPresence(apvts_.getRawParameterValue("ampPresence")->load());
         namModel_->setDepth(apvts_.getRawParameterValue("ampDepth")->load());
-        namModel_->setOutputLevel(apvts_.getRawParameterValue("ampOutput")->load());
+        namModel_->setOutputLevel(juce::Decibels::decibelsToGain(ampOutputDb));
         namModel_->processBlock(buffer, midiMessages);
-    }
-
-    // 5b. NAM Pedal / Preamp model (optional, bypassable)
-    {
-        const bool pedalBypassed = apvts_.getRawParameterValue("pedalBypass")->load() > 0.5f;
-        if (!pedalBypassed && namPedal_->hasModel())
-        {
-            namPedal_->setGain(apvts_.getRawParameterValue("pedalGain")->load());
-            namPedal_->setOutputLevel(apvts_.getRawParameterValue("pedalOutput")->load());
-            namPedal_->processBlock(buffer, midiMessages);
-        }
     }
 
     // 6. IR Loader (4 slots)
     {
+        const bool irBypassed = apvts_.getRawParameterValue("irBypass")->load() > 0.5f;
+        irLoader_->setBypass(irBypassed);
         for (int slot = 0; slot < 4; ++slot)
         {
             const auto idx = juce::String(slot);
@@ -317,6 +426,8 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
 
     // 7. Post-Amp EQ
     {
+        const bool postEqBypassed = apvts_.getRawParameterValue("postEqBypass")->load() > 0.5f;
+        postAmpEQ_->setBypass(postEqBypassed);
         postAmpEQ_->setBandParameters(0,
             apvts_.getRawParameterValue("postEqFreq0")->load(),
             apvts_.getRawParameterValue("postEqGain0")->load(),
@@ -332,7 +443,44 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         postAmpEQ_->processBlock(buffer, midiMessages);
     }
 
-    // 8. Master output
+    // 8. Post effects
+    {
+        postEffects_->setBypass (apvts_.getRawParameterValue("chorusBypass")->load() > 0.5f
+            && apvts_.getRawParameterValue("flangerBypass")->load() > 0.5f
+            && apvts_.getRawParameterValue("phaserBypass")->load() > 0.5f
+            && apvts_.getRawParameterValue("delayBypass")->load() > 0.5f
+            && apvts_.getRawParameterValue("reverbBypass")->load() > 0.5f);
+
+        postEffects_->setChorusBypass (apvts_.getRawParameterValue("chorusBypass")->load() > 0.5f);
+        postEffects_->setChorusMix (apvts_.getRawParameterValue("chorusMix")->load());
+        postEffects_->setChorusRate (apvts_.getRawParameterValue("chorusRate")->load());
+        postEffects_->setChorusDepth (apvts_.getRawParameterValue("chorusDepth")->load());
+
+        postEffects_->setFlangerBypass (apvts_.getRawParameterValue("flangerBypass")->load() > 0.5f);
+        postEffects_->setFlangerMix (apvts_.getRawParameterValue("flangerMix")->load());
+        postEffects_->setFlangerRate (apvts_.getRawParameterValue("flangerRate")->load());
+        postEffects_->setFlangerDepth (apvts_.getRawParameterValue("flangerDepth")->load());
+        postEffects_->setFlangerFeedback (apvts_.getRawParameterValue("flangerFeedback")->load());
+
+        postEffects_->setPhaserBypass (apvts_.getRawParameterValue("phaserBypass")->load() > 0.5f);
+        postEffects_->setPhaserMix (apvts_.getRawParameterValue("phaserMix")->load());
+        postEffects_->setPhaserRate (apvts_.getRawParameterValue("phaserRate")->load());
+        postEffects_->setPhaserDepth (apvts_.getRawParameterValue("phaserDepth")->load());
+
+        postEffects_->setDelayBypass (apvts_.getRawParameterValue("delayBypass")->load() > 0.5f);
+        postEffects_->setDelayMix (apvts_.getRawParameterValue("delayMix")->load());
+        postEffects_->setDelayTimeMs (apvts_.getRawParameterValue("delayTimeMs")->load());
+        postEffects_->setDelayFeedback (apvts_.getRawParameterValue("delayFeedback")->load());
+
+        postEffects_->setReverbBypass (apvts_.getRawParameterValue("reverbBypass")->load() > 0.5f);
+        postEffects_->setReverbMix (apvts_.getRawParameterValue("reverbMix")->load());
+        postEffects_->setReverbDecay (apvts_.getRawParameterValue("reverbDecay")->load());
+        postEffects_->setReverbWidth (apvts_.getRawParameterValue("reverbWidth")->load());
+
+        postEffects_->processBlock(buffer, midiMessages);
+    }
+
+    // 9. Master output
     {
         const float gainDb = apvts_.getRawParameterValue("masterOutput")->load();
         const float gain = juce::Decibels::decibelsToGain(gainDb);

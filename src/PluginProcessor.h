@@ -9,6 +9,7 @@
 #include "namberry/DigitalCapo.h"
 #include "namberry/Compressor.h"
 #include "namberry/NoiseGate.h"
+#include "namberry/PostEffects.h"
 
 namespace namberry {
 
@@ -72,6 +73,7 @@ private:
     std::unique_ptr<IrLoader> irLoader_;
     std::unique_ptr<MultiBandEQ> preAmpEQ_;
     std::unique_ptr<MultiBandEQ> postAmpEQ_;
+    std::unique_ptr<PostEffects> postEffects_;
 
     //==============================================================================
     juce::AudioProcessorValueTreeState apvts_;

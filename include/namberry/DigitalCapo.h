@@ -23,14 +23,18 @@ public:
     void setMix (float mix);
     float getMix() const { return mix_; }
 
-    struct Params { int fretPosition = 0; float mix = 0.0f; };
-    Params getParams() const { return { fretPosition_, mix_ }; }
+    void setBypass (bool bypassed) { bypass_ = bypassed; }
+    bool isBypassed() const { return bypass_; }
+
+    struct Params { int fretPosition = 0; float mix = 0.0f; bool bypass = false; };
+    Params getParams() const { return { fretPosition_, mix_, bypass_ }; }
     void setParams (const Params& p);
 
 private:
     double sampleRate_ = 44100.0;
     int fretPosition_ = 0;
     float mix_ = 0.0f;
+    bool bypass_ = false;
 };
 
 } // namespace namberry

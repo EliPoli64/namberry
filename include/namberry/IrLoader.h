@@ -24,6 +24,8 @@ public:
     void setSlotMix (int slot, float mix);
     void setSlotPan (int slot, float pan);
     void setSlotPhaseInvert (int slot, bool invert);
+    void setBypass (bool bypassed) { bypass_ = bypassed; }
+    bool isBypassed() const { return bypass_; }
 
     float getSlotMix (int slot) const;
     float getSlotPan (int slot) const;
@@ -42,6 +44,7 @@ private:
     juce::AudioBuffer<float> wet_[kNumSlots];
     double sampleRate_ = 44100.0;
     int maxBlockSize_ = 512;
+    bool bypass_ = false;
 };
 
 } // namespace namberry

@@ -59,6 +59,9 @@ bool IrLoader::loadIr (int slot, const juce::File& irFile)
 
 void IrLoader::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& /*midi*/)
 {
+    if (bypass_)
+        return;
+
     const int numChannels = buffer.getNumChannels();
     const int numSamples  = buffer.getNumSamples();
     if (numChannels == 0 || numSamples == 0)
