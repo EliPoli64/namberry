@@ -1,6 +1,33 @@
-# NAMberry UI Implementation Plan: Qt 6 / QML Engine Integration
+# NAMberry UI Implementation Plan
 
-This document outlines the architectural blueprint, folder structure, binding patterns, and custom QML component design for building the **NAMberry** user interface using **Qt 6 (QML / Quick Controls)** integrated with the C++ Audio Processor.
+This document describes the visual language and interaction model for the **NAMberry** plugin editor: a grounded, playful, stompbox-inspired interface built around a clear signal flow. The editor must feel like a tiny pedalboard and amp stack, not a dense rack of controls.
+
+## Design Direction
+
+### Core visual language
+- Every effect block reads like a physical pedal.
+- Controls sit on the top half of each pedal card.
+- The bottom half is a stomp switch area with a larger bypass toggle.
+- The signal chain is obvious from left to right: Pre FX → Amp → Post EQ → IR → Post FX.
+- The amp section is a single amp-style block with a grille, control caps, and simplified knob layout.
+- The UI is intentionally simple, readable, and fun without sacrificing usability.
+- The design is inspired by classic amp front panels: dark metal chassis, centered grille, bright white labels, and a clean horizontal control row.
+
+### Pedal card pattern
+- Dark metal chassis with subtle highlight rings.
+- Top area holds the knob/slider controls.
+- Bottom area is a large bypass stomp pad.
+- Bypass state changes the pad colour and glow.
+- The card title sits in a compact lens label above the controls.
+
+### Amp pattern
+- A rectangular amp body with a perforated grille pattern.
+- The preamp tone controls are represented as top-mounted knobs.
+- Gain, Bass, Mid, Treble, Presence, Depth, and Output are laid out in a compact horizontal band.
+- The bypass switch sits as the amp’s footswitch below the control row.
+- The overall composition is intentionally similar to a hardware amp front panel: wide dark body, bright metal details, and white labeling that feels premium and tactile.
+
+This is the current target design for the JUCE editor implementation.
 
 ---
 

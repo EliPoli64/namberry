@@ -20,7 +20,7 @@
 | **NAM Inference** | **NeuralAmpModelerCore** or **NeuralAudio** | `NeuralAmpModelerCore` is the official high-performance DSP library for running `.nam` models (WaveNet, LSTM, ConvNet, Linear). `NeuralAudio` is an alternative that offers A1/A2 support with a simpler API and MIT license. |
 | **Build System** | **CMake** (v3.22+) | Enables reproducible cross-platform builds and static linking of JUCE modules and third-party dependencies. |
 | **IR Loading** | **JUCE `dsp::Convolution`** | Built-in JUCE module for zero-latency, real-time convolution with support for loading WAV/AIFF files. |
-| **Drop Tuner / Digital Capo** | **JUCE `dsp::Process`** + custom pitch detection/transposition | Drop tuner detects fundamental frequency and provides semi-tone tuning down control; Digital capo simulates a guitar capo by transposing pitch up by specified fret count. Both are placed early/mid-chain for correct signal flow. |
+| **Drop Tuner / Pitch Stage** | Custom low-latency pitch engines (DualTap + PSOLA) | The tuner detects the fundamental for display and provides the pitch period; one shared −12…+12 semitone stage handles capo and drop tuning with a mix control and engine toggle. Both engines target 5 ms latency and run at the head of the chain. |
 | **UI** | **JUCE `Component`** / **Visage** (optional) | JUCE’s native UI components are sufficient; Visage can be used for GPU-accelerated custom rendering if needed. |
 
 ---
@@ -30,14 +30,42 @@
 ### 3.1 Signal Flow (Stereo Path)
 
 ```
-Input → Input Gain → DropTuner → Noise Gate → Compressor → Overdrive →
-Pre-Amp EQ (Multi-Band) → DigitalCapo → NAM Amp Loader (with Gain/Presence/Depth) →
-NAM Pedal/Preamp Loader (Optional) →
-4-Slot IR Loader (Blend/Mix) →
-Post-Amp EQ (Multi-Band) →
-Chorus/Phaser/Flanger → Delay → Reverb →
-Output Volume → Output
+Input → Tuner (detect) → Pitch (capo/drop) → Noise Gate → Compressor → NAM Pedal/Preamp → Pre-Amp EQ →
+NAM Amp Loader (Gain, Bass, Mid, Treble, Presence, Depth, Output) →
+Post-Amp EQ (Multi-Band) → 4-Slot IR Loader (Blend/Pan/Phase) →
+Post Effects (Chorus/Flanger/Phaser/Delay/Reverb) → Output
 ```
+
+### 3.2 UI Section Order
+
+The editor should be organized into the following five sections, in this exact order:
+
+1. Pre Effects
+   - Tuner (detect) and Pitch (capo/drop)
+   - Gate
+   - Compressor
+   - Pedal
+   - Pre EQ
+2. Amp
+   - Gain
+   - Bass
+   - Mid
+   - Treble
+   - Presence
+   - Depth
+   - Output
+3. Post Amp EQ
+   - Multi-band EQ
+4. IR
+   - 4 slots with blend, pan, and phase controls
+5. Post Effects
+   - Chorus
+   - Flanger
+   - Phaser
+   - Delay
+   - Reverb
+
+This order keeps the pedal before the amp, keeps all pre-amp shaping before the core amp model, and preserves the clear signal-flow layout the plugin UI should reflect.
 
 ### 3.2 Class Structure (High-Level)
 
@@ -99,8 +127,8 @@ Output Volume → Output
 - **Goal**: Add a warm, pedal-like drive before the amp — implemented as a **NAM model**, not a generic waveshaper.
 - **Implementation**:
   - The pedal/preamp stage is a **second `NamModelLoader` instance** that loads a `.nam` pedal or preamp capture (e.g., overdrive, distortion, boost, fuzz).
-  - Exposes Gain and Output controls plus a bypass toggle, mirroring the amp loader's `NeuralAudio::NeuralModel` usage.
-  - Placed after the NAM Amp Loader per the stereo signal flow (and bypassable when no pedal model is loaded).
+  - Exposes Gain, Bass, Mid, Treble, and Output controls plus a bypass footswitch, using the same tone-stack implementation as the amp loader.
+  - Placed before the NAM Amp Loader per the signal flow (and bypassable when no pedal model is loaded).
   - A built-in `std::tanh` waveshaper is **not** used for this stage: tone and character come entirely from the loaded NAM model.
 
 ### 4.6 Modulation (Chorus/Phaser/Flanger)
@@ -120,24 +148,29 @@ Output Volume → Output
 - **Implementation**: Use JUCE's `juce::Reverb` (algorithmic) for a lightweight, real-time-safe reverb. Parameters: Room Size, Damping, Wet, Dry, Width.
 
 ### 4.9 DropTuner
-- **Goal**: Detect input pitch and provide tuning-down control for guitar drop tunings (e.g., dropped D, dropped C#).
+- **Goal**: Detect the input pitch for display and provide the period used by the pitch engine.
 - **Implementation**:
-  - Uses FFT-based fundamental frequency detection on the input signal.
-  - Displays the detected note name (e.g., "E2", "A4") and frequency in Hz.
-  - **Tuning Offset**: A control parameter (in semitones, typically 0 to -12) that transposes the output frequency down by the selected amount.
-  - **True Bypass**: A switch that bypasses the pitch detection entirely, passing the input signal through unchanged.
-  - The tuner is placed at the start of the signal chain (after Input Gain) so it receives a clean, unprocessed signal for accurate note detection.
-  - The tuning offset can be automated via the host for real-time tuning changes during performance.
-- **Controls**: Detected note name, detected frequency, tuning offset (semitones), bypass switch.
+  - Autocorrelation-based fundamental frequency detection on the input signal.
+  - Uses a long 80 ms analysis window, independent of the host block size, with decimation, first-peak selection, parabolic interpolation and median smoothing.
+  - Detects down to ~80 Hz reliably (low E and drop tunings), and feeds the measured pitch period to both pitch engines.
+  - Displays a **strobe tuning wheel**: the wheel rotates with the cents deviation, turns green when in tune, and shows the note and cents in the centre.
+  - **Reference frequency**: 400–480 Hz, default 440 Hz; note/cents calculations use this reference. The pitch stage uses the detected period and is unaffected by the reference.
+  - Detection only: the drop-tune shift is performed by the shared Pitch stage; the tuner no longer has its own audio path, offset, or bypass.
+  - Runs before the pitch stage so it analyses the clean input.
+- **Controls**: Tuning wheel (note + cents), reference frequency field (Hz).
 
-### 4.10 DigitalCapo
-- **Goal**: Simulate a guitar capo by transposing the pitch up by the selected number of frets.
+### 4.10 Pitch stage (Digital Capo + Drop Tune)
+- **Goal**: Transpose the guitar by a selected number of semitones, covering both capo (up) and drop-tuning (down) use.
 - **Implementation**:
-  - **Fret Position**: A parameter ranging from 0 (no capo) to 12 (full octave capo). Each fret increases the pitch by one semitone.
-  - **Mix/Dry-Wet**: Controls the blend between the original (dry) signal and the transposed (wet) signal, allowing users to mix the capo effect subtly or fully.
-  - The digital capo is placed after the Pre-Amp EQ but before the NAM Amp Loader, so the amp model receives the capo-transposed signal—modeling the amp at the raised pitch, which is the musically correct behavior for capo usage.
-  - The mix parameter allows users to blend the capo effect with the dry signal for creative tonal options.
-- **Controls**: Fret position (0-12), mix level (0-100%).
+  - **Semitones**: a single −12…+12 control shared by capo and drop tuning.
+  - **Mix/Dry-Wet**: blends the delayed dry signal with the transposed signal (default 100% wet).
+  - **Engine toggle**: switches between **DualTap** (time-domain, period-synchronised, accurate on upward and downward shifts) and **PSOLA** (pitch-synchronous, cleaner on single notes; downward shifts are weaker at 5 ms, especially on low notes).
+  - The engine is always selected explicitly by the user; there is no automatic engine switching or fallback. DualTap is recommended for drop tunings; PSOLA for clean upward shifts.
+  - Both engines target **5 ms latency** at 48 kHz; the latency is reported to the host via `setLatencySamples()`.
+  - The dry path is delayed by the engine latency so the blend stays time-aligned, and it is mono-summed so it is always panned dead centre.
+  - The pitch stage runs at the head of the chain (after the tuner detector, before the gate/compressor), so every downstream stage sees the transposed signal.
+  - The engines only run while the stage is active; bypassed or 0-semitone states output the delayed dry signal.
+- **Controls**: Semitones (−12…+12), mix level (0–100%), engine toggle, bypass footswitch.
 
 ---
 
@@ -199,6 +232,10 @@ Artifacts: `.vst3` (all), `.component` (AU, macOS), `.aaxplugin` (if SDK availab
 - [ ] Bind all parameters to `AudioProcessorValueTreeState`.
 - [ ] Implement preset save/load.
 - [ ] Add file drag-and-drop for `.nam` and `.wav` IR files.
+- [x] Add in-app directory browsers with separate persisted NAM and IR roots.
+- [x] Add previous/next arrows to the NAM and IR fields to step through matching files in the current directory.
+- [x] Persist the selected amp model, pedal model and all four IR slot files.
+- [x] Clear the delay feedback tail when the delay is switched off.
 
 ### Phase 6: Build, Test, & Release (Weeks 11–12)
 - [ ] Finalize CMake static linking flags for all platforms.
