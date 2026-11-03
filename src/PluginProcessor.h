@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_data_structures/juce_data_structures.h>
 #include <juce_dsp/juce_dsp.h>
 #include "namberry/NamModelLoader.h"
 #include "namberry/IrLoader.h"
@@ -53,6 +54,12 @@ public:
     bool loadNamPedalModel (const juce::File& file);
     bool loadIr (int slot, const juce::File& file);
 
+    // Last-used folders, stored separately for NAM models and IR files.
+    juce::File getNamDirectory() const;
+    void setNamDirectory (const juce::File& directory);
+    juce::File getIrDirectory() const;
+    void setIrDirectory (const juce::File& directory);
+
     // Getters for editor display
     DropTuner* getDropTuner() { return dropTuner_.get(); }
     Compressor* getCompressor() { return compressor_.get(); }
@@ -77,6 +84,7 @@ private:
 
     //==============================================================================
     juce::AudioProcessorValueTreeState apvts_;
+    std::unique_ptr<juce::PropertiesFile> settings_;
 
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NAMBerryProcessor)

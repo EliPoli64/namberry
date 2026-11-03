@@ -33,6 +33,9 @@ public:
 
     // Controls
     void setGain(float gain);
+    void setBass(float bassDb);
+    void setMid(float midDb);
+    void setTreble(float trebleDb);
     void setPresence(float presence);
     void setDepth(float depth);
     void setOutputLevel(float level);
@@ -40,6 +43,9 @@ public:
     bool isBypassed() const { return bypass_; }
 
     float getGain() const { return gain_; }
+    float getBass() const { return bass_; }
+    float getMid() const { return mid_; }
+    float getTreble() const { return treble_; }
     float getPresence() const { return presence_; }
     float getDepth() const { return depth_; }
     float getOutputLevel() const { return outputLevel_; }
@@ -49,12 +55,25 @@ public:
 
 private:
     void resetState();
+    void updateTone();
+    void processTone (float* data, int numSamples);
 
     // Parameters
     float gain_ = 1.0f;
+    float bass_ = 0.0f;
+    float mid_ = 0.0f;
+    float treble_ = 0.0f;
     float presence_ = 0.5f;
     float depth_ = 0.5f;
     float outputLevel_ = 1.0f;
+
+    // Tone stack applied after the amp model.
+    juce::dsp::IIR::Filter<float> toneDepth_;
+    juce::dsp::IIR::Filter<float> toneBass_;
+    juce::dsp::IIR::Filter<float> toneMid_;
+    juce::dsp::IIR::Filter<float> toneTreble_;
+    juce::dsp::IIR::Filter<float> tonePresence_;
+    bool toneDirty_ = true;
 
     // NeuralAudio model + loader
     NeuralAudio::NeuralModelLoader loader_;

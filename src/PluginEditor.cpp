@@ -10,7 +10,7 @@ namespace {
 
 //==============================================================================
 // Palette
-constexpr juce::uint32 kBg        = 0xff161618;
+constexpr juce::uint32 kBg        = 0xff111113;
 constexpr juce::uint32 kPanel     = 0xff202024;
 constexpr juce::uint32 kPanelLine = 0xff34343a;
 constexpr juce::uint32 kAccent    = 0xff22d3ee;
@@ -19,21 +19,296 @@ constexpr juce::uint32 kTextDim   = 0xff8b8b93;
 
 using APVTS = juce::AudioProcessorValueTreeState;
 
+enum class UnitStyle { Pedal, AmpHead, RackUnit };
+
 //==============================================================================
-/// A label plus either a rotary slider (>= 48 px hit area) or a 48x48 toggle,
-/// bound directly to an APVTS parameter.
+void drawScrew (juce::Graphics& g, float cx, float cy, float r)
+{
+    g.setColour (juce::Colours::black.withAlpha (0.55f));
+    g.fillEllipse (cx - r + 1.0f, cy - r + 1.0f, 2.0f * r, 2.0f * r);
+
+    g.setGradientFill (juce::ColourGradient (
+        juce::Colour (0xffd8d8de), cx - r, cy - r,
+        juce::Colour (0xff5a5a62), cx + r, cy + r, false));
+    g.fillEllipse (cx - r, cy - r, 2.0f * r, 2.0f * r);
+
+    g.setColour (juce::Colour (0xff1b1b1e));
+    g.drawLine (cx - r * 0.55f, cy, cx + r * 0.55f, cy, 1.0f);
+}
+
+void drawBrushedPanel (juce::Graphics& g, juce::Rectangle<float> b,
+                       juce::Colour top, juce::Colour bottom, float radius)
+{
+    g.setGradientFill (juce::ColourGradient (top, b.getX(), b.getY(),
+                                             bottom, b.getX(), b.getBottom(), false));
+    g.fillRoundedRectangle (b, radius);
+
+    g.setColour (juce::Colours::white.withAlpha (0.03f));
+    for (float y = b.getY() + 2.0f; y < b.getBottom(); y += 3.0f)
+        g.drawHorizontalLine ((int) y, b.getX() + 2.0f, b.getRight() - 2.0f);
+}
+
+//==============================================================================
+/// Metal knobs, toggle switches and brushed buttons for the whole editor.
+class HardwareLookAndFeel : public juce::LookAndFeel_V4
+{
+public:
+    HardwareLookAndFeel()
+    {
+        auto scheme = getDarkColourScheme();
+        scheme.setUIColour (ColourScheme::windowBackground, juce::Colour (kBg));
+        scheme.setUIColour (ColourScheme::widgetBackground, juce::Colour (kPanel));
+        setColourScheme (scheme);
+
+        setColour (juce::Slider::rotarySliderFillColourId, juce::Colour (kAccent));
+        setColour (juce::Slider::rotarySliderOutlineColourId, juce::Colour (kPanelLine));
+        setColour (juce::Slider::thumbColourId, juce::Colour (kAccent));
+        setColour (juce::Label::textColourId, juce::Colour (kText));
+        setColour (juce::ToggleButton::textColourId, juce::Colour (kText));
+        setColour (juce::TextButton::buttonColourId, juce::Colour (0xff35353b));
+        setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff0e7490));
+        setColour (juce::TextButton::textColourOffId, juce::Colour (0xffe4e4e7));
+        setColour (juce::TextButton::textColourOnId, juce::Colours::white);
+        setColour (juce::TabbedButtonBar::tabOutlineColourId, juce::Colour (0xff2a2a2f));
+        setColour (juce::TabbedButtonBar::frontTextColourId, juce::Colours::white);
+        setColour (juce::TabbedButtonBar::tabTextColourId, juce::Colour (kTextDim));
+    }
+
+    void drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height,
+                           float sliderPos, float rotaryStartAngle,
+                           float rotaryEndAngle, juce::Slider& slider) override
+    {
+        const auto centre = juce::Point<float> (x + width * 0.5f, y + height * 0.5f);
+        const float radius = juce::jmin (width, height) * 0.5f - 4.0f;
+        if (radius < 5.0f)
+            return;
+
+        const float angle = rotaryStartAngle
+                          + sliderPos * (rotaryEndAngle - rotaryStartAngle);
+
+        // Tick ring.
+        g.setColour (juce::Colour (0xff5a5a61));
+        for (int i = 0; i <= 10; ++i)
+        {
+            const float a = rotaryStartAngle
+                          + (rotaryEndAngle - rotaryStartAngle) * (float) i / 10.0f;
+            const auto dir = juce::Point<float> (std::sin (a), -std::cos (a));
+            g.drawLine ({ centre + dir * (radius + 1.0f),
+                          centre + dir * (radius + 4.0f) }, 1.0f);
+        }
+
+        // Outer skirt.
+        auto skirt = juce::Rectangle<float> (radius * 2.0f, radius * 2.0f)
+                         .withCentre (centre);
+        g.setColour (juce::Colours::black.withAlpha (0.45f));
+        g.fillEllipse (skirt.translated (0.0f, 2.0f));
+        g.setGradientFill (juce::ColourGradient (
+            juce::Colour (0xff4a4a52), centre.x, skirt.getY(),
+            juce::Colour (0xff18181b), centre.x, skirt.getBottom(), false));
+        g.fillEllipse (skirt);
+        g.setColour (juce::Colour (0xff0b0b0d));
+        g.drawEllipse (skirt, 1.3f);
+
+        // Cap.
+        auto cap = skirt.reduced (radius * 0.17f);
+        g.setGradientFill (juce::ColourGradient (
+            juce::Colour (0xff5f5f68), cap.getX(), cap.getY(),
+            juce::Colour (0xff242428), cap.getX(), cap.getBottom(), false));
+        g.fillEllipse (cap);
+        g.setColour (juce::Colours::white.withAlpha (0.10f));
+        g.drawEllipse (cap.reduced (1.0f), 1.0f);
+
+        // Pointer.
+        const auto dir = juce::Point<float> (std::sin (angle), -std::cos (angle));
+        const auto p1 = centre + dir * (radius * 0.20f);
+        const auto p2 = centre + dir * (radius * 0.86f);
+        g.setColour (juce::Colour (0xfff4f4f5));
+        g.drawLine ({ p1, p2 }, 2.6f);
+
+        if (slider.hasKeyboardFocus (true))
+        {
+            g.setColour (juce::Colour (kAccent).withAlpha (0.8f));
+            g.drawEllipse (skirt.expanded (2.5f), 1.5f);
+        }
+    }
+
+    void drawToggleButton (juce::Graphics& g, juce::ToggleButton& button,
+                           bool isMouseOver, bool) override
+    {
+        auto bounds = button.getLocalBounds().toFloat();
+        const auto fullBounds = bounds;
+        const auto text = button.getButtonText();
+        const bool on = button.getToggleState();
+
+        auto switchArea = text.isEmpty()
+                            ? bounds
+                            : bounds.removeFromLeft (36.0f);
+
+        auto base = juce::Rectangle<float> (32.0f, 15.0f)
+                        .withCentre (switchArea.getCentre());
+
+        g.setGradientFill (juce::ColourGradient (
+            juce::Colour (0xff26262a), base.getX(), base.getY(),
+            juce::Colour (0xff0e0e10), base.getX(), base.getBottom(), false));
+        g.fillRoundedRectangle (base, 5.0f);
+        g.setColour (isMouseOver ? juce::Colour (0xff5a5a62) : juce::Colour (0xff0b0b0d));
+        g.drawRoundedRectangle (base, 5.0f, 1.0f);
+
+        const auto leverCentre = base.getCentre()
+                               + juce::Point<float> (on ? 6.5f : -6.5f, 0.0f);
+        g.setGradientFill (juce::ColourGradient (
+            on ? juce::Colour (0xffe8e8ee) : juce::Colour (0xff9a9aa2),
+            leverCentre.x, leverCentre.y - 9.0f,
+            on ? juce::Colour (0xff7b7b84) : juce::Colour (0xff4f4f57),
+            leverCentre.x, leverCentre.y + 9.0f, false));
+        g.fillRoundedRectangle (juce::Rectangle<float> (6.0f, 19.0f)
+                                    .withCentre (leverCentre), 2.8f);
+
+        const auto led = juce::Rectangle<float> (8.0f, 8.0f)
+                             .withCentre (switchArea.getCentre()
+                                          + juce::Point<float> (-21.0f, 0.0f));
+        g.setColour (on ? juce::Colour (0xff4ade80) : juce::Colour (0xff23302a));
+        g.fillEllipse (led);
+        g.setColour (juce::Colours::black.withAlpha (0.6f));
+        g.drawEllipse (led, 1.0f);
+
+        if (text.isNotEmpty())
+        {
+            g.setColour (juce::Colour (kText));
+            g.setFont (juce::FontOptions (12.0f));
+            g.drawFittedText (text, bounds.toNearestInt(),
+                              juce::Justification::centredLeft, 1);
+        }
+
+        if (button.hasKeyboardFocus (true))
+        {
+            g.setColour (juce::Colour (kAccent).withAlpha (0.8f));
+            g.drawRoundedRectangle (fullBounds.reduced (1.0f), 5.0f, 1.5f);
+        }
+    }
+
+    void drawButtonBackground (juce::Graphics& g, juce::Button& button,
+                               const juce::Colour& backgroundColour,
+                               bool isMouseOver, bool isButtonDown) override
+    {
+        auto bounds = button.getLocalBounds().toFloat().reduced (1.0f);
+        auto base = backgroundColour;
+
+        if (isButtonDown)      base = base.darker (0.25f);
+        else if (isMouseOver)  base = base.brighter (0.10f);
+
+        g.setGradientFill (juce::ColourGradient (
+            base.brighter (0.18f), bounds.getX(), bounds.getY(),
+            base.darker (0.22f), bounds.getX(), bounds.getBottom(), false));
+        g.fillRoundedRectangle (bounds, 6.0f);
+
+        g.setColour (juce::Colour (0xff0c0c0e));
+        g.drawRoundedRectangle (bounds, 6.0f, 1.2f);
+
+        g.setColour (juce::Colours::white.withAlpha (0.10f));
+        g.drawHorizontalLine ((int) bounds.getY() + 2,
+                              bounds.getX() + 6.0f, bounds.getRight() - 6.0f);
+    }
+
+    juce::Font getLabelFont (juce::Label& label) override
+    {
+        // Bigger numeric readouts for the rack controls.
+        return juce::FontOptions (juce::jlimit (12.0f, 17.0f,
+                                                (float) label.getHeight() * 0.85f));
+    }
+
+    void drawTabButton (juce::TabBarButton& button, juce::Graphics& g,
+                        bool isMouseOver, bool isMouseDown) override
+    {
+        auto bounds = button.getLocalBounds().toFloat().reduced (2.0f);
+        const bool front = button.isFrontTab();
+
+        auto body = front ? juce::Colour (0xff3c3c43) : juce::Colour (0xff202024);
+        if (isMouseOver) body = body.brighter (0.10f);
+        if (isMouseDown) body = body.darker (0.12f);
+
+        g.setGradientFill (juce::ColourGradient (
+            body.brighter (0.12f), bounds.getX(), bounds.getY(),
+            body.darker (0.18f), bounds.getX(), bounds.getBottom(), false));
+        g.fillRoundedRectangle (bounds, 5.0f);
+
+        g.setColour (front ? juce::Colour (kAccent) : juce::Colour (0xff2a2a2f));
+        g.drawRoundedRectangle (bounds, 5.0f, front ? 1.6f : 1.0f);
+
+        g.setColour (front ? juce::Colours::white : juce::Colour (kTextDim));
+        g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
+        g.drawFittedText (button.getButtonText(), bounds.toNearestInt(),
+                          juce::Justification::centred, 1);
+    }
+};
+
+//==============================================================================
+/// Binds a button to a bool parameter with inverted logic, so the control shows
+/// "enabled" while the parameter stores "bypassed".
+class InvertedButtonAttachment : private juce::AudioProcessorValueTreeState::Listener,
+                                 private juce::AsyncUpdater
+{
+public:
+    InvertedButtonAttachment (APVTS& state, const juce::String& paramId,
+                              juce::Button& button)
+        : state_ (state), paramId_ (paramId), button_ (button)
+    {
+        button_.setClickingTogglesState (true);
+        button_.onClick = [this] { buttonClicked(); };
+        state_.addParameterListener (paramId_, this);
+        updateFromParameter();
+    }
+
+    ~InvertedButtonAttachment() override
+    {
+        state_.removeParameterListener (paramId_, this);
+        button_.onClick = nullptr;
+    }
+
+private:
+    void parameterChanged (const juce::String&, float) override
+    {
+        triggerAsyncUpdate();
+    }
+
+    void handleAsyncUpdate() override
+    {
+        updateFromParameter();
+    }
+
+    void updateFromParameter()
+    {
+        const auto* value = state_.getRawParameterValue (paramId_);
+        const bool bypassed = value != nullptr && value->load() > 0.5f;
+        button_.setToggleState (! bypassed, juce::dontSendNotification);
+    }
+
+    void buttonClicked()
+    {
+        if (auto* param = state_.getParameter (paramId_))
+            param->setValueNotifyingHost (button_.getToggleState() ? 0.0f : 1.0f);
+    }
+
+    APVTS& state_;
+    juce::String paramId_;
+    juce::Button& button_;
+};
+
+//==============================================================================
+/// A label plus either a metal rotary knob or a metal toggle switch.
 class ParamControl : public juce::Component
 {
 public:
     enum class Kind { Knob, Toggle };
 
     ParamControl (APVTS& state, const juce::String& paramId,
-                  const juce::String& text, Kind kind = Kind::Knob)
+                  const juce::String& text, Kind kind = Kind::Knob,
+                  bool invert = false)
     {
         addAndMakeVisible (label_);
         label_.setText (text, juce::dontSendNotification);
         label_.setJustificationType (juce::Justification::centred);
-        label_.setFont (juce::FontOptions (11.0f));
+        label_.setFont (juce::FontOptions (10.5f, juce::Font::bold));
         label_.setColour (juce::Label::textColourId, juce::Colour (kText));
 
         auto* param = state.getParameter (paramId);
@@ -43,13 +318,18 @@ public:
         {
             toggle_.setButtonText ({});
             addAndMakeVisible (toggle_);
-            buttonAttachment_ = std::make_unique<APVTS::ButtonAttachment> (
-                state, paramId, toggle_);
+
+            if (invert)
+                invertedAttachment_ = std::make_unique<InvertedButtonAttachment> (
+                    state, paramId, toggle_);
+            else
+                buttonAttachment_ = std::make_unique<APVTS::ButtonAttachment> (
+                    state, paramId, toggle_);
         }
         else
         {
             slider_.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-            slider_.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 66, 15);
+            slider_.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 66, 18);
             slider_.setColour (juce::Slider::textBoxTextColourId, juce::Colour (kTextDim));
             slider_.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
             slider_.setDoubleClickReturnValue (true,
@@ -60,23 +340,32 @@ public:
         }
     }
 
+    void setDarkText (bool dark)
+    {
+        label_.setColour (juce::Label::textColourId,
+                          dark ? juce::Colour (0xff2c2416) : juce::Colour (kText));
+        slider_.setColour (juce::Slider::textBoxTextColourId,
+                           dark ? juce::Colour (0xff4a3c22) : juce::Colour (kTextDim));
+    }
+
+    void setLabelFontSize (float size)
+    {
+        label_.setFont (juce::FontOptions (size, juce::Font::bold));
+    }
+
     void resized() override
     {
         auto r = getLocalBounds();
-        label_.setBounds (r.removeFromTop (14));
+        label_.setBounds (r.removeFromTop (16));
 
         if (sliderAttachment_ != nullptr)
-        {
             slider_.setBounds (r.reduced (1));
-        }
         else
-        {
             toggle_.setBounds (r.withSizeKeepingCentre (48, 48));
-        }
     }
 
     static constexpr int cellWidth  = 74;
-    static constexpr int cellHeight = 88;
+    static constexpr int cellHeight = 100;
 
 private:
     juce::Label label_;
@@ -84,22 +373,116 @@ private:
     juce::ToggleButton toggle_;
     std::unique_ptr<APVTS::SliderAttachment> sliderAttachment_;
     std::unique_ptr<APVTS::ButtonAttachment> buttonAttachment_;
+    std::unique_ptr<InvertedButtonAttachment> invertedAttachment_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ParamControl)
 };
 
 //==============================================================================
-/// A rounded section of the signal chain, titled and laid out left to right.
-/// The border glow fades in on hover; the fade is disabled when the
-/// "Reduced Motion" preference is enabled.
+/// A toggle that is clickable but paints nothing, so a Footswitch can own the
+/// visuals while still being bound to an APVTS bool parameter.
+class InvisibleToggle : public juce::ToggleButton
+{
+public:
+    void paint (juce::Graphics&) override {}
+};
+
+//==============================================================================
+/// Chrome stomp switch + status LED, bound to a unit's bypass parameter.
+class Footswitch : public juce::Component
+{
+public:
+    Footswitch (APVTS& state, const juce::String& paramId, juce::Colour ledColour,
+                bool invertState = true)
+        : ledColour_ (ledColour), invert_ (invertState)
+    {
+        addAndMakeVisible (button_);
+        button_.setButtonText ({});
+        button_.setMouseCursor (juce::MouseCursor::PointingHandCursor);
+        button_.onStateChange = [this] { repaint(); };
+
+        attachment_ = std::make_unique<APVTS::ButtonAttachment> (state, paramId, button_);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds();
+        r.removeFromTop (18);
+        button_.setBounds (r.withSizeKeepingCentre (52, 52));
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        const bool on = invert_ ? ! button_.getToggleState()
+                                : button_.getToggleState();
+
+        auto ledArea = getLocalBounds().removeFromTop (18);
+        const auto ledCentre = ledArea.getCentre().toFloat();
+
+        if (on)
+        {
+            g.setColour (ledColour_.withAlpha (0.35f));
+            g.fillEllipse (juce::Rectangle<float> (18.0f, 18.0f).withCentre (ledCentre));
+        }
+
+        g.setColour (on ? ledColour_ : juce::Colour (0xff1b1b1e));
+        g.fillEllipse (juce::Rectangle<float> (8.0f, 8.0f).withCentre (ledCentre));
+        g.setColour (juce::Colours::black.withAlpha (0.7f));
+        g.drawEllipse (juce::Rectangle<float> (8.0f, 8.0f).withCentre (ledCentre), 1.0f);
+
+        g.setColour (on ? juce::Colour (0xffe4e4e7) : juce::Colour (kTextDim));
+        g.setFont (juce::FontOptions (9.0f, juce::Font::bold));
+        g.drawText (on ? "ON" : "OFF",
+                    ledArea.withTrimmedLeft (ledArea.getCentreX() - ledArea.getX() + 8),
+                    juce::Justification::centredLeft);
+
+        auto sw = getLocalBounds().withTrimmedTop (18)
+                      .withSizeKeepingCentre (52, 52).toFloat();
+
+        g.setColour (juce::Colours::black.withAlpha (0.45f));
+        g.fillEllipse (sw.translated (0.0f, 3.0f));
+
+        g.setGradientFill (juce::ColourGradient (
+            juce::Colour (0xffe1e1e7), sw.getX(), sw.getY(),
+            juce::Colour (0xff5a5a62), sw.getX(), sw.getBottom(), false));
+        g.fillEllipse (sw);
+        g.setColour (juce::Colour (0xff141416));
+        g.drawEllipse (sw, 1.5f);
+
+        auto cap = sw.reduced (7.0f);
+        g.setGradientFill (juce::ColourGradient (
+            juce::Colour (0xff414147), cap.getCentreX(), cap.getY(),
+            juce::Colour (0xff151517), cap.getCentreX(), cap.getBottom(), false));
+        g.fillEllipse (cap);
+
+        auto inner = cap.reduced (cap.getWidth() * 0.24f);
+        g.setColour (juce::Colour (0xff232327));
+        g.fillEllipse (inner);
+        g.setColour (juce::Colour (0xff55555e));
+        g.drawEllipse (inner, 1.0f);
+    }
+
+private:
+    InvisibleToggle button_;
+    std::unique_ptr<APVTS::ButtonAttachment> attachment_;
+    juce::Colour ledColour_;
+    bool invert_ = true;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Footswitch)
+};
+
+//==============================================================================
+/// A stompbox, amp head or rack unit, with controls laid out inside it.
 class SectionPanel : public juce::Component,
                      private juce::Timer
 {
 public:
-    SectionPanel (juce::String title, int columns, int fixedWidth,
+    SectionPanel (juce::String title, UnitStyle style, int columns, int fixedWidth,
+                  juce::Colour body, juce::Colour accent,
                   std::function<bool()> reducedMotion)
-        : title_ (std::move (title)), columns_ (columns),
-          fixedWidth_ (fixedWidth), reducedMotion_ (std::move (reducedMotion))
+        : title_ (std::move (title)), style_ (style), columns_ (columns),
+          fixedWidth_ (fixedWidth), bodyColour_ (body), accentColour_ (accent),
+          reducedMotion_ (std::move (reducedMotion))
     {
         setMouseCursor (juce::MouseCursor::NormalCursor);
         startTimerHz (30);
@@ -117,29 +500,61 @@ public:
         addAndMakeVisible (row);
     }
 
+    void setFooter (juce::Component* footer, int height)
+    {
+        footer_ = footer;
+        footerHeight_ = height;
+        if (footer_ != nullptr)
+            addAndMakeVisible (footer_);
+    }
+
+    void setPreferredHeight (int height) { preferredHeight_ = height; }
+    int preferredHeight() const { return preferredHeight_; }
+
+    void setItemCellHeight (int height) { itemCellHeight_ = height; }
+
+    void setRowsFirst (bool shouldComeFirst) { rowsFirst_ = shouldComeFirst; }
+    bool isAmpHead() const { return style_ == UnitStyle::AmpHead; }
+
     int preferredWidth() const
     {
-        return fixedWidth_ > 0 ? fixedWidth_
-                               : pad_ * 2 + columns_ * ParamControl::cellWidth;
+        if (fixedWidth_ > 0)
+            return fixedWidth_;
+
+        return pad_ * 2 + columns_ * ParamControl::cellWidth + 12;
     }
 
     void paint (juce::Graphics& g) override
     {
         auto bounds = getLocalBounds().toFloat().reduced (3.0f);
 
-        g.setColour (juce::Colour (kPanel));
-        g.fillRoundedRectangle (bounds, 8.0f);
+        switch (style_)
+        {
+            case UnitStyle::Pedal:    paintPedal (g, bounds); break;
+            case UnitStyle::AmpHead:  paintAmp (g, bounds); break;
+            case UnitStyle::RackUnit: paintRack (g, bounds); break;
+        }
 
-        const auto line = juce::Colour (kPanelLine).interpolatedWith (
-            juce::Colour (kAccent), highlight_);
-        g.setColour (line);
-        g.drawRoundedRectangle (bounds, 8.0f, 1.0f + highlight_);
+        if (style_ == UnitStyle::AmpHead)
+        {
+            g.setColour (juce::Colour (0xff3a2f18));
+            g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
+            g.drawText (title_, juce::Rectangle<int> (22, 8, 160, 26),
+                        juce::Justification::centredLeft);
+        }
+        else if (style_ == UnitStyle::RackUnit)
+        {
+            g.setColour (accentColour_);
+            g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+            g.drawText (title_, getLocalBounds().withTrimmedLeft (30).removeFromTop (titleHeight()),
+                        juce::Justification::centredLeft);
+        }
 
-        g.setColour (juce::Colour (kAccent).withAlpha (0.75f + 0.25f * highlight_));
-        g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
-        g.drawText (title_,
-                    getLocalBounds().reduced (pad_).removeFromTop (titleHeight_),
-                    juce::Justification::centredLeft);
+        if (highlight_ > 0.001f)
+        {
+            g.setColour (accentColour_.withAlpha (0.18f * highlight_));
+            g.drawRoundedRectangle (bounds.reduced (1.0f), 10.0f, 2.0f);
+        }
     }
 
     void mouseEnter (const juce::MouseEvent&) override { hovered_ = true; }
@@ -148,36 +563,236 @@ public:
     void resized() override
     {
         auto r = getLocalBounds().reduced (pad_);
-        r.removeFromTop (titleHeight_);
+        r.removeFromTop (titleHeight());
 
-        const int count = static_cast<int> (items_.size());
-        const int rows = (count + columns_ - 1) / columns_;
-
-        for (int row = 0; row < rows; ++row)
+        if (style_ == UnitStyle::Pedal)
         {
-            for (int col = 0; col < columns_; ++col)
+            if (footer_ != nullptr)
             {
-                const int index = row * columns_ + col;
-                if (index >= count)
-                    break;
+                auto footerArea = r.removeFromBottom (footerHeight_);
+                footer_->setBounds (footerArea.withSizeKeepingCentre (64, footerHeight_));
+            }
 
-                items_[(size_t) index]->setBounds (
-                    r.getX() + col * ParamControl::cellWidth,
-                    r.getY() + row * ParamControl::cellHeight,
-                    ParamControl::cellWidth,
-                    ParamControl::cellHeight);
+            const int count = (int) items_.size();
+            const int gridRows = (count + columns_ - 1) / std::max (1, columns_);
+            const int gridWidth = columns_ * ParamControl::cellWidth;
+            const int gx = r.getX() + juce::jmax (0, (r.getWidth() - gridWidth) / 2);
+
+            auto layoutItems = [&] (int startY)
+            {
+                for (int row = 0; row < gridRows; ++row)
+                    for (int col = 0; col < columns_; ++col)
+                    {
+                        const int index = row * columns_ + col;
+                        if (index >= count)
+                            break;
+
+                        items_[(size_t) index]->setBounds (
+                            gx + col * ParamControl::cellWidth,
+                            startY + row * ParamControl::cellHeight,
+                            ParamControl::cellWidth,
+                            ParamControl::cellHeight);
+                    }
+
+                return startY + gridRows * ParamControl::cellHeight + 6;
+            };
+
+            auto layoutRows = [&] (int startY)
+            {
+                int y = startY;
+                for (auto& row : rows_)
+                {
+                    row.first->setBounds (r.getX(), y, r.getWidth(), row.second);
+                    y += row.second + 6;
+                }
+                return y;
+            };
+
+            if (rowsFirst_)
+            {
+                const int afterRows = layoutRows (r.getY());
+                layoutItems (afterRows);
+            }
+            else
+            {
+                const int afterItems = layoutItems (r.getY());
+                layoutRows (afterItems);
             }
         }
-
-        int y = r.getY() + rows * ParamControl::cellHeight + 4;
-        for (auto& row : rows_)
+        else
         {
-            row.first->setBounds (r.getX(), y, r.getWidth(), row.second);
-            y += row.second + 6;
+            const int count = (int) items_.size();
+            const int cols = std::max (1, columns_);
+            const int itemRows = (count + cols - 1) / cols;
+            const int cellW = r.getWidth() / cols;
+            const int cellH = itemCellHeight_ > 0
+                ? itemCellHeight_
+                : (style_ == UnitStyle::AmpHead ? 104 : (count > 0 ? 76 : 0));
+
+            for (int row = 0; row < itemRows; ++row)
+                for (int col = 0; col < cols; ++col)
+                {
+                    const int index = row * cols + col;
+                    if (index >= count)
+                        break;
+
+                    items_[(size_t) index]->setBounds (
+                        r.getX() + col * cellW,
+                        r.getY() + row * cellH,
+                        cellW,
+                        cellH);
+                }
+
+            int y = r.getY() + itemRows * cellH + 8;
+            for (auto& row : rows_)
+            {
+                int rowX = r.getX() + 22;
+                int rowW = r.getWidth() - 44;
+
+                if (style_ == UnitStyle::AmpHead)
+                {
+                    rowW = juce::jmin (rowW, 360);
+                    rowX = r.getX() + (r.getWidth() - rowW) / 2;
+                }
+
+                row.first->setBounds (rowX, y, rowW, row.second);
+                y += row.second + 6;
+            }
         }
     }
 
 private:
+    int titleHeight() const
+    {
+        switch (style_)
+        {
+            case UnitStyle::Pedal:    return 44;
+            case UnitStyle::AmpHead:  return 34;
+            default:                  return 26;
+        }
+    }
+
+    void paintPedal (juce::Graphics& g, juce::Rectangle<float> b)
+    {
+        g.setColour (juce::Colours::black.withAlpha (0.40f));
+        g.fillRoundedRectangle (b.translated (0.0f, 4.0f), 16.0f);
+
+        g.setGradientFill (juce::ColourGradient (
+            bodyColour_.brighter (0.22f), b.getCentreX(), b.getY(),
+            bodyColour_.darker (0.55f), b.getCentreX(), b.getBottom(), false));
+        g.fillRoundedRectangle (b, 16.0f);
+
+        g.setColour (juce::Colours::black.withAlpha (0.55f));
+        g.drawRoundedRectangle (b, 16.0f, 1.5f);
+        g.setColour (juce::Colours::white.withAlpha (0.13f));
+        g.drawRoundedRectangle (b.reduced (2.0f), 14.0f, 1.0f);
+
+        auto plate = b.reduced (13.0f, 0.0f).withTrimmedTop (9.0f).withHeight (30.0f);
+        g.setColour (juce::Colours::black.withAlpha (0.35f));
+        g.fillRoundedRectangle (plate, 7.0f);
+        g.setColour (accentColour_.withAlpha (0.55f));
+        g.drawRoundedRectangle (plate, 7.0f, 1.0f);
+
+        g.setColour (juce::Colour (0xfff4f4f5));
+        g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
+        g.drawFittedText (title_, plate.toNearestInt(),
+                          juce::Justification::centred, 1);
+
+        drawScrew (g, b.getX() + 11.0f, b.getY() + 11.0f, 3.5f);
+        drawScrew (g, b.getRight() - 11.0f, b.getY() + 11.0f, 3.5f);
+        drawScrew (g, b.getX() + 11.0f, b.getBottom() - 11.0f, 3.5f);
+        drawScrew (g, b.getRight() - 11.0f, b.getBottom() - 11.0f, 3.5f);
+    }
+
+    void paintAmp (juce::Graphics& g, juce::Rectangle<float> b)
+    {
+        g.setColour (juce::Colours::black.withAlpha (0.45f));
+        g.fillRoundedRectangle (b.translated (0.0f, 4.0f), 12.0f);
+
+        // Tolex cabinet.
+        g.setGradientFill (juce::ColourGradient (
+            juce::Colour (0xff202024), b.getX(), b.getY(),
+            juce::Colour (0xff0c0c0e), b.getX(), b.getBottom(), false));
+        g.fillRoundedRectangle (b, 12.0f);
+
+        // Gold faceplate behind the knobs.
+        auto face = b.reduced (10.0f).withTrimmedTop (6.0f).withHeight (145.0f);
+        g.setGradientFill (juce::ColourGradient (
+            juce::Colour (0xffe2cf9a), face.getX(), face.getY(),
+            juce::Colour (0xff9c8655), face.getX(), face.getBottom(), false));
+        g.fillRoundedRectangle (face, 6.0f);
+        g.setColour (juce::Colours::white.withAlpha (0.10f));
+        for (float y = face.getY() + 3.0f; y < face.getBottom(); y += 3.0f)
+            g.drawHorizontalLine ((int) y, face.getX() + 4.0f, face.getRight() - 4.0f);
+        g.setColour (juce::Colour (0xff5a4a28));
+        g.drawRoundedRectangle (face, 6.0f, 1.2f);
+
+        // Grille cloth.
+        auto grille = b.reduced (12.0f).withTrimmedTop (160.0f).withTrimmedBottom (14.0f);
+        g.setGradientFill (juce::ColourGradient (
+            juce::Colour (0xff151517), grille.getX(), grille.getY(),
+            juce::Colour (0xff09090b), grille.getX(), grille.getBottom(), false));
+        g.fillRoundedRectangle (grille, 7.0f);
+        g.setColour (juce::Colour (0xff1f1f23));
+        for (float x = grille.getX() + 6.0f; x < grille.getRight(); x += 9.0f)
+            g.drawLine (x, grille.getY() + 6.0f, x, grille.getBottom() - 6.0f, 0.7f);
+        for (float y = grille.getY() + 6.0f; y < grille.getBottom(); y += 9.0f)
+            g.drawLine (grille.getX() + 6.0f, y, grille.getRight() - 6.0f, y, 0.7f);
+        g.setColour (juce::Colour (0xff2a2a2f));
+        g.drawRoundedRectangle (grille, 7.0f, 1.2f);
+
+        g.setColour (juce::Colour (0xffe6dfcd));
+        g.setFont (juce::FontOptions (22.0f, juce::Font::bold));
+        g.drawFittedText ("NAMBERRY", grille.toNearestInt(),
+                          juce::Justification::centred, 1);
+
+        g.setColour (juce::Colour (0xff25e07a));
+        g.fillEllipse (b.getRight() - 34.0f, b.getY() + 18.0f, 7.0f, 7.0f);
+        g.setColour (juce::Colours::black.withAlpha (0.5f));
+        g.drawEllipse (b.getRight() - 34.0f, b.getY() + 18.0f, 7.0f, 7.0f, 1.0f);
+
+        drawScrew (g, b.getX() + 10.0f, b.getY() + 10.0f, 3.5f);
+        drawScrew (g, b.getRight() - 10.0f, b.getY() + 10.0f, 3.5f);
+        drawScrew (g, b.getX() + 10.0f, b.getBottom() - 10.0f, 3.5f);
+        drawScrew (g, b.getRight() - 10.0f, b.getBottom() - 10.0f, 3.5f);
+    }
+
+    void paintRack (juce::Graphics& g, juce::Rectangle<float> b)
+    {
+        g.setColour (juce::Colours::black.withAlpha (0.40f));
+        g.fillRoundedRectangle (b.translated (0.0f, 3.0f), 6.0f);
+
+        drawBrushedPanel (g, b, juce::Colour (0xff303036), juce::Colour (0xff151517), 6.0f);
+        g.setColour (juce::Colour (0xff0a0a0c));
+        g.drawRoundedRectangle (b, 6.0f, 1.5f);
+
+        // Rack ears.
+        auto leftEar = b.withWidth (22.0f);
+        auto rightEar = b.withTrimmedLeft (b.getWidth() - 22.0f);
+        g.setGradientFill (juce::ColourGradient (
+            juce::Colour (0xff3a3a41), leftEar.getX(), leftEar.getY(),
+            juce::Colour (0xff1a1a1d), leftEar.getX(), leftEar.getBottom(), false));
+        g.fillRect (leftEar);
+        g.fillRect (rightEar);
+        g.setColour (juce::Colour (0xff0b0b0d));
+        g.drawLine (leftEar.getRight(), leftEar.getY(), leftEar.getRight(), leftEar.getBottom());
+        g.drawLine (rightEar.getX(), rightEar.getY(), rightEar.getX(), rightEar.getBottom());
+
+        drawScrew (g, leftEar.getCentreX(), b.getY() + 18.0f, 3.4f);
+        drawScrew (g, leftEar.getCentreX(), b.getBottom() - 18.0f, 3.4f);
+        drawScrew (g, rightEar.getCentreX(), b.getY() + 18.0f, 3.4f);
+        drawScrew (g, rightEar.getCentreX(), b.getBottom() - 18.0f, 3.4f);
+
+        g.setColour (accentColour_.withAlpha (0.55f));
+        g.fillRect (b.getX() + 26.0f, b.getY() + 24.0f, b.getWidth() - 52.0f, 2.0f);
+
+        // Vent slots bottom-right.
+        g.setColour (juce::Colours::black.withAlpha (0.35f));
+        for (int i = 0; i < 6; ++i)
+            g.fillRoundedRectangle (b.getRight() - 98.0f + i * 12.0f,
+                                    b.getBottom() - 18.0f, 8.0f, 8.0f, 2.0f);
+    }
+
     void timerCallback() override
     {
         const float target = hovered_ ? 1.0f : 0.0f;
@@ -202,14 +817,21 @@ private:
     }
 
     static constexpr int pad_ = 8;
-    static constexpr int titleHeight_ = 22;
 
     juce::String title_;
+    UnitStyle style_;
     int columns_;
     int fixedWidth_;
+    juce::Colour bodyColour_;
+    juce::Colour accentColour_;
     std::function<bool()> reducedMotion_;
     std::vector<juce::Component*> items_;
     std::vector<std::pair<juce::Component*, int>> rows_;
+    juce::Component* footer_ = nullptr;
+    int footerHeight_ = 0;
+    int preferredHeight_ = 0;
+    int itemCellHeight_ = 0;
+    bool rowsFirst_ = false;
     float highlight_ = 0.0f;
     bool hovered_ = false;
 
@@ -222,13 +844,19 @@ class NamLoadBox : public juce::Component,
                    public juce::FileDragAndDropTarget
 {
 public:
-    NamLoadBox (juce::String caption, std::function<bool (const juce::File&)> loader)
-        : caption_ (std::move (caption)), loader_ (std::move (loader))
+    NamLoadBox (juce::String caption,
+                std::function<bool (const juce::File&)> loader,
+                std::function<juce::File()> getDirectory,
+                std::function<void (const juce::File&)> setDirectory)
+        : caption_ (std::move (caption)),
+          loader_ (std::move (loader)),
+          getDirectory_ (std::move (getDirectory)),
+          setDirectory_ (std::move (setDirectory))
     {
         addAndMakeVisible (name_);
         name_.setText ("No model loaded", juce::dontSendNotification);
         name_.setJustificationType (juce::Justification::centred);
-        name_.setFont (juce::FontOptions (11.0f));
+        name_.setFont (juce::FontOptions (10.5f));
         name_.setColour (juce::Label::textColourId, juce::Colour (kTextDim));
 
         addAndMakeVisible (loadButton_);
@@ -244,23 +872,13 @@ public:
         return false;
     }
 
-    void fileDragEnter (const juce::StringArray&, int, int) override
-    {
-        dragOver_ = true;
-        repaint();
-    }
-
-    void fileDragExit (const juce::StringArray&) override
-    {
-        dragOver_ = false;
-        repaint();
-    }
+    void fileDragEnter (const juce::StringArray&, int, int) override { dragOver_ = true; repaint(); }
+    void fileDragExit (const juce::StringArray&) override { dragOver_ = false; repaint(); }
 
     void filesDropped (const juce::StringArray& files, int, int) override
     {
         dragOver_ = false;
         repaint();
-
         if (! files.isEmpty())
             load (juce::File (files[0]));
     }
@@ -269,9 +887,8 @@ public:
     {
         auto bounds = getLocalBounds().toFloat().reduced (1.0f);
 
-        g.setColour (juce::Colour (dragOver_ ? 0xff27272a : 0xff1a1a1d));
+        g.setColour (juce::Colour (dragOver_ ? 0xff2a2a2f : 0xff121214));
         g.fillRoundedRectangle (bounds, 6.0f);
-
         g.setColour (juce::Colour (dragOver_ ? kAccent : kPanelLine));
         g.drawRoundedRectangle (bounds, 6.0f, dragOver_ ? 2.0f : 1.0f);
 
@@ -292,8 +909,10 @@ public:
 private:
     void chooseFile()
     {
+        const auto startDir = getDirectory_ != nullptr ? getDirectory_() : juce::File();
+
         chooser_ = std::make_unique<juce::FileChooser> (
-            "Load NAM model", juce::File(), "*.nam");
+            "Load NAM model", startDir, "*.nam");
 
         chooser_->launchAsync (juce::FileBrowserComponent::openMode
                                  | juce::FileBrowserComponent::canSelectFiles,
@@ -311,6 +930,9 @@ private:
         {
             name_.setText (file.getFileName(), juce::dontSendNotification);
             name_.setColour (juce::Label::textColourId, juce::Colour (kText));
+
+            if (setDirectory_ != nullptr)
+                setDirectory_ (file.getParentDirectory());
         }
         else
         {
@@ -323,6 +945,8 @@ private:
 
     juce::String caption_;
     std::function<bool (const juce::File&)> loader_;
+    std::function<juce::File()> getDirectory_;
+    std::function<void (const juce::File&)> setDirectory_;
     juce::Label name_;
     juce::TextButton loadButton_;
     std::unique_ptr<juce::FileChooser> chooser_;
@@ -342,7 +966,7 @@ public:
     {
         addAndMakeVisible (title_);
         title_.setText ("IR " + juce::String (slot + 1), juce::dontSendNotification);
-        title_.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        title_.setFont (juce::FontOptions (12.0f, juce::Font::bold));
         title_.setColour (juce::Label::textColourId, juce::Colour (kText));
 
         addAndMakeVisible (loadButton_);
@@ -351,18 +975,18 @@ public:
 
         addAndMakeVisible (fileName_);
         fileName_.setText ("empty", juce::dontSendNotification);
-        fileName_.setFont (juce::FontOptions (10.0f));
+        fileName_.setFont (juce::FontOptions (11.0f));
         fileName_.setColour (juce::Label::textColourId, juce::Colour (kTextDim));
 
         buildKnob (state, "irMix" + juce::String (slot), "Mix", mix_, mixLabel_);
         buildKnob (state, "irPan" + juce::String (slot), "Pan", pan_, panLabel_);
 
         addAndMakeVisible (phase_);
-        phase_.setButtonText ("\xc3\x98"); // Ø
+        phase_.setButtonText ({});
         addAndMakeVisible (phaseLabel_);
         phaseLabel_.setText ("Phase", juce::dontSendNotification);
         phaseLabel_.setJustificationType (juce::Justification::centred);
-        phaseLabel_.setFont (juce::FontOptions (10.0f));
+        phaseLabel_.setFont (juce::FontOptions (12.0f));
         phaseLabel_.setColour (juce::Label::textColourId, juce::Colour (kText));
         phaseAttachment_ = std::make_unique<APVTS::ButtonAttachment> (
             state, "irPhase" + juce::String (slot), phase_);
@@ -391,9 +1015,9 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto b = getLocalBounds().toFloat().reduced (1.0f);
-        g.setColour (juce::Colour (dragOver_ ? 0xff27272a : 0xff1a1a1d));
+        g.setColour (juce::Colour (dragOver_ ? 0xff2a2a2f : 0xff141417));
         g.fillRoundedRectangle (b, 6.0f);
-        g.setColour (juce::Colour (dragOver_ ? kAccent : kPanelLine));
+        g.setColour (juce::Colour (dragOver_ ? kAccent : 0xff2a2a2f));
         g.drawRoundedRectangle (b, 6.0f, dragOver_ ? 2.0f : 1.0f);
     }
 
@@ -402,24 +1026,25 @@ public:
         auto r = getLocalBounds().reduced (6);
 
         auto top = r.removeFromTop (18);
-        title_.setBounds (top.removeFromLeft (46));
+        title_.setBounds (top.removeFromLeft (50));
         fileName_.setBounds (top);
 
-        auto left = r.removeFromLeft (86);
-        loadButton_.setBounds (left.removeFromTop (56).reduced (0, 4));
+        auto left = r.removeFromLeft (96);
+        loadButton_.setBounds (left.withSizeKeepingCentre (88, 56));
 
-        auto phaseArea = r.removeFromRight (54);
-        phase_.setBounds (phaseArea.removeFromTop (48).withSizeKeepingCentre (48, 48));
-        phaseLabel_.setBounds (phaseArea.removeFromTop (14));
+        auto phaseCol = r.removeFromRight (60);
+        auto toggleArea = phaseCol.withTrimmedBottom (18);
+        phase_.setBounds (toggleArea.withSizeKeepingCentre (48, 48));
+        phaseLabel_.setBounds (phaseCol.removeFromBottom (16));
 
         auto knobArea = r;
         const int knobW = knobArea.getWidth() / 2;
 
         auto mixArea = knobArea.removeFromLeft (knobW);
-        mixLabel_.setBounds (mixArea.removeFromBottom (14));
+        mixLabel_.setBounds (mixArea.removeFromBottom (16));
         mix_.setBounds (mixArea);
 
-        panLabel_.setBounds (knobArea.removeFromBottom (14));
+        panLabel_.setBounds (knobArea.removeFromBottom (16));
         pan_.setBounds (knobArea);
     }
 
@@ -430,12 +1055,12 @@ private:
     {
         label.setText (text, juce::dontSendNotification);
         label.setJustificationType (juce::Justification::centred);
-        label.setFont (juce::FontOptions (10.0f));
+        label.setFont (juce::FontOptions (12.0f, juce::Font::bold));
         label.setColour (juce::Label::textColourId, juce::Colour (kText));
         addAndMakeVisible (label);
 
         slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-        slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 50, 14);
+        slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 50, 18);
         slider.setColour (juce::Slider::textBoxTextColourId, juce::Colour (kTextDim));
         slider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
         addAndMakeVisible (slider);
@@ -445,7 +1070,7 @@ private:
     void chooseFile()
     {
         chooser_ = std::make_unique<juce::FileChooser> (
-            "Load impulse response", juce::File(), "*.wav;*.aif;*.aiff");
+            "Load impulse response", processor_.getIrDirectory(), "*.wav;*.aif;*.aiff");
 
         chooser_->launchAsync (juce::FileBrowserComponent::openMode
                                  | juce::FileBrowserComponent::canSelectFiles,
@@ -463,6 +1088,7 @@ private:
         {
             fileName_.setText (file.getFileName(), juce::dontSendNotification);
             fileName_.setColour (juce::Label::textColourId, juce::Colour (kText));
+            processor_.setIrDirectory (file.getParentDirectory());
         }
         else
         {
@@ -487,6 +1113,39 @@ private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (IrSlotRow)
 };
 
+//==============================================================================
+/// 2x2 grid of IR slot cards, giving each slot much more room for its knobs.
+class IrSlotGrid : public juce::Component
+{
+public:
+    IrSlotGrid (APVTS& state, NAMBerryProcessor& processor)
+    {
+        for (int slot = 0; slot < 4; ++slot)
+        {
+            auto card = std::make_unique<IrSlotRow> (state, slot, processor);
+            addAndMakeVisible (*card);
+            cards_.push_back (std::move (card));
+        }
+    }
+
+    void resized() override
+    {
+        constexpr int gap = 8;
+        const int cardW = (getWidth() - gap) / 2;
+        const int cardH = (getHeight() - gap) / 2;
+
+        for (int i = 0; i < 4; ++i)
+            cards_[(size_t) i]->setBounds ((i % 2) * (cardW + gap),
+                                           (i / 2) * (cardH + gap),
+                                           cardW, cardH);
+    }
+
+private:
+    std::vector<std::unique_ptr<IrSlotRow>> cards_;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (IrSlotGrid)
+};
+
 } // namespace
 
 //==============================================================================
@@ -494,39 +1153,17 @@ NAMBerryEditor::NAMBerryEditor (NAMBerryProcessor& p)
     : AudioProcessorEditor (&p), processor_ (p),
       tabBar_ (juce::TabbedButtonBar::TabsAtBottom)
 {
-    // --- Theme -------------------------------------------------------------
-    auto scheme = juce::LookAndFeel_V4::getDarkColourScheme();
-    scheme.setUIColour (juce::LookAndFeel_V4::ColourScheme::windowBackground,
-                        juce::Colour (kBg));
-    scheme.setUIColour (juce::LookAndFeel_V4::ColourScheme::widgetBackground,
-                        juce::Colour (kPanel));
-    lnf_.setColourScheme (scheme);
-    lnf_.setColour (juce::Slider::rotarySliderFillColourId, juce::Colour (kAccent));
-    lnf_.setColour (juce::Slider::rotarySliderOutlineColourId, juce::Colour (kPanelLine));
-    lnf_.setColour (juce::Slider::thumbColourId, juce::Colour (kAccent));
-    lnf_.setColour (juce::Label::textColourId, juce::Colour (kText));
-    lnf_.setColour (juce::ToggleButton::textColourId, juce::Colour (kText));
-    lnf_.setColour (juce::ToggleButton::tickColourId, juce::Colour (kAccent));
-    lnf_.setColour (juce::ToggleButton::tickDisabledColourId, juce::Colour (kPanelLine));
-    lnf_.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff27272a));
-    lnf_.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff0e7490));
-    lnf_.setColour (juce::TextButton::textColourOffId, juce::Colour (0xffe4e4e7));
-    lnf_.setColour (juce::TextButton::textColourOnId, juce::Colours::white);
-    setLookAndFeel (&lnf_);
+    lnf_ = std::make_unique<HardwareLookAndFeel>();
+    setLookAndFeel (lnf_.get());
 
-    // --- Header controls ---------------------------------------------------
     addAndMakeVisible (reducedMotionButton_);
     reducedMotionButton_.setButtonText ("Reduced Motion");
     reducedMotionAttachment_ = std::make_unique<APVTS::ButtonAttachment> (
         processor_.getValueTreeState(), "reducedMotion", reducedMotionButton_);
 
-    tabBar_.setColour (juce::TabbedButtonBar::tabOutlineColourId, juce::Colour (kPanelLine));
-    tabBar_.setColour (juce::TabbedButtonBar::frontTextColourId, juce::Colour (kText));
-    tabBar_.setColour (juce::TabbedButtonBar::tabTextColourId, juce::Colour (kTextDim));
     tabBar_.addChangeListener (this);
     addAndMakeVisible (tabBar_);
 
-    // --- Signal chain ------------------------------------------------------
     viewport_.setViewedComponent (&content_, false);
     viewport_.setScrollBarsShown (false, true);
     viewport_.setColour (juce::ScrollBar::thumbColourId, juce::Colour (kAccent).withAlpha (0.6f));
@@ -536,8 +1173,8 @@ NAMBerryEditor::NAMBerryEditor (NAMBerryProcessor& p)
     buildUi();
 
     setResizable (true, true);
-    setResizeLimits (900, 560, 4000, 900);
-    setSize (1240, 640);
+    setResizeLimits (1000, 600, 4000, 1000);
+    setSize (1280, 640);
 
     startTimerHz (10);
 }
@@ -573,10 +1210,12 @@ void NAMBerryEditor::buildUi()
         return value != nullptr && value->load() > 0.5f;
     };
 
-    auto makePanel = [this, &reduced] (int tabIndex, const juce::String& title, int cols,
-                                       int width = 0) -> SectionPanel*
+    auto makePanel = [this, &reduced] (int tabIndex, const juce::String& title,
+                                       UnitStyle style, int cols, int width,
+                                       juce::Colour body, juce::Colour accent) -> SectionPanel*
     {
-        auto panel = std::make_unique<SectionPanel> (title, cols, width, reduced);
+        auto panel = std::make_unique<SectionPanel> (
+            title, style, cols, width, body, accent, reduced);
         auto* raw = panel.get();
         ownedControls_.push_back (std::move (panel));
         tabPanels_[tabIndex].push_back (raw);
@@ -587,11 +1226,20 @@ void NAMBerryEditor::buildUi()
 
     auto makeControl = [this, &state] (const juce::String& id,
                                        const juce::String& text,
-                                       ParamControl::Kind kind = ParamControl::Kind::Knob)
+                                       ParamControl::Kind kind = ParamControl::Kind::Knob,
+                                       bool invert = false)
     {
-        auto control = std::make_unique<ParamControl> (state, id, text, kind);
+        auto control = std::make_unique<ParamControl> (state, id, text, kind, invert);
         auto* raw = control.get();
         ownedControls_.push_back (std::move (control));
+        return raw;
+    };
+
+    auto makeFootswitch = [this, &state] (const juce::String& id, juce::Colour led)
+    {
+        auto fs = std::make_unique<Footswitch> (state, id, led);
+        auto* raw = fs.get();
+        ownedControls_.push_back (std::move (fs));
         return raw;
     };
 
@@ -603,7 +1251,9 @@ void NAMBerryEditor::buildUi()
             {
                 return pedal ? processor_.loadNamPedalModel (file)
                              : processor_.loadNamModel (file);
-            });
+            },
+            [this] { return processor_.getNamDirectory(); },
+            [this] (const juce::File& directory) { processor_.setNamDirectory (directory); });
         auto* raw = box.get();
         ownedControls_.push_back (std::move (box));
         return raw;
@@ -617,27 +1267,57 @@ void NAMBerryEditor::buildUi()
     tabBar_.addTab ("Post FX", juce::Colour (0xff1c1c20), -1);
     tabBar_.setCurrentTabIndex (currentTabIndex_, false);
 
-    // 1. Channel chain ------------------------------------------------------
-    if (auto* tuner = makePanel (0, "TUNER", 1))
+    // Unit colours.
+    const juce::Colour tunerBody   (0xff0d5c58), tunerAccent   (0xff5eead4);
+    const juce::Colour capoBody    (0xff7a4a10), capoAccent    (0xfffbbf24);
+    const juce::Colour gateBody    (0xff34343c), gateAccent    (0xffcbd5e1);
+    const juce::Colour compBody    (0xff82380f), compAccent    (0xfffb923c);
+    const juce::Colour pedalBody   (0xff1f5f37), pedalAccent   (0xff4ade80);
+    const juce::Colour eqBody      (0xff3f3f46), eqAccent      (0xffd4d4d8);
+    const juce::Colour ampBody     (0xff141416), ampAccent     (0xffd4af37);
+    const juce::Colour rackBody    (0xff26262b), rackAccent    (0xff9ca3af);
+    const juce::Colour chorusBody  (0xff1e3a8a), chorusAccent  (0xff60a5fa);
+    const juce::Colour flangerBody (0xff4c1d95), flangerAccent (0xffc084fc);
+    const juce::Colour phaserBody  (0xff831843), phaserAccent  (0xfff472b6);
+    const juce::Colour delayBody   (0xff713f12), delayAccent   (0xfffacc15);
+    const juce::Colour reverbBody  (0xff1e3a5f), reverbAccent  (0xff93c5fd);
+    const juce::Colour outBody     (0xff26262b), outAccent     (0xff22d3ee);
+
+    // 1. Pre FX -------------------------------------------------------------
+    if (auto* tuner = makePanel (0, "TUNER", UnitStyle::Pedal, 1, 0,
+                                 tunerBody, tunerAccent))
     {
         noteLabel_.setText ("---", juce::dontSendNotification);
         noteLabel_.setJustificationType (juce::Justification::centred);
-        noteLabel_.setFont (juce::FontOptions (22.0f, juce::Font::bold));
-        noteLabel_.setColour (juce::Label::textColourId, juce::Colour (kAccent));
-        tuner->addRow (&noteLabel_, 34);
+        noteLabel_.setFont (juce::FontOptions (24.0f, juce::Font::bold));
+        noteLabel_.setColour (juce::Label::backgroundColourId, juce::Colour (0xff07160e));
+        noteLabel_.setColour (juce::Label::textColourId, juce::Colour (0xff86efac));
+        noteLabel_.setColour (juce::Label::outlineColourId, juce::Colour (0xff2f6b4a));
+        tuner->addRow (&noteLabel_, 46);
         tuner->addItem (makeControl ("tuningOffset", "Offset"));
-        tuner->addItem (makeControl ("tuningBypass", "Bypass", ParamControl::Kind::Toggle));
+        tuner->setRowsFirst (true);
+        tuner->setFooter (makeFootswitch ("tuningBypass", tunerAccent), 82);
     }
 
-    if (auto* gate = makePanel (0, "GATE", 2))
+    if (auto* capo = makePanel (0, "CAPO", UnitStyle::Pedal, 2, 0,
+                                capoBody, capoAccent))
+    {
+        capo->addItem (makeControl ("capoFret", "Fret"));
+        capo->addItem (makeControl ("capoMix", "Mix"));
+        capo->setFooter (makeFootswitch ("capoBypass", capoAccent), 82);
+    }
+
+    if (auto* gate = makePanel (0, "GATE", UnitStyle::Pedal, 2, 0,
+                                gateBody, gateAccent))
     {
         gate->addItem (makeControl ("gateThreshold", "Threshold"));
         gate->addItem (makeControl ("gateAttack", "Attack"));
         gate->addItem (makeControl ("gateRelease", "Release"));
-        gate->addItem (makeControl ("gateBypass", "Bypass", ParamControl::Kind::Toggle));
+        gate->setFooter (makeFootswitch ("gateBypass", gateAccent), 82);
     }
 
-    if (auto* comp = makePanel (0, "COMP", 2))
+    if (auto* comp = makePanel (0, "COMP", UnitStyle::Pedal, 2, 0,
+                                compBody, compAccent))
     {
         comp->addItem (makeControl ("compThreshold", "Threshold"));
         comp->addItem (makeControl ("compRatio", "Ratio"));
@@ -645,13 +1325,25 @@ void NAMBerryEditor::buildUi()
         comp->addItem (makeControl ("compRelease", "Release"));
         comp->addItem (makeControl ("compMakeup", "Makeup"));
         comp->addItem (makeControl ("compTight", "Tight", ParamControl::Kind::Toggle));
-        comp->addItem (makeControl ("compBypass", "Off", ParamControl::Kind::Toggle));
+        comp->setFooter (makeFootswitch ("compBypass", compAccent), 82);
     }
 
-    if (auto* preEq = makePanel (0, "PRE-EQ", 3))
+    if (auto* pedal = makePanel (0, "PEDAL", UnitStyle::Pedal, 3, 0,
+                                 pedalBody, pedalAccent))
+    {
+        pedal->addItem (makeControl ("pedalGain", "Gain"));
+        pedal->addItem (makeControl ("pedalBass", "Bass"));
+        pedal->addItem (makeControl ("pedalMid", "Mid"));
+        pedal->addItem (makeControl ("pedalTreble", "Treble"));
+        pedal->addItem (makeControl ("pedalOutput", "Output"));
+        pedal->addRow (makeNamBox ("PEDAL MODEL", true), 92);
+        pedal->setFooter (makeFootswitch ("pedalBypass", pedalAccent), 82);
+    }
+
+    if (auto* preEq = makePanel (0, "PRE-EQ", UnitStyle::Pedal, 3, 0,
+                                 eqBody, eqAccent))
     {
         const char* bandNames[] = { "Low", "Mid", "High" };
-        preEq->addItem (makeControl ("preEqBypass", "Bypass", ParamControl::Kind::Toggle));
         for (int band = 0; band < 3; ++band)
         {
             const auto i = juce::String (band);
@@ -659,115 +1351,130 @@ void NAMBerryEditor::buildUi()
             preEq->addItem (makeControl ("preEqGain" + i, juce::String (bandNames[band]) + " dB"));
             preEq->addItem (makeControl ("preEqQ" + i, juce::String (bandNames[band]) + " Q"));
         }
+        preEq->setFooter (makeFootswitch ("preEqBypass", eqAccent), 82);
     }
 
-    // 2. Capo and output ----------------------------------------------------
-    if (auto* capo = makePanel (0, "CAPO", 2))
+    // 2. Amp ----------------------------------------------------------------
+    if (auto* amp = makePanel (1, "AMP", UnitStyle::AmpHead, 8, 760,
+                               ampBody, ampAccent))
     {
-        capo->addItem (makeControl ("capoFret", "Fret"));
-        capo->addItem (makeControl ("capoMix", "Mix"));
-        capo->addItem (makeControl ("capoBypass", "Bypass", ParamControl::Kind::Toggle));
-    }
+        auto addAmpControl = [&] (const juce::String& id, const juce::String& text,
+                                  ParamControl::Kind kind = ParamControl::Kind::Knob,
+                                  bool invert = false)
+        {
+            auto* control = makeControl (id, text, kind, invert);
+            control->setDarkText (true);
+            return control;
+        };
 
-    if (auto* output = makePanel (0, "OUTPUT", 1))
-    {
-        output->addItem (makeControl ("masterOutput", "Master"));
-    }
-
-    // 3. Amp and pedal ------------------------------------------------------
-    if (auto* amp = makePanel (1, "AMP", 7, 690))
-    {
-        amp->addItem (makeControl ("ampBypass", "Bypass", ParamControl::Kind::Toggle));
-        amp->addItem (makeControl ("ampGain", "Gain"));
-        amp->addItem (makeControl ("ampBass", "Bass"));
-        amp->addItem (makeControl ("ampMid", "Mid"));
-        amp->addItem (makeControl ("ampTreble", "Treble"));
-        amp->addItem (makeControl ("ampPresence", "Presence"));
-        amp->addItem (makeControl ("ampDepth", "Depth"));
-        amp->addItem (makeControl ("ampOutput", "Output"));
+        amp->addItem (addAmpControl ("ampBypass", "Power", ParamControl::Kind::Toggle, true));
+        amp->addItem (addAmpControl ("ampGain", "Gain"));
+        amp->addItem (addAmpControl ("ampBass", "Bass"));
+        amp->addItem (addAmpControl ("ampMid", "Mid"));
+        amp->addItem (addAmpControl ("ampTreble", "Treble"));
+        amp->addItem (addAmpControl ("ampPresence", "Presence"));
+        amp->addItem (addAmpControl ("ampDepth", "Depth"));
+        amp->addItem (addAmpControl ("ampOutput", "Output"));
         amp->addRow (makeNamBox ("AMP MODEL", false), 92);
     }
 
-    if (auto* pedal = makePanel (0, "PEDAL", 2))
-    {
-        pedal->addItem (makeControl ("pedalGain", "Gain"));
-        pedal->addItem (makeControl ("pedalOutput", "Output"));
-        pedal->addItem (makeControl ("pedalBypass", "Bypass", ParamControl::Kind::Toggle));
-        pedal->addRow (makeNamBox ("PEDAL MODEL", true), 92);
-    }
-
-    // 4. Post amp EQ ---------------------------------------------------------
-    if (auto* postEq = makePanel (2, "POST AMP EQ", 3))
+    // 3. Post EQ rack --------------------------------------------------------
+    if (auto* postEq = makePanel (2, "POST AMP EQ", UnitStyle::RackUnit, 3, 820,
+                                  rackBody, rackAccent))
     {
         const char* bandNames[] = { "Low", "Mid", "High" };
-        postEq->addItem (makeControl ("postEqBypass", "Bypass", ParamControl::Kind::Toggle));
         for (int band = 0; band < 3; ++band)
         {
             const auto i = juce::String (band);
-            postEq->addItem (makeControl ("postEqFreq" + i, juce::String (bandNames[band]) + " Hz"));
-            postEq->addItem (makeControl ("postEqGain" + i, juce::String (bandNames[band]) + " dB"));
-            postEq->addItem (makeControl ("postEqQ" + i, juce::String (bandNames[band]) + " Q"));
+
+            auto addBandControl = [&] (const juce::String& id, const juce::String& text)
+            {
+                auto* control = makeControl (id, text);
+                control->setLabelFontSize (12.5f);
+                postEq->addItem (control);
+            };
+
+            addBandControl ("postEqFreq" + i, juce::String (bandNames[band]) + " Hz");
+            addBandControl ("postEqGain" + i, juce::String (bandNames[band]) + " dB");
+            addBandControl ("postEqQ" + i, juce::String (bandNames[band]) + " Q");
         }
+
+        auto* bypass = makeControl ("postEqBypass", "Bypass", ParamControl::Kind::Toggle, true);
+        bypass->setLabelFontSize (13.0f);
+        postEq->addRow (bypass, 64);
+
+        postEq->setItemCellHeight (120);
+        postEq->setPreferredHeight (480);
     }
 
-    // 5. Cabinet ------------------------------------------------------------
-    if (auto* ir = makePanel (3, "IR CAB", 1, 340))
+    // 4. IR rack -------------------------------------------------------------
+    if (auto* ir = makePanel (3, "IR CAB", UnitStyle::RackUnit, 1, 820,
+                              rackBody, rackAccent))
     {
-        ir->addItem (makeControl ("irBypass", "Bypass", ParamControl::Kind::Toggle));
-        for (int slot = 0; slot < 4; ++slot)
-        {
-            auto row = std::make_unique<IrSlotRow> (state, slot, processor_);
-            auto* raw = row.get();
-            ownedControls_.push_back (std::move (row));
-            ir->addRow (raw, 96);
-        }
+        auto* bypass = makeControl ("irBypass", "Bypass", ParamControl::Kind::Toggle, true);
+        bypass->setLabelFontSize (12.5f);
+        ir->addRow (bypass, 64);
+
+        auto grid = std::make_unique<IrSlotGrid> (state, processor_);
+        auto* rawGrid = grid.get();
+        ownedControls_.push_back (std::move (grid));
+        ir->addRow (rawGrid, 350);
+
+        ir->setPreferredHeight (470);
     }
 
-    // 6. Post effects --------------------------------------------------------
-    if (auto* chorus = makePanel (4, "CHORUS", 2))
+    // 5. Post FX pedals ------------------------------------------------------
+    if (auto* chorus = makePanel (4, "CHORUS", UnitStyle::Pedal, 2, 0,
+                                  chorusBody, chorusAccent))
     {
-        chorus->addItem (makeControl ("chorusBypass", "Bypass", ParamControl::Kind::Toggle));
         chorus->addItem (makeControl ("chorusMix", "Mix"));
         chorus->addItem (makeControl ("chorusRate", "Rate"));
         chorus->addItem (makeControl ("chorusDepth", "Depth"));
+        chorus->setFooter (makeFootswitch ("chorusBypass", chorusAccent), 82);
     }
 
-    if (auto* flanger = makePanel (4, "FLANGER", 2))
+    if (auto* flanger = makePanel (4, "FLANGER", UnitStyle::Pedal, 2, 0,
+                                   flangerBody, flangerAccent))
     {
-        flanger->addItem (makeControl ("flangerBypass", "Bypass", ParamControl::Kind::Toggle));
         flanger->addItem (makeControl ("flangerMix", "Mix"));
         flanger->addItem (makeControl ("flangerRate", "Rate"));
         flanger->addItem (makeControl ("flangerDepth", "Depth"));
         flanger->addItem (makeControl ("flangerFeedback", "Feedback"));
+        flanger->setFooter (makeFootswitch ("flangerBypass", flangerAccent), 82);
     }
 
-    if (auto* phaser = makePanel (4, "PHASER", 2))
+    if (auto* phaser = makePanel (4, "PHASER", UnitStyle::Pedal, 2, 0,
+                                  phaserBody, phaserAccent))
     {
-        phaser->addItem (makeControl ("phaserBypass", "Bypass", ParamControl::Kind::Toggle));
         phaser->addItem (makeControl ("phaserMix", "Mix"));
         phaser->addItem (makeControl ("phaserRate", "Rate"));
         phaser->addItem (makeControl ("phaserDepth", "Depth"));
+        phaser->setFooter (makeFootswitch ("phaserBypass", phaserAccent), 82);
     }
 
-    if (auto* delay = makePanel (4, "DELAY", 2))
+    if (auto* delay = makePanel (4, "DELAY", UnitStyle::Pedal, 2, 0,
+                                 delayBody, delayAccent))
     {
-        delay->addItem (makeControl ("delayBypass", "Bypass", ParamControl::Kind::Toggle));
         delay->addItem (makeControl ("delayMix", "Mix"));
         delay->addItem (makeControl ("delayTimeMs", "Time"));
         delay->addItem (makeControl ("delayFeedback", "Feedback"));
+        delay->setFooter (makeFootswitch ("delayBypass", delayAccent), 82);
     }
 
-    if (auto* reverb = makePanel (4, "REVERB", 2))
+    if (auto* reverb = makePanel (4, "REVERB", UnitStyle::Pedal, 2, 0,
+                                  reverbBody, reverbAccent))
     {
-        reverb->addItem (makeControl ("reverbBypass", "Bypass", ParamControl::Kind::Toggle));
         reverb->addItem (makeControl ("reverbMix", "Mix"));
         reverb->addItem (makeControl ("reverbDecay", "Decay"));
         reverb->addItem (makeControl ("reverbWidth", "Width"));
+        reverb->setFooter (makeFootswitch ("reverbBypass", reverbAccent), 82);
     }
 
-    if (auto* misc = makePanel (4, "MISC", 1))
+    if (auto* output = makePanel (4, "OUTPUT", UnitStyle::RackUnit, 1, 160,
+                                  outBody, outAccent))
     {
-        misc->addItem (makeControl ("reducedMotion", "Reduced Motion", ParamControl::Kind::Toggle));
+        output->addItem (makeControl ("masterOutput", "Master"));
+        output->setPreferredHeight (230);
     }
 
     layoutContent();
@@ -779,24 +1486,70 @@ void NAMBerryEditor::layoutContent()
     constexpr int gap = 8;
     constexpr int margin = 8;
 
+    if (tabPanels_.empty())
+        return;
+
     for (auto* panel : allPanels_)
         panel->setVisible (false);
 
-    int x = margin;
-    const int contentHeight = juce::jmax (420, viewport_.getHeight() - 2 * margin);
+    const int viewportWidth = juce::jmax (1, viewport_.getWidth());
+    const int contentHeight = juce::jmax (440, viewport_.getHeight() - 2 * margin);
 
-    for (auto* panel : tabPanels_[currentTabIndex_])
+    const int tabIndex = juce::jlimit (0, (int) tabPanels_.size() - 1,
+                                       tabBar_.getCurrentTabIndex());
+
+    struct Entry
+    {
+        SectionPanel* panel;
+        int width;
+        int height;
+    };
+
+    std::vector<Entry> entries;
+    int totalWidth = 0;
+
+    for (auto* panel : tabPanels_[(size_t) tabIndex])
     {
         auto* section = dynamic_cast<SectionPanel*> (panel);
         if (section == nullptr)
             continue;
 
-        section->setVisible (true);
-        section->setBounds (x, margin, section->preferredWidth(), contentHeight);
-        x += section->preferredWidth() + gap;
+        int width = section->preferredWidth();
+
+        // The amp head stretches to the full window width.
+        if (section->isAmpHead())
+            width = juce::jmax (width, viewportWidth - 2 * margin);
+
+        const int wantedHeight = section->preferredHeight();
+        const int height = wantedHeight > 0
+            ? juce::jmin (wantedHeight, contentHeight)
+            : contentHeight;
+
+        entries.push_back ({ section, width, height });
+        totalWidth += width;
     }
 
-    content_.setSize (x + margin, contentHeight + 2 * margin);
+    if (entries.empty())
+        return;
+
+    totalWidth += gap * ((int) entries.size() - 1);
+
+    const int startX = totalWidth < viewportWidth
+        ? (viewportWidth - totalWidth) / 2
+        : margin;
+
+    int x = startX;
+
+    for (auto& entry : entries)
+    {
+        entry.panel->setVisible (true);
+        entry.panel->setBounds (x, margin + (contentHeight - entry.height) / 2,
+                                entry.width, entry.height);
+        x += entry.width + gap;
+    }
+
+    content_.setSize (juce::jmax (viewportWidth, totalWidth + 2 * margin),
+                      contentHeight + 2 * margin);
 }
 
 void NAMBerryEditor::resized()
@@ -806,8 +1559,31 @@ void NAMBerryEditor::resized()
     auto header = r.removeFromTop (60);
     reducedMotionButton_.setBounds (header.removeFromRight (190).withSizeKeepingCentre (180, 48));
 
-    auto tabArea = r.removeFromBottom (42);
-    tabBar_.setBounds (tabArea.reduced (4, 0));
+    auto tabArea = r.removeFromBottom (56);
+    const int maxTabWidth = juce::jmax (240, tabArea.getWidth() - 12);
+
+    // Lay the bar out at a generous width once, measure the natural button
+    // group, then shrink the bar to that width and centre it. The bar's own
+    // background rail then matches the buttons exactly.
+    tabBar_.setBounds (tabArea.withSizeKeepingCentre (juce::jmin (maxTabWidth, 760), 48));
+
+    int minX = tabBar_.getWidth();
+    int maxRight = 0;
+
+    for (int i = 0; i < tabBar_.getNumTabs(); ++i)
+        if (auto* button = tabBar_.getTabButton (i))
+            if (button->isVisible())
+            {
+                minX = juce::jmin (minX, button->getX());
+                maxRight = juce::jmax (maxRight, button->getRight());
+            }
+
+    const int naturalWidth = juce::jmax (0, maxRight - minX);
+    const int barWidth = naturalWidth > 0
+        ? juce::jmax (240, juce::jmin (maxTabWidth, naturalWidth))
+        : juce::jmin (maxTabWidth, 760);
+
+    tabBar_.setBounds (tabArea.withSizeKeepingCentre (barWidth, 48));
 
     viewport_.setBounds (r.reduced (4, 2));
     layoutContent();
@@ -819,19 +1595,33 @@ void NAMBerryEditor::paint (juce::Graphics& g)
 
     auto header = getLocalBounds().removeFromTop (60);
 
-    g.setColour (juce::Colours::white);
-    g.setFont (juce::FontOptions (22.0f, juce::Font::bold));
-    g.drawText ("NAMBERRY", header.reduced (16, 0),
-                juce::Justification::centredLeft);
+    g.setGradientFill (juce::ColourGradient (
+        juce::Colour (0xff26262b), 0.0f, 0.0f,
+        juce::Colour (0xff121214), 0.0f, (float) header.getBottom(), false));
+    g.fillRect (header);
+
+    g.setColour (juce::Colours::white.withAlpha (0.025f));
+    for (int y = header.getY() + 3; y < header.getBottom(); y += 3)
+        g.drawHorizontalLine (y, (float) header.getX(), (float) header.getRight());
 
     g.setColour (juce::Colour (kAccent));
+    g.fillEllipse (17.0f, 24.0f, 8.0f, 8.0f);
+    g.setColour (juce::Colour (kAccent).withAlpha (0.25f));
+    g.fillEllipse (13.0f, 20.0f, 16.0f, 16.0f);
+
+    g.setColour (juce::Colours::white);
+    g.setFont (juce::FontOptions (22.0f, juce::Font::bold));
+    g.drawText ("NAMBERRY", header.reduced (34, 0),
+                juce::Justification::centredLeft);
+
+    g.setColour (juce::Colour (kTextDim));
     g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-    g.drawFittedText ("PRE FX  \xe2\x86\x92  AMP  \xe2\x86\x92  POST EQ  \xe2\x86\x92  IR  \xe2\x86\x92  POST FX",
-                      header.reduced (180, 0),
+    g.drawFittedText ("PRE FX   >   AMP   >   POST EQ   >   IR   >   POST FX",
+                      header.reduced (200, 0),
                       juce::Justification::centred, 1);
 
-    g.setColour (juce::Colour (kPanelLine));
-    g.fillRect (getLocalBounds().removeFromTop (60).removeFromBottom (1));
+    g.setColour (juce::Colour (kAccent).withAlpha (0.5f));
+    g.fillRect (getLocalBounds().removeFromTop (60).removeFromBottom (2));
 }
 
 void NAMBerryEditor::timerCallback()

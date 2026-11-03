@@ -3,10 +3,13 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_dsp/juce_dsp.h>
 
-#include <vector>
-
 namespace namberry {
 
+/// Post-amp effects: Chorus, Flanger, Phaser, Delay and Reverb.
+///
+/// Each effect owns its own state and is built on JUCE's DSP classes
+/// (dsp::Chorus, dsp::Phaser, dsp::DelayLine, dsp::Reverb), so enabling one
+/// effect never corrupts another.
 class PostEffects
 {
 public:
@@ -47,6 +50,11 @@ public:
     void setReverbBypass (bool value) { reverbBypass_ = value; }
 
 private:
+    void updateChorus();
+    void updateFlanger();
+    void updatePhaser();
+    void updateReverb();
+
     double sampleRate_ = 44100.0;
     bool bypass_ = false;
 
@@ -76,17 +84,13 @@ private:
     float reverbDecay_ = 0.5f;
     float reverbWidth_ = 0.7f;
 
-    std::vector<float> delayBufferL_;
-    std::vector<float> delayBufferR_;
-    size_t delayWriteIndex_ = 0;
-    size_t maxDelaySamples_ = 0;
-    float lfoPhase_ = 0.0f;
+    juce::dsp::Chorus<float> chorus_;
+    juce::dsp::Chorus<float> flanger_;
+    juce::dsp::Phaser<float> phaser_;
+    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> delayLine_;
+    juce::dsp::Reverb reverb_;
 
-    static float applyFeedbackDelay (float input, float& delayedSample, size_t readIndex,
-                                    size_t writeIndex, std::vector<float>& buffer,
-                                    float mix, float feedback, float maxDelaySamples,
-                                    float timeMs, float sampleRate);
-    static float softClip (float x);
+    float maxDelaySamples_ = 1.0f;
 };
 
 } // namespace namberry

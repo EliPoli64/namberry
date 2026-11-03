@@ -26,7 +26,7 @@ private:
     void layoutContent();
 
     NAMBerryProcessor& processor_;
-    juce::LookAndFeel_V4 lnf_;
+    std::unique_ptr<juce::LookAndFeel_V4> lnf_;
 
     juce::Viewport viewport_;
     juce::Component content_;

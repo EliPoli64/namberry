@@ -34,10 +34,10 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
 
     // ---- Digital Capo ----
     params.push_back(std::make_unique<juce::AudioParameterInt>(
-        "capoFret", "Capo Fret", 0, 12, 0));
+        "capoFret", "Capo Fret", -12, 12, 0));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "capoMix", "Capo Mix",
-        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.0f));
+        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 1.0f));
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         "capoBypass", "Capo Bypass", false));
 
@@ -68,6 +68,15 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
         juce::NormalisableRange<float>(-12.0f, 12.0f, 0.1f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "pedalOutput", "Pedal Output",
+        juce::NormalisableRange<float>(-12.0f, 12.0f, 0.1f), 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "pedalBass", "Pedal Bass",
+        juce::NormalisableRange<float>(-12.0f, 12.0f, 0.1f), 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "pedalMid", "Pedal Mid",
+        juce::NormalisableRange<float>(-12.0f, 12.0f, 0.1f), 0.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "pedalTreble", "Pedal Treble",
         juce::NormalisableRange<float>(-12.0f, 12.0f, 0.1f), 0.0f));
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         "pedalBypass", "Pedal Bypass", true));
@@ -265,6 +274,21 @@ NAMBerryProcessor::NAMBerryProcessor()
                         .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts_ (*this, nullptr, "PARAMETERS", createParameterLayout())
 {
+    // Persistent, per-user settings (last-used NAM/IR folders).
+    juce::PropertiesFile::Options options;
+    options.applicationName = "NAMBerry";
+    options.filenameSuffix = "settings";
+    options.folderName = "NAMBerry";
+    options.osxLibrarySubFolder = "Application Support";
+
+    const auto settingsFile =
+        juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+            .getChildFile ("NAMBerry")
+            .getChildFile ("NAMBerry.settings");
+
+    settingsFile.getParentDirectory().createDirectory();
+    settings_ = std::make_unique<juce::PropertiesFile> (settingsFile, options);
+
     // Instantiate all DSP modules
     dropTuner_ = std::make_unique<DropTuner>();
     noiseGate_ = std::make_unique<NoiseGate>();
@@ -292,6 +316,7 @@ void NAMBerryProcessor::prepareToPlay (double sampleRate, int maxSamplesPerBlock
     noiseGate_->prepare(spec);
     compressor_->prepare(spec);
     digitalCapo_->prepare(spec);
+    setLatencySamples(digitalCapo_->getLatencySamples());
     namModel_->prepare(spec);
     namPedal_->prepare(spec);
     irLoader_->prepare(spec);
@@ -314,9 +339,9 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         buffer.clear (i, 0, buffer.getNumSamples());
 
     //==============================================================================
-    // Signal chain order:
-    // Input → DropTuner → NoiseGate → Compressor → Pre-Amp EQ → DigitalCapo →
-    // NAM Amp → NAM Pedal → IR Loader → Post-Amp EQ → Master Output
+    // Signal chain order (see spec.md §3.1):
+    // Input → DropTuner → DigitalCapo → NoiseGate → Compressor → NAM Pedal →
+    // Pre-Amp EQ → NAM Amp → Post-Amp EQ → IR Loader → Post Effects → Master
     //==============================================================================
 
     // 1. Drop Tuner
@@ -329,7 +354,16 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         dropTuner_->processBlock(buffer, midiMessages);
     }
 
-    // 1b. Noise Gate
+    // 2. Digital Capo (placed with the tuner at the head of the chain)
+    {
+        const bool capoBypassed = apvts_.getRawParameterValue("capoBypass")->load() > 0.5f;
+        digitalCapo_->setBypass(capoBypassed);
+        digitalCapo_->setFretPosition(static_cast<int>(apvts_.getRawParameterValue("capoFret")->load()));
+        digitalCapo_->setMix(apvts_.getRawParameterValue("capoMix")->load());
+        digitalCapo_->processBlock(buffer, midiMessages);
+    }
+
+    // 3. Noise Gate
     {
         noiseGate_->setThresholdDb(apvts_.getRawParameterValue("gateThreshold")->load());
         noiseGate_->setAttackMs(apvts_.getRawParameterValue("gateAttack")->load());
@@ -338,7 +372,7 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         noiseGate_->processBlock(buffer, midiMessages);
     }
 
-    // 2. Compressor
+    // 4. Compressor
     {
         const bool compBypassed = apvts_.getRawParameterValue("compBypass")->load() > 0.5f;
         compressor_->setBypass(compBypassed);
@@ -351,16 +385,7 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         compressor_->processBlock(buffer, midiMessages);
     }
 
-    // 3. Digital Capo
-    {
-        const bool capoBypassed = apvts_.getRawParameterValue("capoBypass")->load() > 0.5f;
-        digitalCapo_->setBypass(capoBypassed);
-        digitalCapo_->setFretPosition(static_cast<int>(apvts_.getRawParameterValue("capoFret")->load()));
-        digitalCapo_->setMix(apvts_.getRawParameterValue("capoMix")->load());
-        digitalCapo_->processBlock(buffer, midiMessages);
-    }
-
-    // 4. NAM Pedal / Preamp model (optional, bypassable) — runs before the amp section
+    // 5. NAM Pedal / Preamp model (optional, bypassable) — runs before the amp section
     {
         const bool pedalBypassed = apvts_.getRawParameterValue("pedalBypass")->load() > 0.5f;
         if (!pedalBypassed && namPedal_->hasModel())
@@ -369,6 +394,9 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
             const float pedalOutputDb = apvts_.getRawParameterValue("pedalOutput")->load();
             namPedal_->setBypass(false);
             namPedal_->setGain(juce::Decibels::decibelsToGain(pedalGainDb));
+            namPedal_->setBass(apvts_.getRawParameterValue("pedalBass")->load());
+            namPedal_->setMid(apvts_.getRawParameterValue("pedalMid")->load());
+            namPedal_->setTreble(apvts_.getRawParameterValue("pedalTreble")->load());
             namPedal_->setOutputLevel(juce::Decibels::decibelsToGain(pedalOutputDb));
             namPedal_->processBlock(buffer, midiMessages);
         }
@@ -378,7 +406,7 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         }
     }
 
-    // 5. Pre-Amp EQ
+    // 6. Pre-Amp EQ
     {
         const bool preEqBypassed = apvts_.getRawParameterValue("preEqBypass")->load() > 0.5f;
         preAmpEQ_->setBypass(preEqBypassed);
@@ -397,34 +425,23 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         preAmpEQ_->processBlock(buffer, midiMessages);
     }
 
-    // 6. NAM Amp Model
+    // 7. NAM Amp Model
     {
         const bool ampBypassed = apvts_.getRawParameterValue("ampBypass")->load() > 0.5f;
         const float ampGainDb = apvts_.getRawParameterValue("ampGain")->load();
         const float ampOutputDb = apvts_.getRawParameterValue("ampOutput")->load();
         namModel_->setBypass(ampBypassed);
         namModel_->setGain(juce::Decibels::decibelsToGain(ampGainDb));
+        namModel_->setBass(apvts_.getRawParameterValue("ampBass")->load());
+        namModel_->setMid(apvts_.getRawParameterValue("ampMid")->load());
+        namModel_->setTreble(apvts_.getRawParameterValue("ampTreble")->load());
         namModel_->setPresence(apvts_.getRawParameterValue("ampPresence")->load());
         namModel_->setDepth(apvts_.getRawParameterValue("ampDepth")->load());
         namModel_->setOutputLevel(juce::Decibels::decibelsToGain(ampOutputDb));
         namModel_->processBlock(buffer, midiMessages);
     }
 
-    // 6. IR Loader (4 slots)
-    {
-        const bool irBypassed = apvts_.getRawParameterValue("irBypass")->load() > 0.5f;
-        irLoader_->setBypass(irBypassed);
-        for (int slot = 0; slot < 4; ++slot)
-        {
-            const auto idx = juce::String(slot);
-            irLoader_->setSlotMix(slot, apvts_.getRawParameterValue("irMix" + idx)->load());
-            irLoader_->setSlotPan(slot, apvts_.getRawParameterValue("irPan" + idx)->load());
-            irLoader_->setSlotPhaseInvert(slot, apvts_.getRawParameterValue("irPhase" + idx)->load() > 0.5f);
-        }
-        irLoader_->processBlock(buffer, midiMessages);
-    }
-
-    // 7. Post-Amp EQ
+    // 8. Post-Amp EQ
     {
         const bool postEqBypassed = apvts_.getRawParameterValue("postEqBypass")->load() > 0.5f;
         postAmpEQ_->setBypass(postEqBypassed);
@@ -443,7 +460,21 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         postAmpEQ_->processBlock(buffer, midiMessages);
     }
 
-    // 8. Post effects
+    // 9. IR Loader (4 slots)
+    {
+        const bool irBypassed = apvts_.getRawParameterValue("irBypass")->load() > 0.5f;
+        irLoader_->setBypass(irBypassed);
+        for (int slot = 0; slot < 4; ++slot)
+        {
+            const auto idx = juce::String(slot);
+            irLoader_->setSlotMix(slot, apvts_.getRawParameterValue("irMix" + idx)->load());
+            irLoader_->setSlotPan(slot, apvts_.getRawParameterValue("irPan" + idx)->load());
+            irLoader_->setSlotPhaseInvert(slot, apvts_.getRawParameterValue("irPhase" + idx)->load() > 0.5f);
+        }
+        irLoader_->processBlock(buffer, midiMessages);
+    }
+
+    // 10. Post effects
     {
         postEffects_->setBypass (apvts_.getRawParameterValue("chorusBypass")->load() > 0.5f
             && apvts_.getRawParameterValue("flangerBypass")->load() > 0.5f
@@ -480,7 +511,7 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         postEffects_->processBlock(buffer, midiMessages);
     }
 
-    // 9. Master output
+    // 11. Master output
     {
         const float gainDb = apvts_.getRawParameterValue("masterOutput")->load();
         const float gain = juce::Decibels::decibelsToGain(gainDb);
@@ -536,6 +567,51 @@ bool NAMBerryProcessor::loadNamPedalModel (const juce::File& file)
 bool NAMBerryProcessor::loadIr (int slot, const juce::File& file)
 {
     return irLoader_->loadIr(slot, file);
+}
+
+//==============================================================================
+juce::File NAMBerryProcessor::getNamDirectory() const
+{
+    if (settings_ != nullptr)
+    {
+        const auto path = settings_->getValue ("lastNamDirectory");
+
+        if (path.isNotEmpty())
+            return juce::File (path);
+    }
+
+    return juce::File::getSpecialLocation (juce::File::userHomeDirectory);
+}
+
+void NAMBerryProcessor::setNamDirectory (const juce::File& directory)
+{
+    if (settings_ != nullptr && directory.isDirectory())
+    {
+        settings_->setValue ("lastNamDirectory", directory.getFullPathName());
+        settings_->saveIfNeeded();
+    }
+}
+
+juce::File NAMBerryProcessor::getIrDirectory() const
+{
+    if (settings_ != nullptr)
+    {
+        const auto path = settings_->getValue ("lastIrDirectory");
+
+        if (path.isNotEmpty())
+            return juce::File (path);
+    }
+
+    return juce::File::getSpecialLocation (juce::File::userHomeDirectory);
+}
+
+void NAMBerryProcessor::setIrDirectory (const juce::File& directory)
+{
+    if (settings_ != nullptr && directory.isDirectory())
+    {
+        settings_->setValue ("lastIrDirectory", directory.getFullPathName());
+        settings_->saveIfNeeded();
+    }
 }
 
 } // namespace namberry
