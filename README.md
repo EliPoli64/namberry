@@ -25,7 +25,7 @@ NAMberry packages all of that into one plugin:
 - **Two NAM captures** — one amp, one pedal/preamp.
 - **Four IR slots** with per-slot mix, pan and phase.
 - **A complete chain** — tuner, pitch stage, gate, compressor, pedal, pre-amp EQ, amp, post-amp EQ, IR, post effects, master.
-- **Room ambience** — a short delay-network blend for a noticeable sense of physical space, separate from the reverb.
+- **Room ambience** — a convolution room blend for a realistic sense of physical space, separate from the reverb.
 - **Fast model management** — in-app NAM/IR browsers, two separate persisted roots, previous/next arrows, and drag-and-drop.
 - **Persistent choices** — the selected amp, pedal and all four IR files are restored on the next session.
 - **Preset save/load** — store the complete parameter state together with the current amp, pedal and IR file paths.
@@ -62,9 +62,9 @@ Input
 | **Amp** | NAM amp model, Power, Gain, Bass, Mid, Treble, Presence, Depth, Output |
 | **Post EQ** | 3-band post-amp EQ |
 | **IR** | Four IR slots with mix, pan, phase, browse and arrows |
-| **Post FX** | Chorus, Flanger, Phaser, Room, Delay, Reverb, Master output |
+| **Post FX** | Chorus, Flanger, Phaser, Room (Size), Delay, Reverb |
 
-The header contains the **Reduced Motion** preference. The engine is user-selected; there is no automatic engine switching.
+The bottom strip beside the tabs always exposes **Room Mix** and **Output** (master volume). The header contains the **Reduced Motion** preference and the **PRESET** menu. The engine is user-selected; there is no automatic engine switching.
 
 ---
 
@@ -134,7 +134,7 @@ The reference affects the note/cents display only; the pitch engines use the mea
 ### Dynamics and EQ
 
 - `NoiseGate` — linked peak detector, attack/release, bypass.
-- `Compressor` — attack, release, threshold, ratio, makeup, optional Tight low-band sidechain.
+- `Compressor` — attack, release, threshold, ratio, makeup, optional Tight low-band sidechain, and automatic makeup gain so compression remains audible without a level drop.
 - `MultiBandEQ` — low shelf, mid peak, high shelf; used for Pre-EQ and Post-EQ.
 
 ### Post effects
@@ -144,11 +144,11 @@ The reference affects the note/cents display only; the pitch engines use the mea
 - a custom `ModulatedDelay` for chorus: sine LFO, right-channel 180° phase, 5–30 ms delay, feedback and mix,
 - a custom `ModulatedDelay` for flanger: triangle LFO, 0.5–10 ms manual delay, signed feedback and mix,
 - a custom `Phaser` with 4/8/12 first-order all-pass stages, sine LFO and feedback,
-- a custom `Room` stage built from eight short delay taps with a low fixed feedback, fixed damping and a dry/wet blend,
+- a convolution `Room` stage using generated short stereo room impulse responses,
 - `juce::dsp::DelayLine` with feedback and mix,
 - `juce::dsp::Reverb`.
 
-The chorus and flanger share the modulated-delay core; all three share the LFO and parameter-smoothing framework, but use different delay ranges, waveforms and filter topologies. The Room is a short delay network, not a long reverb; the separate Reverb provides the long tail.
+The chorus and flanger share the modulated-delay core; all three share the LFO and parameter-smoothing framework, but use different delay ranges, waveforms and filter topologies. The Room is a built-in convolution room, not a long reverb; its **Size** control crossfades between generated small and large room impulse responses, and its **Room Mix** control crossfades dry with room. The separate Reverb provides the long tail.
 
 Switching the delay off clears its delay line, so old feedback cannot reappear when it is switched back on. Bypassing the whole post-FX block also clears the delay and room buffers.
 
@@ -170,6 +170,7 @@ DAW project state stores all parameter values through `AudioProcessorValueTreeSt
 The editor is JUCE-native and hardware-inspired:
 
 - left-to-right signal chain in a horizontally scrollable viewport,
+- a persistent bottom strip with **Room Mix** and **Output** beside the tabs,
 - pedal enclosures, an amp head and rack units,
 - large 48 px hardware controls (the browser list is desktop-sized),
 - footswitch LEDs show **active** (not bypassed) state,
@@ -190,7 +191,7 @@ The editor is JUCE-native and hardware-inspired:
 | NAM inference | **NeuralAudio** (with NeuralAmpModelerCore, RTNeural and its submodules) |
 | IR convolution | `juce::dsp::Convolution` |
 | EQ / dynamics | JUCE `dsp::IIR`, custom compressor/gate |
-| Post FX | Custom LFO/modulated-delay chorus and flanger; custom 4/8/12-stage phaser; custom short-delay `Room`; JUCE `dsp::DelayLine` and `dsp::Reverb` |
+| Post FX | Custom LFO/modulated-delay chorus and flanger; custom 4/8/12-stage phaser; generated-IR convolution `Room`; JUCE `dsp::DelayLine` and `dsp::Reverb` |
 | Pitch | Custom DualTap and PSOLA engines; optional Signalsmith Stretch/Linear kept in `deps/` |
 | Settings | JUCE `PropertiesFile` |
 | Build | CMake 3.22+, CMake presets, helper scripts |
@@ -455,7 +456,7 @@ The pitch stage reports **5 ms latency** to the host. The dry path is delayed by
 ### Gate and compressor
 
 - **Gate**: threshold, attack, release, bypass.
-- **Compressor**: threshold, ratio, attack, release, makeup, Tight, bypass. Tight derives the detector from a low-passed sidechain.
+- **Compressor**: threshold, ratio, attack, release, makeup, Tight, bypass. Tight derives the detector from a low-passed sidechain. Automatic makeup gain is applied on top of the Makeup control, so lowering the threshold or raising the ratio produces obvious compression without simply lowering the level. Defaults are −24 dB threshold, 8:1 ratio, 5 ms attack and 120 ms release.
 
 ### EQs
 
@@ -478,12 +479,12 @@ The slots sum into the cabinet output. The default IR mix is 100 % wet; the IR s
 - Chorus: rate, depth, feedback, delay, mix, bypass.
 - Flanger: rate, depth, manual, feedback, mix, bypass.
 - Phaser: rate, depth, feedback, stages, mix, bypass.
-- Room: size, blend, bypass. This is a short delay-based room, not a long reverb: **Blend** sets the amount of room signal and **Size** scales the short delays. A low fixed feedback and fixed low-pass give it a short, dense decay.
+- Room: **Size** in the Post FX pedal; **Room Mix** in the bottom strip. This is a convolution room, not a long reverb: Size crossfades between generated small and large room impulse responses, and Room Mix sets the amount of room signal. Room Mix defaults to 0 %.
 - Delay: mix, time, feedback, bypass.
 - Reverb: mix, decay, width, bypass.
-- Master output.
+- Master **Output** is in the bottom strip beside the tabs.
 
-The Room is bypassed by default; engage its footswitch and set **Blend** to add ambience. Switching the delay off discards its feedback tail. Switching the room off clears its delay buffers.
+Use **Room Mix** in the bottom strip to add ambience; there is no separate room bypass. Switching the delay off discards its feedback tail.
 
 ### Reduced Motion
 
@@ -534,6 +535,7 @@ cmake --build build --target NAMBerryOfflineTest NAMBerryUiSnapshot
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --modulation
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --fx-state
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --preset
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --compressor
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --reference
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --persist
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --dirs
@@ -552,10 +554,11 @@ What they cover:
 - `--detected-stage`: detector → pitch stage.
 - `--dry-center`: verifies both channels are identical when fully dry.
 - `--delay-reset`: verifies the delay tail is discarded on bypass.
-- `--room`: verifies the room blend, short-delay reflections, controlled decay, and bypass behaviour.
+- `--room`: verifies the convolution room, IR decay, and dry 0 % mix.
 - `--modulation`: verifies finite chorus, flanger and phaser output, all phaser stage counts, and bypass.
 - `--fx-state`: verifies migration of old post-FX parameter ranges/defaults.
 - `--preset`: verifies preset save/load, including amp/IR file paths.
+- `--compressor`: verifies gain reduction, automatic makeup gain and bypass.
 - `--reference`: verifies 432/440 Hz reference behaviour.
 - `--persist`: restores selected amp, pedal and IR paths; expects local sample files and skips if they are missing.
 - `--dirs`: sets the two root directories.
@@ -590,7 +593,7 @@ The snapshot tool is headless and does not need a DAW.
 - **PSOLA downshifts at 5 ms are limited**, especially on low notes; use DualTap for drop tunings. There is intentionally no automatic engine switch.
 - A 5 ms window is shorter than the period of low E, A and D; some artifacts on those notes are inherent to the latency target.
 - NAM model latency is not separately reported by the plugin; only the pitch-stage latency is reported.
-- The **Room** is a short delay network with a controlled decay, not a long reverb; use the Reverb effect for a long tail.
+- The **Room** is a convolution ambience with a short controlled decay, not a long reverb; use the Reverb effect for a long tail.
 - The plugin is **stereo in / stereo out only**.
 - Model and IR paths are **per-user settings**, not embedded in the DAW project. Moving a project to another machine may require reloading them.
 - `ui-spec.md` is an earlier Qt/QML exploration; the shipped UI is JUCE-native.

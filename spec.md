@@ -62,11 +62,13 @@ The editor should be organized into the following five sections, in this exact o
    - Chorus
    - Flanger
    - Phaser
-   - Room (short delay network, not a long reverb)
+   - Room (convolution room, not a long reverb)
    - Delay
    - Reverb
 
 This order keeps the pedal before the amp, keeps all pre-amp shaping before the core amp model, and preserves the clear signal-flow layout the plugin UI should reflect.
+
+A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and always exposes the Room Mix and master Output knobs.
 
 ### 3.2 Class Structure (High-Level)
 
@@ -86,7 +88,7 @@ This order keeps the pedal before the amp, keeps all pre-amp shaping before the 
   - `ModulationLfo` (shared sine/triangle LFO)
   - `ModulatedDelay` (chorus/flanger delay core with feedback)
   - `Phaser` (selectable 4/8/12-stage all-pass cascade)
-  - `Room` (short delay-based ambience with size and blend; low fixed feedback, not a long reverb)
+  - `Room` (convolution ambience using generated small/large room IRs, with size and dry/wet mix; not a long reverb)
   - `Delay` (stereo, with feedback, mix, time)
   - `Reverb` (algorithmic or convolution-based)
   - `DropTuner` (polyphonic/monophonic pitch detection, tuning down control)
@@ -125,6 +127,8 @@ This order keeps the pedal before the amp, keeps all pre-amp shaping before the 
 - **Goal**: Provide dynamics control, ideally with a "Tight" mode for palm mutes (as seen in NAM Universal’s Aggravator).
 - **Implementation**:
   - Use a feed-forward compressor with attack, release, threshold, ratio, and makeup gain.
+  - Apply a modest automatic makeup gain derived from the threshold and ratio, in addition to the user Makeup control, so compression is audible without a distracting level drop.
+  - Defaults: −24 dB threshold, 8:1 ratio, 5 ms attack, 120 ms release, 0 dB user makeup.
   - For the "Tight" mode, implement a low-band sidechain filter (e.g., band-pass around 80–150 Hz) so the compressor is triggered primarily by low-end transients.
 
 ### 4.5 Pedal / Preamp (NAM Model) & Overdrive
@@ -150,15 +154,13 @@ This order keeps the pedal before the amp, keeps all pre-amp shaping before the 
 - **Implementation**: Circular buffer delay line with parameters: Time (1 ms–2 s), Feedback (0–95%), Mix (0–100%), and optionally a high-cut filter in the feedback path.
 
 ### 4.8 Room ambience
-- **Goal**: Add a noticeable sense of physical space and depth without turning the tone into a long reverb.
-- **Implementation**: A custom `Room` stage placed after the modulation effects and before the delay.
-  - Eight short delay taps with prime-ish times (roughly 7–80 ms), scaled by the **Size** control.
-  - A low fixed feedback turns the taps into a short, dense room response instead of separate echoes. The feedback is fixed so the effect stays immediate and simple.
-  - A fixed one-pole low-pass (around 6.5 kHz) damps the feedback and output; there is no separate tone control.
-  - Stereo cross-feed keeps the room wide without making it two unrelated mono delays.
-  - **Blend** crossfades the dry signal with the room. The decay is deliberately short; use the Reverb for a long tail.
-  - Bypassing the Room clears its delay buffers. The effect is bypassed by default.
-- **Controls**: Size, Blend, bypass.
+- **Goal**: Add a realistic sense of physical space and depth without turning the tone into a long reverb.
+- **Implementation**: A convolution `Room` stage placed after the modulation effects and before the delay.
+  - Two short stereo room impulse responses are generated at prepare time: a small room and a larger room. Each contains early reflections and a damped diffuse tail.
+  - **Size** crossfades between the small and large room responses; **Room Mix** crossfades the dry signal with the convolution output.
+  - Room Mix defaults to **0 %**; at zero the convolution is skipped and the stage is completely dry. There is no separate room bypass.
+  - The generated IRs use independent stereo noise, early reflection spread and a fixed damping filter, avoiding the obvious echo pattern of a simple delay network.
+- **Controls**: Size lives in the Post FX Room pedal; **Room Mix** lives in the persistent bottom strip beside the tabs.
 
 ### 4.9 Reverb
 - **Goal**: Add ambience.
@@ -254,7 +256,7 @@ Artifacts: `.vst3` (all), `.component` (AU, macOS), `.aaxplugin` (if SDK availab
 - [x] Implement 4/8/12-stage all-pass `Phaser`.
 - [x] Implement `Delay` (circular buffer).
 - [x] Integrate `juce::Reverb`.
-- [x] Implement short delay-based Room ambience (Size, Blend; low fixed feedback).
+- [x] Implement convolution Room ambience (Size, Room Mix; default 0 %).
 
 ### Phase 5: UI & State Management (Weeks 9–10)
 - [x] Design `NAMBerryEditor` with tabs or a scrollable rack layout.
