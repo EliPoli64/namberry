@@ -25,9 +25,16 @@ void Compressor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffe
         return;
 
     const float threshLin = std::pow (10.0f, thresholdDb_ / 20.0f);
-    const float makeupLin = std::pow (10.0f, makeupGainDb_ / 20.0f);
     const float attackCoeff  = std::exp (-1.0f / (juce::jmax (0.1f, attackMs_)  * 0.001f * sampleRate_));
     const float releaseCoeff = std::exp (-1.0f / (juce::jmax (0.1f, releaseMs_) * 0.001f * sampleRate_));
+
+    // Automatic makeup keeps the compressed signal from simply becoming
+    // quieter. The user Makeup knob remains an additional offset on top.
+    const float autoMakeupDb = ratio_ > 1.0f
+        ? juce::jlimit (0.0f, 12.0f,
+                       -thresholdDb_ * (1.0f - 1.0f / ratio_) * 0.35f)
+        : 0.0f;
+    const float makeupLin = std::pow (10.0f, (makeupGainDb_ + autoMakeupDb) / 20.0f);
 
     // Tight mode: derive the detector signal from a low-passed copy (low end).
     const float scLpCoeff = std::exp (-2.0f * juce::MathConstants<float>::pi * 150.0f / sampleRate_);

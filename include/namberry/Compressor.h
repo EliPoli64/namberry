@@ -28,10 +28,10 @@ public:
 
     struct Params
     {
-        float attackMs = 10.0f;
-        float releaseMs = 100.0f;
-        float thresholdDb = -20.0f;
-        float ratio = 4.0f;
+        float attackMs = 5.0f;
+        float releaseMs = 120.0f;
+        float thresholdDb = -24.0f;
+        float ratio = 8.0f;
         float makeupGainDb = 0.0f;
         bool tightMode = false;
         bool bypass = false;
@@ -41,10 +41,10 @@ public:
 
 private:
     float sampleRate_ = 44100.0;
-    float attackMs_ = 10.0f;
-    float releaseMs_ = 100.0f;
-    float thresholdDb_ = -20.0f;
-    float ratio_ = 4.0f;
+    float attackMs_ = 5.0f;
+    float releaseMs_ = 120.0f;
+    float thresholdDb_ = -24.0f;
+    float ratio_ = 8.0f;
     float makeupGainDb_ = 0.0f;
     bool tightMode_ = false;
     bool bypass_ = false;

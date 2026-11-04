@@ -879,6 +879,89 @@ int runFxStateMigrationTest()
     return passed ? 0 : 2;
 }
 
+int runCompressorTest()
+{
+    constexpr double sampleRate = 48000.0;
+    constexpr int blockSize = 4096;
+
+    namberry::Compressor compressor;
+    juce::dsp::ProcessSpec spec;
+    spec.sampleRate = sampleRate;
+    spec.maximumBlockSize = blockSize;
+    spec.numChannels = 2;
+    compressor.prepare (spec);
+    compressor.setBypass (false);
+    compressor.setAttackMs (5.0f);
+    compressor.setReleaseMs (120.0f);
+    compressor.setThresholdDb (-24.0f);
+    compressor.setRatio (8.0f);
+    compressor.setMakeupGainDb (0.0f);
+
+    juce::AudioBuffer<float> buffer (2, blockSize);
+    juce::MidiBuffer midi;
+
+    auto fillSine = [&] (double startSample)
+    {
+        for (int i = 0; i < blockSize; ++i)
+        {
+            const float value = 0.8f * static_cast<float> (
+                std::sin (2.0 * juce::MathConstants<double>::pi * 220.0
+                          * (startSample + i) / sampleRate));
+            buffer.setSample (0, i, value);
+            buffer.setSample (1, i, value);
+        }
+    };
+
+    double position = 0.0;
+
+    for (int i = 0; i < 4; ++i, position += blockSize)
+    {
+        fillSine (position);
+        compressor.processBlock (buffer, midi);
+    }
+
+    fillSine (position);
+    juce::AudioBuffer<float> inputCopy (buffer);
+    compressor.processBlock (buffer, midi);
+
+    float inputEnergy = 0.0f;
+    float outputEnergy = 0.0f;
+    bool finite = true;
+
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        for (int i = 0; i < blockSize; ++i)
+        {
+            const float in = inputCopy.getSample (ch, i);
+            const float out = buffer.getSample (ch, i);
+            inputEnergy += in * in;
+            outputEnergy += out * out;
+            finite = finite && std::isfinite (out);
+        }
+    }
+
+    const float inputRms = std::sqrt (inputEnergy / (2.0f * blockSize));
+    const float outputRms = std::sqrt (outputEnergy / (2.0f * blockSize));
+    const bool compressed = outputRms < inputRms * 0.8f && outputRms > 1.0e-4f;
+
+    compressor.setBypass (true);
+    fillSine (position + blockSize);
+    juce::AudioBuffer<float> bypassInput (buffer);
+    compressor.processBlock (buffer, midi);
+    const bool bypassOk =
+        std::abs (buffer.getSample (0, 0) - bypassInput.getSample (0, 0)) < 1.0e-7f
+        && std::abs (buffer.getSample (0, blockSize - 1)
+                     - bypassInput.getSample (0, blockSize - 1)) < 1.0e-7f;
+
+    const bool passed = finite && compressed && bypassOk;
+
+    std::cout << "compressor inputRms=" << inputRms
+              << " outputRms=" << outputRms
+              << " " << (passed ? "PASS" : "FAIL") << "\n";
+
+    return passed ? 0 : 2;
+}
+
 int runPresetTest()
 {
     const juce::File presetFile ("/tmp/opencode/namberry-preset-test.namberrypreset");
@@ -1021,6 +1104,9 @@ int main (int argc, char** argv)
 
     if (argc > 1 && juce::String (argv[1]) == "--preset")
         return runPresetTest();
+
+    if (argc > 1 && juce::String (argv[1]) == "--compressor")
+        return runCompressorTest();
 
     if (argc > 1 && juce::String (argv[1]) == "--persist")
         return runPersistenceTest();

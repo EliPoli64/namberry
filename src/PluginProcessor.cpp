@@ -46,16 +46,16 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     // ---- Compressor ----
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "compAttack", "Comp Attack",
-        juce::NormalisableRange<float>(0.1f, 1000.0f, 0.1f), 10.0f));
+        juce::NormalisableRange<float>(0.1f, 1000.0f, 0.1f), 5.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "compRelease", "Comp Release",
-        juce::NormalisableRange<float>(0.1f, 1000.0f, 0.1f), 100.0f));
+        juce::NormalisableRange<float>(0.1f, 1000.0f, 0.1f), 120.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "compThreshold", "Comp Threshold",
-        juce::NormalisableRange<float>(-60.0f, 0.0f, 0.1f), -20.0f));
+        juce::NormalisableRange<float>(-60.0f, 0.0f, 0.1f), -24.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "compRatio", "Comp Ratio",
-        juce::NormalisableRange<float>(1.0f, 20.0f, 0.1f), 4.0f));
+        juce::NormalisableRange<float>(1.0f, 20.0f, 0.1f), 8.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "compMakeup", "Comp Makeup",
         juce::NormalisableRange<float>(-60.0f, 60.0f, 0.1f), 0.0f));
