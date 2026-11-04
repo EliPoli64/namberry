@@ -60,6 +60,12 @@ public:
     juce::File getIrDirectory() const;
     void setIrDirectory (const juce::File& directory);
 
+    // Preset save/load: parameter state plus the current amp, pedal and IR paths.
+    bool savePreset (const juce::File& file);
+    bool loadPreset (const juce::File& file);
+    juce::File getPresetDirectory() const;
+    void setPresetDirectory (const juce::File& directory);
+
     // Restores the last selected amp/pedal model and IR files.
     void restoreSavedFiles();
 

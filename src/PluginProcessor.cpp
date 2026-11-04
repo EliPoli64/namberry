@@ -743,6 +743,129 @@ bool NAMBerryProcessor::loadIr (int slot, const juce::File& file)
     return loaded;
 }
 
+//==============================================================================
+bool NAMBerryProcessor::savePreset (const juce::File& file)
+{
+    const auto target = file.hasFileExtension ("namberrypreset")
+        ? file
+        : file.withFileExtension ("namberrypreset");
+
+    target.getParentDirectory().createDirectory();
+
+    auto root = std::make_unique<juce::XmlElement> ("NAMBERRYPRESET");
+    root->setAttribute ("version", 1);
+
+    auto state = apvts_.copyState();
+    state.setProperty ("fxVersion", kFxStateVersion, nullptr);
+
+    if (auto stateXml = std::unique_ptr<juce::XmlElement> (state.createXml()))
+        root->addChildElement (stateXml.release());
+
+    auto* files = root->createNewChildElement ("FILES");
+
+    auto addFile = [files] (const char* name, const juce::File& path)
+    {
+        if (path.existsAsFile())
+            files->setAttribute (name, path.getFullPathName());
+    };
+
+    addFile ("amp", namModel_ != nullptr ? namModel_->getLoadedFile() : juce::File());
+    addFile ("pedal", namPedal_ != nullptr ? namPedal_->getLoadedFile() : juce::File());
+
+    if (irLoader_ != nullptr)
+        for (int slot = 0; slot < 4; ++slot)
+            addFile (("ir" + juce::String (slot)).toRawUTF8(),
+                     irLoader_->getLoadedFile (slot));
+
+    if (! root->writeTo (target))
+        return false;
+
+    setPresetDirectory (target.getParentDirectory());
+    return true;
+}
+
+bool NAMBerryProcessor::loadPreset (const juce::File& file)
+{
+    auto xml = juce::XmlDocument::parse (file);
+
+    if (xml == nullptr || ! xml->hasTagName ("NAMBERRYPRESET"))
+        return false;
+
+    auto* params = xml->getChildByName ("PARAMETERS");
+
+    if (params == nullptr)
+        return false;
+
+    juce::MemoryBlock stateBlock;
+    copyXmlToBinary (*params, stateBlock);
+    setStateInformation (stateBlock.getData(), static_cast<int> (stateBlock.getSize()));
+
+    bool filesOk = true;
+
+    if (auto* files = xml->getChildByName ("FILES"))
+    {
+        auto loadFile = [this, &filesOk, files] (const char* attribute,
+                                                 std::function<bool (const juce::File&)> loader)
+        {
+            const auto path = files->getStringAttribute (attribute);
+
+            if (path.isEmpty())
+                return;
+
+            const juce::File modelOrIr (path);
+
+            if (! modelOrIr.existsAsFile() || ! loader (modelOrIr))
+                filesOk = false;
+        };
+
+        loadFile ("amp", [this] (const juce::File& f) { return loadNamModel (f); });
+        loadFile ("pedal", [this] (const juce::File& f) { return loadNamPedalModel (f); });
+
+        for (int slot = 0; slot < 4; ++slot)
+        {
+            const auto attribute = "ir" + juce::String (slot);
+            loadFile (attribute.toRawUTF8(),
+                      [this, slot] (const juce::File& f) { return loadIr (slot, f); });
+        }
+    }
+
+    setPresetDirectory (file.getParentDirectory());
+    return filesOk;
+}
+
+juce::File NAMBerryProcessor::getPresetDirectory() const
+{
+    if (settings_ != nullptr)
+    {
+        const auto path = settings_->getValue ("lastPresetDirectory");
+
+        if (path.isNotEmpty())
+        {
+            const juce::File directory (path);
+
+            if (directory.isDirectory())
+                return directory;
+        }
+    }
+
+    const auto directory = juce::File::getSpecialLocation (
+        juce::File::userApplicationDataDirectory)
+            .getChildFile ("NAMBerry")
+            .getChildFile ("Presets");
+
+    directory.createDirectory();
+    return directory;
+}
+
+void NAMBerryProcessor::setPresetDirectory (const juce::File& directory)
+{
+    if (settings_ == nullptr || ! directory.isDirectory())
+        return;
+
+    settings_->setValue ("lastPresetDirectory", directory.getFullPathName());
+    settings_->saveIfNeeded();
+}
+
 void NAMBerryProcessor::restoreSavedFiles()
 {
     if (settings_ == nullptr)

@@ -1543,6 +1543,11 @@ NAMBerryEditor::NAMBerryEditor (NAMBerryProcessor& p)
     reducedMotionAttachment_ = std::make_unique<APVTS::ButtonAttachment> (
         processor_.getValueTreeState(), "reducedMotion", reducedMotionButton_);
 
+    addAndMakeVisible (presetButton_);
+    presetButton_.setButtonText ("PRESET");
+    presetButton_.setTooltip ("Save or load a NAMBerry preset");
+    presetButton_.onClick = [this] { showPresetMenu(); };
+
     tabBar_.addChangeListener (this);
     addAndMakeVisible (tabBar_);
 
@@ -2048,12 +2053,103 @@ void NAMBerryEditor::openBrowser (BrowserKind kind,
     browser_->toFront (true);
 }
 
+void NAMBerryEditor::showPresetMenu()
+{
+    juce::PopupMenu menu;
+    menu.addItem (1, "Load Preset...");
+    menu.addItem (2, "Save Preset...");
+    menu.addSeparator();
+    menu.addItem (3, "Open Preset Folder");
+
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&presetButton_),
+                        [this] (int result)
+                        {
+                            if (result == 1)
+                                loadPresetFromFile();
+                            else if (result == 2)
+                                savePresetAs();
+                            else if (result == 3)
+                                processor_.getPresetDirectory().revealToUser();
+                        });
+}
+
+void NAMBerryEditor::savePresetAs()
+{
+    const auto directory = processor_.getPresetDirectory();
+    const auto startFile = lastPresetFile_.existsAsFile()
+        ? lastPresetFile_
+        : directory.getChildFile ("NAMberry Preset.namberrypreset");
+
+    presetChooser_ = std::make_unique<juce::FileChooser> (
+        "Save NAMBerry Preset", startFile, "*.namberrypreset");
+
+    presetChooser_->launchAsync (
+        juce::FileBrowserComponent::saveMode
+            | juce::FileBrowserComponent::canSelectFiles
+            | juce::FileBrowserComponent::warnAboutOverwriting,
+        [this] (const juce::FileChooser& chooser)
+        {
+            auto file = chooser.getResult();
+
+            if (file == juce::File())
+                return;
+
+            if (! file.hasFileExtension ("namberrypreset"))
+                file = file.withFileExtension ("namberrypreset");
+
+            if (processor_.savePreset (file))
+            {
+                lastPresetFile_ = file;
+                presetButton_.setTooltip ("Preset: " + file.getFileName());
+            }
+            else
+            {
+                juce::AlertWindow::showMessageBoxAsync (
+                    juce::MessageBoxIconType::WarningIcon,
+                    "Could not save preset",
+                    "NAMberry could not write:\n" + file.getFullPathName());
+            }
+        });
+}
+
+void NAMBerryEditor::loadPresetFromFile()
+{
+    presetChooser_ = std::make_unique<juce::FileChooser> (
+        "Load NAMBerry Preset", processor_.getPresetDirectory(), "*.namberrypreset");
+
+    presetChooser_->launchAsync (
+        juce::FileBrowserComponent::openMode
+            | juce::FileBrowserComponent::canSelectFiles,
+        [this] (const juce::FileChooser& chooser)
+        {
+            const auto file = chooser.getResult();
+
+            if (! file.existsAsFile())
+                return;
+
+            const bool fullyLoaded = processor_.loadPreset (file);
+            lastPresetFile_ = file;
+            presetButton_.setTooltip ("Preset: " + file.getFileName());
+
+            if (! fullyLoaded)
+            {
+                juce::AlertWindow::showMessageBoxAsync (
+                    juce::MessageBoxIconType::WarningIcon,
+                    "Could not fully load preset",
+                    "The preset may be invalid or may reference model/IR "
+                    "files that are no longer available.");
+            }
+        });
+}
+
 void NAMBerryEditor::resized()
 {
     auto r = getLocalBounds();
 
     auto header = r.removeFromTop (60);
-    reducedMotionButton_.setBounds (header.removeFromRight (190).withSizeKeepingCentre (180, 48));
+    auto headerControls = header.removeFromRight (360);
+    reducedMotionButton_.setBounds (headerControls.removeFromRight (190).withSizeKeepingCentre (180, 48));
+    presetButton_.setBounds (headerControls.removeFromRight (150).withSizeKeepingCentre (140, 44));
 
     auto tabArea = r.removeFromBottom (56);
     const int maxTabWidth = juce::jmax (240, tabArea.getWidth() - 12);
@@ -2116,7 +2212,7 @@ void NAMBerryEditor::paint (juce::Graphics& g)
     g.setColour (juce::Colour (kTextDim));
     g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
     g.drawFittedText ("PRE FX   >   AMP   >   POST EQ   >   IR   >   POST FX",
-                      header.reduced (200, 0),
+                      header.withTrimmedLeft (200).withTrimmedRight (390),
                       juce::Justification::centred, 1);
 
     g.setColour (juce::Colour (kAccent).withAlpha (0.5f));

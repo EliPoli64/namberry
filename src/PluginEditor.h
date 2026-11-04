@@ -32,6 +32,10 @@ private:
     void openBrowser (BrowserKind kind,
                       std::function<void (const juce::File&)> onFileChosen);
 
+    void showPresetMenu();
+    void savePresetAs();
+    void loadPresetFromFile();
+
     NAMBerryProcessor& processor_;
     std::unique_ptr<juce::LookAndFeel_V4> lnf_;
 
@@ -41,6 +45,9 @@ private:
 
     juce::ToggleButton reducedMotionButton_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> reducedMotionAttachment_;
+    juce::TextButton presetButton_;
+    std::unique_ptr<juce::FileChooser> presetChooser_;
+    juce::File lastPresetFile_;
 
     std::vector<std::unique_ptr<juce::Component>> ownedControls_;
     std::vector<std::function<void()>> nameUpdaters_;

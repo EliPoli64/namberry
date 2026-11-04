@@ -879,6 +879,72 @@ int runFxStateMigrationTest()
     return passed ? 0 : 2;
 }
 
+int runPresetTest()
+{
+    const juce::File presetFile ("/tmp/opencode/namberry-preset-test.namberrypreset");
+    presetFile.deleteFile();
+
+    namberry::NAMBerryProcessor source;
+    source.setPlayConfigDetails (2, 2, 48000, 512);
+    source.prepareToPlay (48000, 512);
+
+    auto& sourceParams = source.getValueTreeState();
+
+    auto setParameter = [&] (const juce::String& id, float normalised)
+    {
+        if (auto* parameter = sourceParams.getParameter (id))
+            parameter->setValueNotifyingHost (normalised);
+    };
+
+    setParameter ("chorusMix", 0.75f);
+    setParameter ("phaserStages", 1.0f);
+    setParameter ("reverbDecay", 0.8f);
+
+    const juce::File ampFile ("/home/elipoli/Downloads/amps/NAMs/1. BASS/DG ADAM/ADAM Clean.nam");
+    const juce::File irFile ("/home/elipoli/Downloads/amps/IRs/cab Marshall 1960 celestion G12T75 sm57.wav");
+    const bool haveAmp = ampFile.existsAsFile();
+    const bool haveIr = irFile.existsAsFile();
+
+    if (haveAmp)
+        source.loadNamModel (ampFile);
+
+    if (haveIr)
+        source.loadIr (0, irFile);
+
+    const bool saved = source.savePreset (presetFile);
+
+    namberry::NAMBerryProcessor restored;
+    restored.setPlayConfigDetails (2, 2, 48000, 512);
+    restored.prepareToPlay (48000, 512);
+
+    const bool loaded = saved && restored.loadPreset (presetFile);
+    auto& restoredParams = restored.getValueTreeState();
+
+    const float chorusMix = restoredParams.getRawParameterValue ("chorusMix")->load();
+    const float phaserStages = restoredParams.getRawParameterValue ("phaserStages")->load();
+    const float reverbDecay = restoredParams.getRawParameterValue ("reverbDecay")->load();
+
+    const bool filesOk = (! haveAmp || restored.getNamModel()->hasModel())
+                      && (! haveIr || restored.getIrLoader()->isSlotLoaded (0));
+
+    const bool passed = loaded && filesOk
+                     && std::abs (chorusMix - 75.0f) < 0.01f
+                     && std::abs (phaserStages - 12.0f) < 0.01f
+                     && std::abs (reverbDecay - 0.8f) < 0.01f;
+
+    presetFile.deleteFile();
+
+    std::cout << "preset saved=" << saved
+              << " loaded=" << loaded
+              << " files=" << filesOk
+              << " chorusMix=" << chorusMix
+              << " phaserStages=" << phaserStages
+              << " reverbDecay=" << reverbDecay
+              << " " << (passed ? "PASS" : "FAIL") << "\n";
+
+    return passed ? 0 : 2;
+}
+
 int runPersistenceTest()
 {
     const juce::File namRoot ("/home/elipoli/Downloads/amps/NAMs");
@@ -952,6 +1018,9 @@ int main (int argc, char** argv)
 
     if (argc > 1 && juce::String (argv[1]) == "--fx-state")
         return runFxStateMigrationTest();
+
+    if (argc > 1 && juce::String (argv[1]) == "--preset")
+        return runPresetTest();
 
     if (argc > 1 && juce::String (argv[1]) == "--persist")
         return runPersistenceTest();
