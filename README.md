@@ -28,6 +28,7 @@ NAMberry packages all of that into one plugin:
 - **Room ambience** — a short delay-network blend for a noticeable sense of physical space, separate from the reverb.
 - **Fast model management** — in-app NAM/IR browsers, two separate persisted roots, previous/next arrows, and drag-and-drop.
 - **Persistent choices** — the selected amp, pedal and all four IR files are restored on the next session.
+- **Preset save/load** — store the complete parameter state together with the current amp, pedal and IR file paths.
 - **Low-latency pitch** — 5 ms DualTap and PSOLA engines for capo and drop tuning.
 - **A usable tuner** — a strobe wheel with cents deviation and an editable reference frequency (440, 432, etc.).
 - **Stereo correctness** — the NAM stages are mono models, summed and copied to both channels; the dry path is always centred.
@@ -488,6 +489,16 @@ The Room is bypassed by default; engage its footswitch and set **Blend** to add 
 
 The header toggle disables the panel hover-glow animation for users who prefer reduced motion. It is saved with the plugin state.
 
+### Presets
+
+Use the **PRESET** button in the header:
+
+- **Save Preset...** writes a `.namberrypreset` file containing every parameter value plus the current amp, pedal and four IR paths.
+- **Load Preset...** restores the parameters and loads any referenced model/IR files that still exist.
+- **Open Preset Folder** opens the default preset directory.
+
+The default preset folder is `NAMBerry/Presets` under the user application-data directory. The last-used preset folder is remembered. If a preset references a missing model or IR, the parameters are applied and NAMberry warns that one or more files could not be loaded.
+
 ### State and settings
 
 - DAW projects save all parameter values with the plugin.
@@ -496,7 +507,8 @@ The header toggle disables the panel hover-glow animation for users who prefer r
   - IR root,
   - last amp model path,
   - last pedal model path,
-  - last IR path for each of the four slots.
+  - last IR path for each of the four slots,
+  - last preset directory.
 
 If a saved file has moved, the loader shows no model/empty until it is reloaded; the path remains in the settings for when it returns.
 
@@ -521,6 +533,7 @@ cmake --build build --target NAMBerryOfflineTest NAMBerryUiSnapshot
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --room
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --modulation
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --fx-state
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --preset
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --reference
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --persist
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --dirs
@@ -542,6 +555,7 @@ What they cover:
 - `--room`: verifies the room blend, short-delay reflections, controlled decay, and bypass behaviour.
 - `--modulation`: verifies finite chorus, flanger and phaser output, all phaser stage counts, and bypass.
 - `--fx-state`: verifies migration of old post-FX parameter ranges/defaults.
+- `--preset`: verifies preset save/load, including amp/IR file paths.
 - `--reference`: verifies 432/440 Hz reference behaviour.
 - `--persist`: restores selected amp, pedal and IR paths; expects local sample files and skips if they are missing.
 - `--dirs`: sets the two root directories.

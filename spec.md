@@ -189,6 +189,16 @@ This order keeps the pedal before the amp, keeps all pre-amp shaping before the 
   - The engines only run while the stage is active; bypassed or 0-semitone states output the delayed dry signal.
 - **Controls**: Semitones (−12…+12), mix level (0–100%), engine toggle, bypass footswitch.
 
+### 4.12 Preset save/load
+- **Goal**: Let users store and recall the complete rig without depending on the host’s project state.
+- **Implementation**:
+  - Presets use a `.namberrypreset` XML file with a `PARAMETERS` child containing the full `AudioProcessorValueTreeState` and a `FILES` child containing the current amp, pedal and four IR paths.
+  - Loading applies the parameter state first, then loads any referenced model/IR files that still exist.
+  - Missing files do not prevent the parameter state from being applied; the UI reports that the preset was only partially restored.
+  - The default preset folder is `NAMBerry/Presets` in the user application-data directory; the last-used folder is remembered in `NAMBerry.settings`.
+  - The editor’s header exposes a **PRESET** menu with Load, Save and Open Preset Folder actions.
+- **Controls**: PRESET header menu (Load Preset, Save Preset, Open Preset Folder).
+
 ---
 
 ---
@@ -224,33 +234,33 @@ Artifacts: `.vst3` (all), `.component` (AU, macOS), `.aaxplugin` (if SDK availab
 ## 6. Implementation Milestones (Agent Task List)
 
 ### Phase 1: Project Skeleton & NAM Core (Weeks 1–2)
-- [ ] Initialize CMake project with JUCE and `NeuralAmpModelerCore` as static library.
-- [ ] Implement `NamModelLoader` class: load `.nam` files, process audio, expose gain/output.
-- [ ] Create basic `AudioProcessor` that passes audio through the NAM model.
+- [x] Initialize CMake project with JUCE and `NeuralAudio` as the NAM backend.
+- [x] Implement `NamModelLoader` class: load `.nam` files, process audio, expose gain/output.
+- [x] Create basic `AudioProcessor` that passes audio through the NAM model.
 - [ ] Verify real-time performance on all three platforms.
 
 ### Phase 2: IR Loader & EQs (Weeks 3–4)
-- [ ] Implement 4-slot `IrLoader` with `dsp::Convolution` and per-slot mix.
-- [ ] Build `MultiBandEQ` class and instantiate two (pre and post).
-- [ ] Integrate into signal chain.
+- [x] Implement 4-slot `IrLoader` with `dsp::Convolution` and per-slot mix.
+- [x] Build `MultiBandEQ` class and instantiate two (pre and post).
+- [x] Integrate into signal chain.
 
 ### Phase 3: Dynamics & Drive (Weeks 5–6)
-- [ ] Implement `Compressor` (with optional low-band sidechain).
-- [ ] Implement `Overdrive` (waveshaper + tone).
-- [ ] Implement `NoiseGate`.
+- [x] Implement `Compressor` (with optional low-band sidechain).
+- [ ] Implement `Overdrive` (waveshaper + tone) — superseded by the NAM pedal design.
+- [x] Implement `NoiseGate`.
 
 ### Phase 4: Time-Based & Modulation FX (Weeks 7–8)
 - [x] Implement shared `ModulationLfo` and `ModulatedDelay` chorus/flanger.
 - [x] Implement 4/8/12-stage all-pass `Phaser`.
-- [ ] Implement `Delay` (circular buffer).
-- [ ] Integrate `juce::Reverb`.
+- [x] Implement `Delay` (circular buffer).
+- [x] Integrate `juce::Reverb`.
 - [x] Implement short delay-based Room ambience (Size, Blend; low fixed feedback).
 
 ### Phase 5: UI & State Management (Weeks 9–10)
-- [ ] Design `NAMBerryEditor` with tabs or a scrollable rack layout.
-- [ ] Bind all parameters to `AudioProcessorValueTreeState`.
-- [ ] Implement preset save/load.
-- [ ] Add file drag-and-drop for `.nam` and `.wav` IR files.
+- [x] Design `NAMBerryEditor` with tabs or a scrollable rack layout.
+- [x] Bind all parameters to `AudioProcessorValueTreeState`.
+- [x] Implement preset save/load.
+- [x] Add file drag-and-drop for `.nam` and `.wav` IR files.
 - [x] Add in-app directory browsers with separate persisted NAM and IR roots.
 - [x] Add previous/next arrows to the NAM and IR fields to step through matching files in the current directory.
 - [x] Persist the selected amp model, pedal model and all four IR slot files.
