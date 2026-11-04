@@ -5,7 +5,7 @@
 **NAMBerry** is a universal audio plugin that builds upon the foundation of NAM Universal but introduces a more comprehensive and better-implemented signal chain. The goal is to provide guitarists and producers with an all-in-one "amp-in-a-box" solution that rivals dedicated hardware.
 
 ### Key Differentiators from NAM Universal
-- **Expanded FX Chain**: Includes a full suite of studio-quality effects (Compressor, Overdrive, dual multi-band EQs, Chorus/Phaser/Flanger, Delay, Reverb) integrated directly into the plugin, rather than relying on external plugins for basic tone shaping.
+- **Expanded FX Chain**: Includes a full suite of studio-quality effects (Compressor, Overdrive, dual multi-band EQs, Chorus/Phaser/Flanger, Room, Delay, Reverb) integrated directly into the plugin, rather than relying on external plugins for basic tone shaping.
 - **4-Slot IR Loader with Advanced Blending**: Goes beyond the dual-IR loader of NAM Universal to allow complex cabinet mixing with individual level, pan, and phase controls.
 - **Enhanced Amp Control**: Dedicated controls for Gain, Presence, Depth, and Output Volume, providing a more tactile "amp-like" feel compared to the OOMPH/SPARKLE impedance interaction model.
 - **True Static Linking**: Compiled with static libraries for Linux, Windows, and macOS to ensure maximum compatibility and ease of distribution without runtime dependency issues.
@@ -33,7 +33,7 @@
 Input → Tuner (detect) → Pitch (capo/drop) → Noise Gate → Compressor → NAM Pedal/Preamp → Pre-Amp EQ →
 NAM Amp Loader (Gain, Bass, Mid, Treble, Presence, Depth, Output) →
 Post-Amp EQ (Multi-Band) → 4-Slot IR Loader (Blend/Pan/Phase) →
-Post Effects (Chorus/Flanger/Phaser/Delay/Reverb) → Output
+Post Effects (Chorus/Flanger/Phaser/Room/Delay/Reverb) → Output
 ```
 
 ### 3.2 UI Section Order
@@ -62,6 +62,7 @@ The editor should be organized into the following five sections, in this exact o
    - Chorus
    - Flanger
    - Phaser
+   - Room (short delay network, not a long reverb)
    - Delay
    - Reverb
 
@@ -82,7 +83,10 @@ This order keeps the pedal before the amp, keeps all pre-amp shaping before the 
   - `MultiBandEQ` (at least 3 bands: Low, Mid, High, with shelving/peaking options)
   - `NamModelLoader` (wraps `NeuralAmpModelerCore` / `NeuralAudio`)
   - `IrLoader` (4 slots, each with an `dsp::Convolution` instance)
-  - `ModulationFX` (Chorus/Phaser/Flanger, selectable or mixable)
+  - `ModulationLfo` (shared sine/triangle LFO)
+  - `ModulatedDelay` (chorus/flanger delay core with feedback)
+  - `Phaser` (selectable 4/8/12-stage all-pass cascade)
+  - `Room` (short delay-based ambience with size and blend; low fixed feedback, not a long reverb)
   - `Delay` (stereo, with feedback, mix, time)
   - `Reverb` (algorithmic or convolution-based)
   - `DropTuner` (polyphonic/monophonic pitch detection, tuning down control)
@@ -131,23 +135,36 @@ This order keeps the pedal before the amp, keeps all pre-amp shaping before the 
   - Placed before the NAM Amp Loader per the signal flow (and bypassable when no pedal model is loaded).
   - A built-in `std::tanh` waveshaper is **not** used for this stage: tone and character come entirely from the loaded NAM model.
 
-### 4.6 Modulation (Chorus/Phaser/Flanger)
-- **Goal**: Provide classic modulation effects.
+### 4.6 Modulation (Chorus/Flanger/Phaser)
+- **Goal**: Provide three independent, footswitchable modulation pedals with the parameter ranges from `fx-spec.md`.
 - **Implementation**:
-  - **Chorus**: Short modulated delay (5–30 ms) mixed with dry signal.
-  - **Flanger**: Shorter modulated delay (0.5–10 ms) with feedback.
-  - **Phaser**: Cascaded all-pass filters with LFO-modulated corner frequencies.
-  - Use a single `ModulationFX` class with a `Type` parameter to switch between them, or allow mixing.
+  - A shared `ModulationLfo` class provides sine and triangle modulation with smoothed rate and optional per-channel phase offset.
+  - **Chorus**: A stereo modulated delay using a sine LFO with the right channel offset by 180°. Controls: Rate 0.1–5 Hz (0.8), Depth 0–100 % (50), Feedback 0–70 % (15), Delay 5–30 ms (15), Mix 0–100 % (50).
+  - **Flanger**: A shorter stereo delay using a triangle LFO and a signed feedback path. Controls: Rate 0.05–10 Hz (0.4), Depth 0–100 % (60), Manual 0.5–10 ms (2), Feedback −95…+95 % (40), Mix 0–100 % (50).
+  - **Phaser**: Cascaded first-order all-pass stages with a sine LFO sweeping around 600 Hz by up to ±1.5 octaves at full depth. Controls: Rate 0.05–8 Hz (0.5), Depth 0–100 % (70), Feedback 0–90 % (30), Stages 4/8/12 (8), Mix 0–100 % (50).
+  - Chorus and flanger use fractional delay lines with feedback and linear dry/wet mixing; the phaser uses 4, 8 or 12 all-pass stages and feedback.
+  - Each effect has its own bypass footswitch and resets its delay/filter state when bypassed.
 
 ### 4.7 Delay
 - **Goal**: Stereo delay with musical controls.
 - **Implementation**: Circular buffer delay line with parameters: Time (1 ms–2 s), Feedback (0–95%), Mix (0–100%), and optionally a high-cut filter in the feedback path.
 
-### 4.8 Reverb
+### 4.8 Room ambience
+- **Goal**: Add a noticeable sense of physical space and depth without turning the tone into a long reverb.
+- **Implementation**: A custom `Room` stage placed after the modulation effects and before the delay.
+  - Eight short delay taps with prime-ish times (roughly 7–80 ms), scaled by the **Size** control.
+  - A low fixed feedback turns the taps into a short, dense room response instead of separate echoes. The feedback is fixed so the effect stays immediate and simple.
+  - A fixed one-pole low-pass (around 6.5 kHz) damps the feedback and output; there is no separate tone control.
+  - Stereo cross-feed keeps the room wide without making it two unrelated mono delays.
+  - **Blend** crossfades the dry signal with the room. The decay is deliberately short; use the Reverb for a long tail.
+  - Bypassing the Room clears its delay buffers. The effect is bypassed by default.
+- **Controls**: Size, Blend, bypass.
+
+### 4.9 Reverb
 - **Goal**: Add ambience.
 - **Implementation**: Use JUCE's `juce::Reverb` (algorithmic) for a lightweight, real-time-safe reverb. Parameters: Room Size, Damping, Wet, Dry, Width.
 
-### 4.9 DropTuner
+### 4.10 DropTuner
 - **Goal**: Detect the input pitch for display and provide the period used by the pitch engine.
 - **Implementation**:
   - Autocorrelation-based fundamental frequency detection on the input signal.
@@ -159,7 +176,7 @@ This order keeps the pedal before the amp, keeps all pre-amp shaping before the 
   - Runs before the pitch stage so it analyses the clean input.
 - **Controls**: Tuning wheel (note + cents), reference frequency field (Hz).
 
-### 4.10 Pitch stage (Digital Capo + Drop Tune)
+### 4.11 Pitch stage (Digital Capo + Drop Tune)
 - **Goal**: Transpose the guitar by a selected number of semitones, covering both capo (up) and drop-tuning (down) use.
 - **Implementation**:
   - **Semitones**: a single −12…+12 control shared by capo and drop tuning.
@@ -223,9 +240,11 @@ Artifacts: `.vst3` (all), `.component` (AU, macOS), `.aaxplugin` (if SDK availab
 - [ ] Implement `NoiseGate`.
 
 ### Phase 4: Time-Based & Modulation FX (Weeks 7–8)
-- [ ] Implement `ModulationFX` (Chorus/Phaser/Flanger).
+- [x] Implement shared `ModulationLfo` and `ModulatedDelay` chorus/flanger.
+- [x] Implement 4/8/12-stage all-pass `Phaser`.
 - [ ] Implement `Delay` (circular buffer).
 - [ ] Integrate `juce::Reverb`.
+- [x] Implement short delay-based Room ambience (Size, Blend; low fixed feedback).
 
 ### Phase 5: UI & State Management (Weeks 9–10)
 - [ ] Design `NAMBerryEditor` with tabs or a scrollable rack layout.

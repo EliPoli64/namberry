@@ -1,6 +1,6 @@
 # NAMberry
 
-NAMberry is an all-in-one NAM-based guitar amp and effects plugin. It combines a NAM amp capture, a second NAM pedal/preamp capture, four blendable IR slots, dynamics, dual multi-band EQs, modulation/delay/reverb, and a low-latency pitch stage for capo and drop tuning.
+NAMberry is an all-in-one NAM-based guitar amp and effects plugin. It combines a NAM amp capture, a second NAM pedal/preamp capture, four blendable IR slots, dynamics, dual multi-band EQs, modulation/room/delay/reverb, and a low-latency pitch stage for capo and drop tuning.
 
 The goal is to stop treating an amp capture as a single plugin in a long external chain. Load two captures, four cabinets, and a complete studio-style effects chain in one stereo plugin, with fast model browsing and a hardware-inspired interface.
 
@@ -16,7 +16,7 @@ NAM captures sound excellent, but the surrounding workflow is usually fragmented
 - another for a pedal capture,
 - another for IRs,
 - separate gate/compressor/EQ plugins,
-- separate modulation/delay/reverb plugins,
+- separate modulation/room/delay/reverb plugins,
 - manual file browsing for every model,
 - and no simple capo/drop-tune stage.
 
@@ -25,6 +25,7 @@ NAMberry packages all of that into one plugin:
 - **Two NAM captures** — one amp, one pedal/preamp.
 - **Four IR slots** with per-slot mix, pan and phase.
 - **A complete chain** — tuner, pitch stage, gate, compressor, pedal, pre-amp EQ, amp, post-amp EQ, IR, post effects, master.
+- **Room ambience** — a short delay-network blend for a noticeable sense of physical space, separate from the reverb.
 - **Fast model management** — in-app NAM/IR browsers, two separate persisted roots, previous/next arrows, and drag-and-drop.
 - **Persistent choices** — the selected amp, pedal and all four IR files are restored on the next session.
 - **Low-latency pitch** — 5 ms DualTap and PSOLA engines for capo and drop tuning.
@@ -48,7 +49,7 @@ Input
   → NAM Amp
   → Post-Amp EQ
   → 4-Slot IR Loader
-  → Post FX (Chorus / Flanger / Phaser / Delay / Reverb)
+  → Post FX (Chorus / Flanger / Phaser / Room / Delay / Reverb)
   → Master Output
 ```
 
@@ -60,7 +61,7 @@ Input
 | **Amp** | NAM amp model, Power, Gain, Bass, Mid, Treble, Presence, Depth, Output |
 | **Post EQ** | 3-band post-amp EQ |
 | **IR** | Four IR slots with mix, pan, phase, browse and arrows |
-| **Post FX** | Chorus, Flanger, Phaser, Delay, Reverb, Master output |
+| **Post FX** | Chorus, Flanger, Phaser, Room, Delay, Reverb, Master output |
 
 The header contains the **Reduced Motion** preference. The engine is user-selected; there is no automatic engine switching.
 
@@ -137,15 +138,18 @@ The reference affects the note/cents display only; the pitch engines use the mea
 
 ### Post effects
 
-`PostEffects` uses JUCE DSP:
+`PostEffects` combines custom modulation DSP with JUCE effects:
 
-- `juce::dsp::Chorus` for chorus,
-- a second chorus with a short centre delay and feedback for flanger,
-- `juce::dsp::Phaser`,
+- a custom `ModulatedDelay` for chorus: sine LFO, right-channel 180° phase, 5–30 ms delay, feedback and mix,
+- a custom `ModulatedDelay` for flanger: triangle LFO, 0.5–10 ms manual delay, signed feedback and mix,
+- a custom `Phaser` with 4/8/12 first-order all-pass stages, sine LFO and feedback,
+- a custom `Room` stage built from eight short delay taps with a low fixed feedback, fixed damping and a dry/wet blend,
 - `juce::dsp::DelayLine` with feedback and mix,
 - `juce::dsp::Reverb`.
 
-Switching the delay off clears its delay line, so old feedback cannot reappear when it is switched back on. Bypassing the whole post-FX block also clears the delay tail.
+The chorus and flanger share the modulated-delay core; all three share the LFO and parameter-smoothing framework, but use different delay ranges, waveforms and filter topologies. The Room is a short delay network, not a long reverb; the separate Reverb provides the long tail.
+
+Switching the delay off clears its delay line, so old feedback cannot reappear when it is switched back on. Bypassing the whole post-FX block also clears the delay and room buffers.
 
 ### File management and persistence
 
@@ -158,7 +162,7 @@ Switching the delay off clears its delay line, so old feedback cannot reappear w
   - Linux: `~/.config/NAMBerry/NAMBerry.settings`
   - macOS/Windows: under the standard user application-data directory, in `NAMBerry/NAMBerry.settings`.
 
-DAW project state stores all parameter values through `AudioProcessorValueTreeState`; the model/IR paths and roots live in the per-user settings file.
+DAW project state stores all parameter values through `AudioProcessorValueTreeState`; the model/IR paths and roots live in the per-user settings file. Existing projects with the old 0–1 modulation ranges are migrated once to the new percentage values when loaded.
 
 ### UI
 
@@ -185,7 +189,7 @@ The editor is JUCE-native and hardware-inspired:
 | NAM inference | **NeuralAudio** (with NeuralAmpModelerCore, RTNeural and its submodules) |
 | IR convolution | `juce::dsp::Convolution` |
 | EQ / dynamics | JUCE `dsp::IIR`, custom compressor/gate |
-| Post FX | JUCE `dsp::Chorus`, `dsp::Phaser`, `dsp::DelayLine`, `dsp::Reverb` |
+| Post FX | Custom LFO/modulated-delay chorus and flanger; custom 4/8/12-stage phaser; custom short-delay `Room`; JUCE `dsp::DelayLine` and `dsp::Reverb` |
 | Pitch | Custom DualTap and PSOLA engines; optional Signalsmith Stretch/Linear kept in `deps/` |
 | Settings | JUCE `PropertiesFile` |
 | Build | CMake 3.22+, CMake presets, helper scripts |
@@ -219,10 +223,12 @@ src/
   pitch_shift_engines.cpp
   digital_capo.cpp      # shared pitch stage
   drop_tuner.cpp
+  modulation_effects.cpp
   ir_loader.cpp
   multi_band_eq.cpp
   compressor.cpp
   noise_gate.cpp
+  room.cpp
   post_effects.cpp
 
 include/namberry/
@@ -231,10 +237,12 @@ include/namberry/
   PitchShiftEngines.h
   DigitalCapo.h
   DropTuner.h
+  ModulationEffects.h
   IrLoader.h
   MultiBandEQ.h
   Compressor.h
   NoiseGate.h
+  Room.h
   PostEffects.h
   DirectoryBrowser.h
 
@@ -466,14 +474,15 @@ The slots sum into the cabinet output. The default IR mix is 100 % wet; the IR s
 
 ### Post FX
 
-- Chorus: mix, rate, depth, bypass.
-- Flanger: mix, rate, depth, feedback, bypass.
-- Phaser: mix, rate, depth, bypass.
+- Chorus: rate, depth, feedback, delay, mix, bypass.
+- Flanger: rate, depth, manual, feedback, mix, bypass.
+- Phaser: rate, depth, feedback, stages, mix, bypass.
+- Room: size, blend, bypass. This is a short delay-based room, not a long reverb: **Blend** sets the amount of room signal and **Size** scales the short delays. A low fixed feedback and fixed low-pass give it a short, dense decay.
 - Delay: mix, time, feedback, bypass.
 - Reverb: mix, decay, width, bypass.
 - Master output.
 
-Switching the delay off discards its feedback tail.
+The Room is bypassed by default; engage its footswitch and set **Blend** to add ambience. Switching the delay off discards its feedback tail. Switching the room off clears its delay buffers.
 
 ### Reduced Motion
 
@@ -509,6 +518,9 @@ cmake --build build --target NAMBerryOfflineTest NAMBerryUiSnapshot
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --detected-stage
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --dry-center
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --delay-reset
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --room
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --modulation
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --fx-state
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --reference
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --persist
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --dirs
@@ -527,6 +539,9 @@ What they cover:
 - `--detected-stage`: detector → pitch stage.
 - `--dry-center`: verifies both channels are identical when fully dry.
 - `--delay-reset`: verifies the delay tail is discarded on bypass.
+- `--room`: verifies the room blend, short-delay reflections, controlled decay, and bypass behaviour.
+- `--modulation`: verifies finite chorus, flanger and phaser output, all phaser stage counts, and bypass.
+- `--fx-state`: verifies migration of old post-FX parameter ranges/defaults.
 - `--reference`: verifies 432/440 Hz reference behaviour.
 - `--persist`: restores selected amp, pedal and IR paths; expects local sample files and skips if they are missing.
 - `--dirs`: sets the two root directories.
@@ -561,6 +576,7 @@ The snapshot tool is headless and does not need a DAW.
 - **PSOLA downshifts at 5 ms are limited**, especially on low notes; use DualTap for drop tunings. There is intentionally no automatic engine switch.
 - A 5 ms window is shorter than the period of low E, A and D; some artifacts on those notes are inherent to the latency target.
 - NAM model latency is not separately reported by the plugin; only the pitch-stage latency is reported.
+- The **Room** is a short delay network with a controlled decay, not a long reverb; use the Reverb effect for a long tail.
 - The plugin is **stereo in / stereo out only**.
 - Model and IR paths are **per-user settings**, not embedded in the DAW project. Moving a project to another machine may require reloading them.
 - `ui-spec.md` is an earlier Qt/QML exploration; the shipped UI is JUCE-native.
