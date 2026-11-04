@@ -57,8 +57,10 @@ target_sources(NAMBerry PRIVATE
     src/digital_capo.cpp
     src/pitch_shifter.cpp
     src/pitch_shift_engines.cpp
+    src/modulation_effects.cpp
     src/compressor.cpp
     src/noise_gate.cpp
+    src/room.cpp
     src/post_effects.cpp
 )
 
