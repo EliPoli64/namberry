@@ -9,6 +9,8 @@
 
 #include "PluginProcessor.h"
 
+#include "namberry/Room.h"
+
 #include <juce_audio_basics/juce_audio_basics.h>
 
 #include <cmath>
@@ -598,6 +600,285 @@ int runDelayResetTest()
     return passed ? 0 : 2;
 }
 
+int runRoomTest()
+{
+    constexpr double sampleRate = 48000.0;
+    constexpr int blockSize = 4096;
+
+    namberry::Room room;
+    juce::dsp::ProcessSpec spec;
+    spec.sampleRate = sampleRate;
+    spec.maximumBlockSize = blockSize;
+    spec.numChannels = 2;
+    room.prepare (spec);
+    room.setSize (0.45f);
+    room.setBlend (0.6f);
+    room.setBypass (false);
+
+    juce::AudioBuffer<float> buffer (2, blockSize);
+    juce::MidiBuffer midi;
+
+    // Let the dry/wet ramp settle before measuring.
+    for (int i = 0; i < 2; ++i)
+    {
+        buffer.clear();
+        room.processBlock (buffer, midi);
+    }
+
+    buffer.clear();
+    buffer.setSample (0, 0, 1.0f);
+    buffer.setSample (1, 0, 1.0f);
+    room.processBlock (buffer, midi);
+
+    const float direct = buffer.getSample (0, 0);
+
+    float reflectionEnergy = 0.0f;
+    for (int i = 1; i < blockSize; ++i)
+        reflectionEnergy += std::abs (buffer.getSample (0, i));
+
+    // The short feedback network should still be audible in the next block,
+    // then decay to silence. It must not behave like a long reverb.
+    buffer.clear();
+    room.processBlock (buffer, midi);
+
+    float shortTailEnergy = 0.0f;
+    for (int i = 0; i < blockSize; ++i)
+        shortTailEnergy += std::abs (buffer.getSample (0, i));
+
+    float lateTailEnergy = 0.0f;
+    for (int block = 0; block < 8; ++block)
+    {
+        buffer.clear();
+        room.processBlock (buffer, midi);
+
+        if (block == 7)
+        {
+            for (int i = 0; i < blockSize; ++i)
+                lateTailEnergy += std::abs (buffer.getSample (0, i));
+        }
+    }
+
+    // Bypassed, the room must pass the dry impulse unchanged.
+    room.setBypass (true);
+    buffer.clear();
+    buffer.setSample (0, 0, 1.0f);
+    buffer.setSample (1, 0, 1.0f);
+    room.processBlock (buffer, midi);
+
+    const float bypassedDirect = buffer.getSample (0, 0);
+    float bypassedResidue = 0.0f;
+    for (int i = 1; i < blockSize; ++i)
+        bypassedResidue += std::abs (buffer.getSample (0, i));
+
+    const bool blendOk = direct > 0.35f && direct < 0.45f;
+    const bool reflectionsOk = reflectionEnergy > 1.0e-4f;
+    const bool shortTailOk = shortTailEnergy > 1.0e-5f;
+    const bool tailDecaysOk = lateTailEnergy < 1.0e-5f;
+    const bool bypassOk = std::abs (bypassedDirect - 1.0f) < 1.0e-6f
+                       && bypassedResidue < 1.0e-7f;
+
+    const bool passed = blendOk && reflectionsOk && shortTailOk
+                     && tailDecaysOk && bypassOk;
+
+    std::cout << "room direct=" << direct
+              << " reflections=" << reflectionEnergy
+              << " shortTail=" << shortTailEnergy
+              << " lateTail=" << lateTailEnergy
+              << " bypass=" << bypassedDirect
+              << " " << (passed ? "PASS" : "FAIL") << "\n";
+
+    return passed ? 0 : 2;
+}
+
+int runModulationTest()
+{
+    constexpr double sampleRate = 48000.0;
+    constexpr int blockSize = 512;
+
+    namberry::PostEffects fx;
+    juce::dsp::ProcessSpec spec;
+    spec.sampleRate = sampleRate;
+    spec.maximumBlockSize = blockSize;
+    spec.numChannels = 2;
+    fx.prepare (spec);
+    fx.setBypass (false);
+
+    juce::AudioBuffer<float> buffer (2, blockSize);
+    juce::MidiBuffer midi;
+    double sampleIndex = 0.0;
+
+    auto render = [&] (int blocks)
+    {
+        float peak = 0.0f;
+        bool finite = true;
+
+        for (int block = 0; block < blocks; ++block)
+        {
+            for (int i = 0; i < blockSize; ++i, ++sampleIndex)
+            {
+                const float input = 0.25f * static_cast<float> (
+                    std::sin (2.0 * juce::MathConstants<double>::pi * 220.0
+                              * sampleIndex / sampleRate));
+
+                buffer.setSample (0, i, input);
+                buffer.setSample (1, i, input);
+            }
+
+            fx.processBlock (buffer, midi);
+
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = 0; i < blockSize; ++i)
+                {
+                    const float x = buffer.getSample (ch, i);
+                    finite = finite && std::isfinite (x);
+                    peak = juce::jmax (peak, std::abs (x));
+                }
+        }
+
+        return std::pair<bool, float> { finite, peak };
+    };
+
+    auto bypassAll = [&]
+    {
+        fx.setChorusBypass (true);
+        fx.setFlangerBypass (true);
+        fx.setPhaserBypass (true);
+        fx.setRoomBypass (true);
+        fx.setDelayBypass (true);
+        fx.setReverbBypass (true);
+    };
+
+    bypassAll();
+
+    fx.setChorusBypass (false);
+    fx.setChorusRate (0.8f);
+    fx.setChorusDepth (50.0f);
+    fx.setChorusFeedback (15.0f);
+    fx.setChorusDelay (15.0f);
+    fx.setChorusMix (100.0f);
+    const auto chorus = render (8);
+
+    bypassAll();
+    fx.setFlangerBypass (false);
+    fx.setFlangerRate (0.4f);
+    fx.setFlangerDepth (60.0f);
+    fx.setFlangerManual (2.0f);
+    fx.setFlangerFeedback (95.0f);
+    fx.setFlangerMix (100.0f);
+    const auto flanger = render (8);
+
+    bypassAll();
+    fx.setPhaserBypass (false);
+    fx.setPhaserRate (0.5f);
+    fx.setPhaserDepth (70.0f);
+    fx.setPhaserFeedback (30.0f);
+    fx.setPhaserMix (100.0f);
+
+    std::pair<bool, float> phaser { true, 0.0f };
+
+    for (const int stages : { 4, 8, 12 })
+    {
+        fx.setPhaserStages (stages);
+        const auto result = render (4);
+        phaser.first = phaser.first && result.first;
+        phaser.second = juce::jmax (phaser.second, result.second);
+    }
+
+    bypassAll();
+    buffer.clear();
+    buffer.setSample (0, 0, 0.5f);
+    buffer.setSample (1, 0, 0.5f);
+    fx.processBlock (buffer, midi);
+    const bool bypassOk = std::abs (buffer.getSample (0, 0) - 0.5f) < 1.0e-6f
+                       && std::abs (buffer.getSample (1, 0) - 0.5f) < 1.0e-6f;
+
+    const bool passed = chorus.first && chorus.second > 1.0e-4f
+                     && flanger.first && flanger.second > 1.0e-4f
+                     && phaser.first && phaser.second > 1.0e-4f
+                     && bypassOk;
+
+    std::cout << "modulation chorus=" << chorus.second
+              << " flanger=" << flanger.second
+              << " phaser=" << phaser.second
+              << " " << (passed ? "PASS" : "FAIL") << "\n";
+
+    return passed ? 0 : 2;
+}
+
+int runFxStateMigrationTest()
+{
+    namberry::NAMBerryProcessor processor;
+    auto state = processor.getValueTreeState().copyState();
+    state.removeProperty ("fxVersion", nullptr);
+
+    auto setValue = [&] (const juce::String& id, float value)
+    {
+        auto child = state.getChildWithProperty ("id", id);
+        if (child.isValid())
+            child.setProperty ("value", value, nullptr);
+    };
+
+    auto removeChild = [&] (const juce::String& id)
+    {
+        for (int i = 0; i < state.getNumChildren(); ++i)
+        {
+            if (state.getChild (i).getProperty ("id").toString() == id)
+            {
+                state.removeChild (i, nullptr);
+                return;
+            }
+        }
+    };
+
+    setValue ("chorusMix", 0.2f);
+    setValue ("chorusDepth", 0.35f);
+    setValue ("flangerFeedback", 0.4f);
+    setValue ("phaserDepth", 0.5f);
+    setValue ("chorusRate", 1.5f);
+
+    removeChild ("chorusFeedback");
+    removeChild ("chorusDelay");
+    removeChild ("flangerManual");
+    removeChild ("phaserFeedback");
+    removeChild ("phaserStages");
+
+    std::unique_ptr<juce::XmlElement> xml (state.createXml());
+    juce::MemoryBlock block;
+    juce::AudioProcessor::copyXmlToBinary (*xml, block);
+    processor.setStateInformation (block.getData(), static_cast<int> (block.getSize()));
+
+    auto& params = processor.getValueTreeState();
+    const float chorusMix = params.getRawParameterValue ("chorusMix")->load();
+    const float chorusDepth = params.getRawParameterValue ("chorusDepth")->load();
+    const float flangerFeedback = params.getRawParameterValue ("flangerFeedback")->load();
+    const float phaserDepth = params.getRawParameterValue ("phaserDepth")->load();
+    const float chorusFeedback = params.getRawParameterValue ("chorusFeedback")->load();
+    const float chorusDelay = params.getRawParameterValue ("chorusDelay")->load();
+    const float flangerManual = params.getRawParameterValue ("flangerManual")->load();
+    const float phaserFeedback = params.getRawParameterValue ("phaserFeedback")->load();
+    const float phaserStages = params.getRawParameterValue ("phaserStages")->load();
+
+    const bool passed = std::abs (chorusMix - 20.0f) < 0.01f
+                     && std::abs (chorusDepth - 35.0f) < 0.01f
+                     && std::abs (flangerFeedback - 38.0f) < 0.01f
+                     && std::abs (phaserDepth - 50.0f) < 0.01f
+                     && std::abs (chorusFeedback - 15.0f) < 0.01f
+                     && std::abs (chorusDelay - 15.0f) < 0.01f
+                     && std::abs (flangerManual - 2.0f) < 0.01f
+                     && std::abs (phaserFeedback - 30.0f) < 0.01f
+                     && std::abs (phaserStages - 8.0f) < 0.01f;
+
+    std::cout << "migration chorusMix=" << chorusMix
+              << " chorusDepth=" << chorusDepth
+              << " flangerFeedback=" << flangerFeedback
+              << " phaserDepth=" << phaserDepth
+              << " new=" << chorusFeedback << "/" << chorusDelay << "/"
+              << flangerManual << "/" << phaserFeedback << "/" << phaserStages
+              << " " << (passed ? "PASS" : "FAIL") << "\n";
+
+    return passed ? 0 : 2;
+}
+
 int runPersistenceTest()
 {
     const juce::File namRoot ("/home/elipoli/Downloads/amps/NAMs");
@@ -662,6 +943,15 @@ int main (int argc, char** argv)
 
     if (argc > 1 && juce::String (argv[1]) == "--delay-reset")
         return runDelayResetTest();
+
+    if (argc > 1 && juce::String (argv[1]) == "--room")
+        return runRoomTest();
+
+    if (argc > 1 && juce::String (argv[1]) == "--modulation")
+        return runModulationTest();
+
+    if (argc > 1 && juce::String (argv[1]) == "--fx-state")
+        return runFxStateMigrationTest();
 
     if (argc > 1 && juce::String (argv[1]) == "--persist")
         return runPersistenceTest();

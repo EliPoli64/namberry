@@ -186,41 +186,84 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         "chorusBypass", "Chorus Bypass", true));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "chorusMix", "Chorus Mix",
-        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.2f));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "chorusRate", "Chorus Rate",
-        juce::NormalisableRange<float>(0.1f, 10.0f, 0.01f), 1.5f));
+        juce::NormalisableRange<float>(0.1f, 5.0f, 0.01f), 0.8f,
+        juce::AudioParameterFloatAttributes().withLabel ("Hz")));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "chorusDepth", "Chorus Depth",
-        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.35f));
+        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 50.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("%")));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "chorusFeedback", "Chorus Feedback",
+        juce::NormalisableRange<float>(0.0f, 70.0f, 1.0f), 15.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("%")));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "chorusDelay", "Chorus Delay",
+        juce::NormalisableRange<float>(5.0f, 30.0f, 0.1f), 15.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("ms")));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "chorusMix", "Chorus Mix",
+        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 50.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("%")));
 
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         "flangerBypass", "Flanger Bypass", true));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "flangerMix", "Flanger Mix",
-        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.2f));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "flangerRate", "Flanger Rate",
-        juce::NormalisableRange<float>(0.1f, 10.0f, 0.01f), 0.8f));
+        juce::NormalisableRange<float>(0.05f, 10.0f, 0.01f), 0.4f,
+        juce::AudioParameterFloatAttributes().withLabel ("Hz")));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "flangerDepth", "Flanger Depth",
-        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.5f));
+        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 60.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("%")));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "flangerManual", "Flanger Manual",
+        juce::NormalisableRange<float>(0.5f, 10.0f, 0.1f), 2.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("ms")));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "flangerFeedback", "Flanger Feedback",
-        juce::NormalisableRange<float>(-1.0f, 1.0f, 0.01f), 0.35f));
+        juce::NormalisableRange<float>(-95.0f, 95.0f, 1.0f), 40.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("%")));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "flangerMix", "Flanger Mix",
+        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 50.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("%")));
 
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         "phaserBypass", "Phaser Bypass", true));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "phaserMix", "Phaser Mix",
-        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.2f));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "phaserRate", "Phaser Rate",
-        juce::NormalisableRange<float>(0.1f, 10.0f, 0.01f), 0.7f));
+        juce::NormalisableRange<float>(0.05f, 8.0f, 0.01f), 0.5f,
+        juce::AudioParameterFloatAttributes().withLabel ("Hz")));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "phaserDepth", "Phaser Depth",
-        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.5f));
+        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 70.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("%")));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "phaserFeedback", "Phaser Feedback",
+        juce::NormalisableRange<float>(0.0f, 90.0f, 1.0f), 30.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("%")));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "phaserStages", "Phaser Stages",
+        juce::NormalisableRange<float>(4.0f, 12.0f, 4.0f), 8.0f,
+        juce::AudioParameterFloatAttributes().withStringFromValueFunction (
+            [] (float value, int) { return juce::String (juce::roundToInt (value)); })));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "phaserMix", "Phaser Mix",
+        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 50.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("%")));
+
+    // ---- Room ambience (short delay network; not a long reverb) ----
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        "roomBypass", "Room Bypass", true));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "roomSize", "Room Size",
+        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 45.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("%")));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "roomBlend", "Room Blend",
+        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 50.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("%")));
 
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         "delayBypass", "Delay Bypass", true));
@@ -268,6 +311,81 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
 
     return { params.begin(), params.end() };
 }
+
+//==============================================================================
+namespace {
+
+constexpr int kFxStateVersion = 2;
+
+juce::ValueTree findParameterState (const juce::ValueTree& state, const juce::String& id)
+{
+    return state.getChildWithProperty ("id", id);
+}
+
+float parameterValue (const juce::ValueTree& state, const juce::String& id, float fallback)
+{
+    const auto child = findParameterState (state, id);
+    return child.isValid() ? static_cast<float> (child.getProperty ("value", fallback))
+                           : fallback;
+}
+
+void setParameterValue (juce::ValueTree& state, const juce::String& id, float value)
+{
+    auto child = findParameterState (state, id);
+
+    if (child.isValid())
+        child.setProperty ("value", value, nullptr);
+}
+
+void addParameterIfMissing (juce::ValueTree& state, const juce::String& id, float value)
+{
+    if (findParameterState (state, id).isValid())
+        return;
+
+    juce::ValueTree parameter ("PARAM");
+    parameter.setProperty ("id", id, nullptr);
+    parameter.setProperty ("value", value, nullptr);
+    state.appendChild (parameter, nullptr);
+}
+
+void migrateFxCamelCaseState (juce::ValueTree& state)
+{
+    // The original post-FX parameters stored mix/depth in 0..1. The revamped
+    // pedals use 0..100 (%), so convert existing project state once.
+    for (const auto* id : { "chorusMix", "chorusDepth",
+                            "flangerMix", "flangerDepth",
+                            "phaserMix", "phaserDepth" })
+    {
+        setParameterValue (state, id, parameterValue (state, id, 0.0f) * 100.0f);
+    }
+
+    setParameterValue (state, "flangerFeedback",
+                       juce::jlimit (-95.0f, 95.0f,
+                                     parameterValue (state, "flangerFeedback", 0.0f) * 95.0f));
+
+    setParameterValue (state, "chorusRate",
+                       juce::jlimit (0.1f, 5.0f, parameterValue (state, "chorusRate", 1.5f)));
+    setParameterValue (state, "flangerRate",
+                       juce::jlimit (0.05f, 10.0f, parameterValue (state, "flangerRate", 0.8f)));
+    setParameterValue (state, "phaserRate",
+                       juce::jlimit (0.05f, 8.0f, parameterValue (state, "phaserRate", 0.7f)));
+
+    addParameterIfMissing (state, "chorusFeedback", 15.0f);
+    addParameterIfMissing (state, "chorusDelay", 15.0f);
+    addParameterIfMissing (state, "flangerManual", 2.0f);
+    addParameterIfMissing (state, "phaserFeedback", 30.0f);
+    addParameterIfMissing (state, "phaserStages", 8.0f);
+
+    // Room was added after the original post-FX block; keep old projects
+    // usable if they predate it.
+    addParameterIfMissing (state, "roomBypass", 1.0f);
+    addParameterIfMissing (state, "roomSize", 45.0f);
+    addParameterIfMissing (state, "roomBlend", 50.0f);
+
+    state.setProperty ("fxVersion", kFxStateVersion, nullptr);
+}
+
+} // namespace
 
 //==============================================================================
 NAMBerryProcessor::NAMBerryProcessor()
@@ -491,6 +609,7 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         postEffects_->setBypass (apvts_.getRawParameterValue("chorusBypass")->load() > 0.5f
             && apvts_.getRawParameterValue("flangerBypass")->load() > 0.5f
             && apvts_.getRawParameterValue("phaserBypass")->load() > 0.5f
+            && apvts_.getRawParameterValue("roomBypass")->load() > 0.5f
             && apvts_.getRawParameterValue("delayBypass")->load() > 0.5f
             && apvts_.getRawParameterValue("reverbBypass")->load() > 0.5f);
 
@@ -498,17 +617,26 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         postEffects_->setChorusMix (apvts_.getRawParameterValue("chorusMix")->load());
         postEffects_->setChorusRate (apvts_.getRawParameterValue("chorusRate")->load());
         postEffects_->setChorusDepth (apvts_.getRawParameterValue("chorusDepth")->load());
+        postEffects_->setChorusFeedback (apvts_.getRawParameterValue("chorusFeedback")->load());
+        postEffects_->setChorusDelay (apvts_.getRawParameterValue("chorusDelay")->load());
 
         postEffects_->setFlangerBypass (apvts_.getRawParameterValue("flangerBypass")->load() > 0.5f);
         postEffects_->setFlangerMix (apvts_.getRawParameterValue("flangerMix")->load());
         postEffects_->setFlangerRate (apvts_.getRawParameterValue("flangerRate")->load());
         postEffects_->setFlangerDepth (apvts_.getRawParameterValue("flangerDepth")->load());
+        postEffects_->setFlangerManual (apvts_.getRawParameterValue("flangerManual")->load());
         postEffects_->setFlangerFeedback (apvts_.getRawParameterValue("flangerFeedback")->load());
 
         postEffects_->setPhaserBypass (apvts_.getRawParameterValue("phaserBypass")->load() > 0.5f);
         postEffects_->setPhaserMix (apvts_.getRawParameterValue("phaserMix")->load());
         postEffects_->setPhaserRate (apvts_.getRawParameterValue("phaserRate")->load());
         postEffects_->setPhaserDepth (apvts_.getRawParameterValue("phaserDepth")->load());
+        postEffects_->setPhaserFeedback (apvts_.getRawParameterValue("phaserFeedback")->load());
+        postEffects_->setPhaserStages (static_cast<int> (apvts_.getRawParameterValue("phaserStages")->load()));
+
+        postEffects_->setRoomBypass (apvts_.getRawParameterValue("roomBypass")->load() > 0.5f);
+        postEffects_->setRoomSize (apvts_.getRawParameterValue("roomSize")->load() * 0.01f);
+        postEffects_->setRoomBlend (apvts_.getRawParameterValue("roomBlend")->load() * 0.01f);
 
         postEffects_->setDelayBypass (apvts_.getRawParameterValue("delayBypass")->load() > 0.5f);
         postEffects_->setDelayMix (apvts_.getRawParameterValue("delayMix")->load());
@@ -552,6 +680,7 @@ bool NAMBerryProcessor::isBusesLayoutSupported (const BusesLayout& layouts) cons
 void NAMBerryProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     auto state = apvts_.copyState();
+    state.setProperty ("fxVersion", kFxStateVersion, nullptr);
     std::unique_ptr<juce::XmlElement> xml (state.createXml());
     copyXmlToBinary (*xml, destData);
 }
@@ -561,7 +690,15 @@ void NAMBerryProcessor::setStateInformation (const void* data, int sizeInBytes)
     std::unique_ptr<juce::XmlElement> xml (getXmlFromBinary (data, sizeInBytes));
     if (xml != nullptr)
     {
-        apvts_.replaceState (juce::ValueTree::fromXml (*xml));
+        auto state = juce::ValueTree::fromXml (*xml);
+
+        if (state.isValid())
+        {
+            if (static_cast<int> (state.getProperty ("fxVersion", 0)) < kFxStateVersion)
+                migrateFxCamelCaseState (state);
+
+            apvts_.replaceState (state);
+        }
     }
 }
 

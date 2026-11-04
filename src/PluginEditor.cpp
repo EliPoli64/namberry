@@ -612,6 +612,12 @@ public:
         label_.setFont (juce::FontOptions (size, juce::Font::bold));
     }
 
+    void setStepSize (double step)
+    {
+        if (sliderAttachment_ != nullptr)
+            slider_.setRange (slider_.getMinimum(), slider_.getMaximum(), step);
+    }
+
     void resized() override
     {
         auto r = getLocalBounds();
@@ -1687,6 +1693,7 @@ void NAMBerryEditor::buildUi()
     const juce::Colour chorusBody  (0xff1e3a8a), chorusAccent  (0xff60a5fa);
     const juce::Colour flangerBody (0xff4c1d95), flangerAccent (0xffc084fc);
     const juce::Colour phaserBody  (0xff831843), phaserAccent  (0xfff472b6);
+    const juce::Colour roomBody    (0xff4a3a2a), roomAccent    (0xffe0b080);
     const juce::Colour delayBody   (0xff713f12), delayAccent   (0xfffacc15);
     const juce::Colour reverbBody  (0xff1e3a5f), reverbAccent  (0xff93c5fd);
     const juce::Colour outBody     (0xff26262b), outAccent     (0xff22d3ee);
@@ -1859,29 +1866,46 @@ void NAMBerryEditor::buildUi()
     if (auto* chorus = makePanel (4, "CHORUS", UnitStyle::Pedal, 2, 0,
                                   chorusBody, chorusAccent))
     {
-        chorus->addItem (makeControl ("chorusMix", "Mix"));
         chorus->addItem (makeControl ("chorusRate", "Rate"));
         chorus->addItem (makeControl ("chorusDepth", "Depth"));
+        chorus->addItem (makeControl ("chorusFeedback", "Feedback"));
+        chorus->addItem (makeControl ("chorusDelay", "Delay"));
+        chorus->addItem (makeControl ("chorusMix", "Mix"));
         chorus->setFooter (makeFootswitch ("chorusBypass", chorusAccent), 82);
     }
 
     if (auto* flanger = makePanel (4, "FLANGER", UnitStyle::Pedal, 2, 0,
                                    flangerBody, flangerAccent))
     {
-        flanger->addItem (makeControl ("flangerMix", "Mix"));
         flanger->addItem (makeControl ("flangerRate", "Rate"));
         flanger->addItem (makeControl ("flangerDepth", "Depth"));
+        flanger->addItem (makeControl ("flangerManual", "Manual"));
         flanger->addItem (makeControl ("flangerFeedback", "Feedback"));
+        flanger->addItem (makeControl ("flangerMix", "Mix"));
         flanger->setFooter (makeFootswitch ("flangerBypass", flangerAccent), 82);
     }
 
     if (auto* phaser = makePanel (4, "PHASER", UnitStyle::Pedal, 2, 0,
                                   phaserBody, phaserAccent))
     {
-        phaser->addItem (makeControl ("phaserMix", "Mix"));
         phaser->addItem (makeControl ("phaserRate", "Rate"));
         phaser->addItem (makeControl ("phaserDepth", "Depth"));
+        phaser->addItem (makeControl ("phaserFeedback", "Feedback"));
+
+        auto* stages = makeControl ("phaserStages", "Stages");
+        stages->setStepSize (4.0);
+        phaser->addItem (stages);
+
+        phaser->addItem (makeControl ("phaserMix", "Mix"));
         phaser->setFooter (makeFootswitch ("phaserBypass", phaserAccent), 82);
+    }
+
+    if (auto* room = makePanel (4, "ROOM", UnitStyle::Pedal, 1, 176,
+                                roomBody, roomAccent))
+    {
+        room->addItem (makeControl ("roomSize", "Size"));
+        room->addItem (makeControl ("roomBlend", "Blend"));
+        room->setFooter (makeFootswitch ("roomBypass", roomAccent), 82);
     }
 
     if (auto* delay = makePanel (4, "DELAY", UnitStyle::Pedal, 2, 0,
