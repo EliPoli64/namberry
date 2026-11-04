@@ -3,13 +3,16 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_dsp/juce_dsp.h>
 
+#include "namberry/ModulationEffects.h"
+#include "namberry/Room.h"
+
 namespace namberry {
 
-/// Post-amp effects: Chorus, Flanger, Phaser, Delay and Reverb.
+/// Post-amp effects: Chorus, Flanger, Phaser, short Room ambience, Delay and
+/// Reverb.
 ///
-/// Each effect owns its own state and is built on JUCE's DSP classes
-/// (dsp::Chorus, dsp::Phaser, dsp::DelayLine, dsp::Reverb), so enabling one
-/// effect never corrupts another.
+/// The three modulation pedals use a shared custom LFO/delay framework; Room
+/// is a custom short-delay ambience, and Delay/Reverb use JUCE DSP.
 class PostEffects
 {
 public:
@@ -23,7 +26,13 @@ public:
     void setBypass (bool bypassed)
     {
         if (bypassed && ! bypass_)
+        {
+            chorus_.reset();
+            flanger_.reset();
+            phaser_.reset();
+            room_.reset();
             delayLine_.reset();
+        }
 
         bypass_ = bypassed;
     }
@@ -33,18 +42,45 @@ public:
     void setChorusMix (float value);
     void setChorusRate (float value);
     void setChorusDepth (float value);
-    void setChorusBypass (bool value) { chorusBypass_ = value; }
+    void setChorusFeedback (float value);
+    void setChorusDelay (float value);
+    void setChorusBypass (bool value)
+    {
+        if (value && ! chorusBypass_)
+            chorus_.reset();
+
+        chorusBypass_ = value;
+    }
 
     void setFlangerMix (float value);
     void setFlangerRate (float value);
     void setFlangerDepth (float value);
+    void setFlangerManual (float value);
     void setFlangerFeedback (float value);
-    void setFlangerBypass (bool value) { flangerBypass_ = value; }
+    void setFlangerBypass (bool value)
+    {
+        if (value && ! flangerBypass_)
+            flanger_.reset();
+
+        flangerBypass_ = value;
+    }
 
     void setPhaserMix (float value);
     void setPhaserRate (float value);
     void setPhaserDepth (float value);
-    void setPhaserBypass (bool value) { phaserBypass_ = value; }
+    void setPhaserFeedback (float value);
+    void setPhaserStages (int stages);
+    void setPhaserBypass (bool value)
+    {
+        if (value && ! phaserBypass_)
+            phaser_.reset();
+
+        phaserBypass_ = value;
+    }
+
+    void setRoomSize (float value);
+    void setRoomBlend (float value);
+    void setRoomBypass (bool value) { room_.setBypass (value); }
 
     void setDelayMix (float value);
     void setDelayTimeMs (float value);
@@ -67,29 +103,14 @@ public:
     void setReverbBypass (bool value) { reverbBypass_ = value; }
 
 private:
-    void updateChorus();
-    void updateFlanger();
-    void updatePhaser();
     void updateReverb();
 
     double sampleRate_ = 44100.0;
     bool bypass_ = false;
 
     bool chorusBypass_ = true;
-    float chorusMix_ = 0.2f;
-    float chorusRate_ = 1.5f;
-    float chorusDepth_ = 0.35f;
-
     bool flangerBypass_ = true;
-    float flangerMix_ = 0.2f;
-    float flangerRate_ = 0.8f;
-    float flangerDepth_ = 0.5f;
-    float flangerFeedback_ = 0.35f;
-
     bool phaserBypass_ = true;
-    float phaserMix_ = 0.2f;
-    float phaserRate_ = 0.7f;
-    float phaserDepth_ = 0.5f;
 
     bool delayBypass_ = true;
     float delayMix_ = 0.25f;
@@ -101,9 +122,10 @@ private:
     float reverbDecay_ = 0.5f;
     float reverbWidth_ = 0.7f;
 
-    juce::dsp::Chorus<float> chorus_;
-    juce::dsp::Chorus<float> flanger_;
-    juce::dsp::Phaser<float> phaser_;
+    ModulatedDelay chorus_ { 40.0f, ModulationLfo::Waveform::sine, 0.5f, 5.0f };
+    ModulatedDelay flanger_ { 10.0f, ModulationLfo::Waveform::triangle, 0.0f, 2.0f };
+    Phaser phaser_;
+    Room room_;
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> delayLine_;
     juce::dsp::Reverb reverb_;
 
