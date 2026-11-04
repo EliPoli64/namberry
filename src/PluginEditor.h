@@ -42,6 +42,7 @@ private:
     juce::Viewport viewport_;
     juce::Component content_;
     juce::TabbedButtonBar tabBar_;
+    std::unique_ptr<juce::Component> bottomKnobs_;
 
     juce::ToggleButton reducedMotionButton_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> reducedMotionAttachment_;

@@ -253,16 +253,14 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
         juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 50.0f,
         juce::AudioParameterFloatAttributes().withLabel ("%")));
 
-    // ---- Room ambience (short delay network; not a long reverb) ----
-    params.push_back(std::make_unique<juce::AudioParameterBool>(
-        "roomBypass", "Room Bypass", true));
+    // ---- Room ambience (convolution; not a long reverb) ----
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "roomSize", "Room Size",
         juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 45.0f,
         juce::AudioParameterFloatAttributes().withLabel ("%")));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "roomBlend", "Room Blend",
-        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 50.0f,
+        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 0.0f,
         juce::AudioParameterFloatAttributes().withLabel ("%")));
 
     params.push_back(std::make_unique<juce::AudioParameterBool>(
@@ -348,6 +346,17 @@ void addParameterIfMissing (juce::ValueTree& state, const juce::String& id, floa
     state.appendChild (parameter, nullptr);
 }
 
+void migrateRoomBypassState (juce::ValueTree& state)
+{
+    const auto roomBypass = findParameterState (state, "roomBypass");
+
+    if (roomBypass.isValid()
+        && static_cast<float> (roomBypass.getProperty ("value", 1.0f)) > 0.5f)
+    {
+        setParameterValue (state, "roomBlend", 0.0f);
+    }
+}
+
 void migrateFxCamelCaseState (juce::ValueTree& state)
 {
     // The original post-FX parameters stored mix/depth in 0..1. The revamped
@@ -377,10 +386,10 @@ void migrateFxCamelCaseState (juce::ValueTree& state)
     addParameterIfMissing (state, "phaserStages", 8.0f);
 
     // Room was added after the original post-FX block; keep old projects
-    // usable if they predate it.
-    addParameterIfMissing (state, "roomBypass", 1.0f);
+    // usable if they predate it. The room is now always available with a 0 %
+    // default mix, so no bypass parameter is added.
     addParameterIfMissing (state, "roomSize", 45.0f);
-    addParameterIfMissing (state, "roomBlend", 50.0f);
+    addParameterIfMissing (state, "roomBlend", 0.0f);
 
     state.setProperty ("fxVersion", kFxStateVersion, nullptr);
 }
@@ -609,7 +618,7 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         postEffects_->setBypass (apvts_.getRawParameterValue("chorusBypass")->load() > 0.5f
             && apvts_.getRawParameterValue("flangerBypass")->load() > 0.5f
             && apvts_.getRawParameterValue("phaserBypass")->load() > 0.5f
-            && apvts_.getRawParameterValue("roomBypass")->load() > 0.5f
+            && apvts_.getRawParameterValue("roomBlend")->load() <= 0.001f
             && apvts_.getRawParameterValue("delayBypass")->load() > 0.5f
             && apvts_.getRawParameterValue("reverbBypass")->load() > 0.5f);
 
@@ -634,7 +643,6 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         postEffects_->setPhaserFeedback (apvts_.getRawParameterValue("phaserFeedback")->load());
         postEffects_->setPhaserStages (static_cast<int> (apvts_.getRawParameterValue("phaserStages")->load()));
 
-        postEffects_->setRoomBypass (apvts_.getRawParameterValue("roomBypass")->load() > 0.5f);
         postEffects_->setRoomSize (apvts_.getRawParameterValue("roomSize")->load() * 0.01f);
         postEffects_->setRoomBlend (apvts_.getRawParameterValue("roomBlend")->load() * 0.01f);
 
@@ -697,6 +705,7 @@ void NAMBerryProcessor::setStateInformation (const void* data, int sizeInBytes)
             if (static_cast<int> (state.getProperty ("fxVersion", 0)) < kFxStateVersion)
                 migrateFxCamelCaseState (state);
 
+            migrateRoomBypassState (state);
             apvts_.replaceState (state);
         }
     }

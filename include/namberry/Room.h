@@ -3,14 +3,11 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_dsp/juce_dsp.h>
 
-#include <array>
-#include <vector>
-
 namespace namberry {
 
-/// Short delay-based room. This is deliberately not a long reverb: a network
-/// of short, damped delay taps with a low fixed feedback gives the tone a
-/// noticeable sense of space without a long tail.
+/// Stereo convolution room built from two generated room impulse responses.
+/// Size crossfades between a small and a large room; Room Mix blends the wet
+/// room with the dry signal. There is no bypass: at 0 % mix the stage is dry.
 class Room
 {
 public:
@@ -21,33 +18,28 @@ public:
     void reset();
     void processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi);
 
-    void setSize (float size);   // 0..1
-    void setBlend (float blend); // 0..1
-    void setBypass (bool bypassed);
-
-    bool isBypassed() const { return bypass_; }
+    void setSize (float size);   // 0..1, small to large
+    void setBlend (float blend); // 0..1 dry/wet
 
 private:
-    static constexpr int kNumTaps = 8;
+    static juce::AudioBuffer<float> makeRoomImpulse (double sampleRate,
+                                                     float durationSeconds,
+                                                     float rt60Seconds,
+                                                     float earlyScale,
+                                                     int seed);
 
-    float readTap (int channel, int writeIndex, float delaySamples) const;
+    juce::dsp::Convolution smallRoom_;
+    juce::dsp::Convolution largeRoom_;
 
-    std::array<std::vector<float>, 2> buffers_;
-    std::array<int, 2> writeIndex_ {};
-    std::array<float, 2> lowpassState_ {};
+    juce::AudioBuffer<float> smallWet_;
+    juce::AudioBuffer<float> largeWet_;
 
-    int bufferSize_ = 0;
     double sampleRate_ = 44100.0;
-    float lowpassCoeff_ = 0.2f;
-
     float size_ = 0.45f;
-    float blend_ = 0.5f;
-    bool bypass_ = true;
+    float blend_ = 0.0f;
 
     juce::SmoothedValue<float> sizeSmoothed_;
     juce::SmoothedValue<float> blendSmoothed_;
-
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Room)
 };
 
 } // namespace namberry

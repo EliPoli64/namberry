@@ -644,6 +644,61 @@ private:
 };
 
 //==============================================================================
+/// Compact always-visible room-mix and master-output knobs beside the tabs.
+class BottomKnobs : public juce::Component
+{
+public:
+    explicit BottomKnobs (APVTS& state)
+    {
+        addAndMakeVisible (title_);
+        title_.setText ("ROOM / MASTER", juce::dontSendNotification);
+        title_.setJustificationType (juce::Justification::centred);
+        title_.setFont (juce::FontOptions (9.0f, juce::Font::bold));
+        title_.setColour (juce::Label::textColourId, juce::Colour (kAccent));
+
+        roomKnob_ = std::make_unique<ParamControl> (state, "roomBlend", "Room Mix");
+        outputKnob_ = std::make_unique<ParamControl> (state, "masterOutput", "Output");
+        addAndMakeVisible (*roomKnob_);
+        addAndMakeVisible (*outputKnob_);
+    }
+
+    int getPreferredHeight() const { return 108; }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto bounds = getLocalBounds().toFloat().reduced (1.0f);
+
+        g.setColour (juce::Colour (0xff26262b));
+        g.fillRoundedRectangle (bounds, 7.0f);
+        g.setColour (juce::Colour (0xff0c0c0e));
+        g.drawRoundedRectangle (bounds, 7.0f, 1.2f);
+        g.setColour (juce::Colour (kAccent).withAlpha (0.8f));
+        g.fillRect (bounds.getX() + 10.0f, bounds.getY() + 1.0f,
+                    bounds.getWidth() - 20.0f, 2.0f);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (6);
+        title_.setBounds (r.removeFromTop (14));
+
+        constexpr int cellWidth = ParamControl::cellWidth;
+        auto controls = r.removeFromTop (84)
+                         .withSizeKeepingCentre (cellWidth * 2, 84);
+
+        roomKnob_->setBounds (controls.removeFromLeft (cellWidth));
+        outputKnob_->setBounds (controls.removeFromLeft (cellWidth));
+    }
+
+private:
+    juce::Label title_;
+    std::unique_ptr<ParamControl> roomKnob_;
+    std::unique_ptr<ParamControl> outputKnob_;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BottomKnobs)
+};
+
+//==============================================================================
 /// A toggle that is clickable but paints nothing, so a Footswitch can own the
 /// visuals while still being bound to an APVTS bool parameter.
 class InvisibleToggle : public juce::ToggleButton
@@ -1559,6 +1614,9 @@ NAMBerryEditor::NAMBerryEditor (NAMBerryProcessor& p)
 
     buildUi();
 
+    bottomKnobs_ = std::make_unique<BottomKnobs> (processor_.getValueTreeState());
+    addAndMakeVisible (*bottomKnobs_);
+
     browser_ = std::make_unique<DirectoryBrowser>();
     browser_->setName ("DirectoryBrowser");
     addChildComponent (browser_.get());
@@ -1701,7 +1759,6 @@ void NAMBerryEditor::buildUi()
     const juce::Colour roomBody    (0xff4a3a2a), roomAccent    (0xffe0b080);
     const juce::Colour delayBody   (0xff713f12), delayAccent   (0xfffacc15);
     const juce::Colour reverbBody  (0xff1e3a5f), reverbAccent  (0xff93c5fd);
-    const juce::Colour outBody     (0xff26262b), outAccent     (0xff22d3ee);
 
     // 1. Pre FX -------------------------------------------------------------
     if (auto* tuner = makePanel (0, "TUNER", UnitStyle::Pedal, 1, 0,
@@ -1862,9 +1919,9 @@ void NAMBerryEditor::buildUi()
             });
         auto* rawGrid = grid.get();
         ownedControls_.push_back (std::move (grid));
-        ir->addRow (rawGrid, 350);
+        ir->addRow (rawGrid, 330);
 
-        ir->setPreferredHeight (470);
+        ir->setPreferredHeight (450);
     }
 
     // 5. Post FX pedals ------------------------------------------------------
@@ -1909,8 +1966,7 @@ void NAMBerryEditor::buildUi()
                                 roomBody, roomAccent))
     {
         room->addItem (makeControl ("roomSize", "Size"));
-        room->addItem (makeControl ("roomBlend", "Blend"));
-        room->setFooter (makeFootswitch ("roomBypass", roomAccent), 82);
+        room->setPreferredHeight (180);
     }
 
     if (auto* delay = makePanel (4, "DELAY", UnitStyle::Pedal, 2, 0,
@@ -1929,13 +1985,6 @@ void NAMBerryEditor::buildUi()
         reverb->addItem (makeControl ("reverbDecay", "Decay"));
         reverb->addItem (makeControl ("reverbWidth", "Width"));
         reverb->setFooter (makeFootswitch ("reverbBypass", reverbAccent), 82);
-    }
-
-    if (auto* output = makePanel (4, "OUTPUT", UnitStyle::RackUnit, 1, 160,
-                                  outBody, outAccent))
-    {
-        output->addItem (makeControl ("masterOutput", "Master"));
-        output->setPreferredHeight (230);
     }
 
     layoutContent();
@@ -2151,12 +2200,17 @@ void NAMBerryEditor::resized()
     reducedMotionButton_.setBounds (headerControls.removeFromRight (190).withSizeKeepingCentre (180, 48));
     presetButton_.setBounds (headerControls.removeFromRight (150).withSizeKeepingCentre (140, 44));
 
-    auto tabArea = r.removeFromBottom (56);
-    const int maxTabWidth = juce::jmax (240, tabArea.getWidth() - 12);
+    constexpr int bottomHeight = 112;
+    constexpr int knobsWidth = 176;
+    constexpr int knobsHeight = 108;
+    constexpr int tabGap = 12;
+
+    auto tabArea = r.removeFromBottom (bottomHeight);
+    const int maxTabWidth = juce::jmax (240, tabArea.getWidth() - knobsWidth - tabGap - 16);
 
     // Lay the bar out at a generous width once, measure the natural button
-    // group, then shrink the bar to that width and centre it. The bar's own
-    // background rail then matches the buttons exactly.
+    // group, then shrink the bar to that width and place the room/master
+    // knobs immediately to its right.
     tabBar_.setBounds (tabArea.withSizeKeepingCentre (juce::jmin (maxTabWidth, 760), 48));
 
     int minX = tabBar_.getWidth();
@@ -2175,7 +2229,17 @@ void NAMBerryEditor::resized()
         ? juce::jmax (240, juce::jmin (maxTabWidth, naturalWidth))
         : juce::jmin (maxTabWidth, 760);
 
-    tabBar_.setBounds (tabArea.withSizeKeepingCentre (barWidth, 48));
+    const int totalWidth = barWidth + tabGap + knobsWidth;
+    const int startX = tabArea.getX()
+        + juce::jmax (0, (tabArea.getWidth() - totalWidth) / 2);
+    const int bottomY = tabArea.getBottom();
+
+    tabBar_.setBounds (startX, bottomY - 48, barWidth, 48);
+
+    if (bottomKnobs_ != nullptr)
+        bottomKnobs_->setBounds (startX + barWidth + tabGap,
+                                 bottomY - knobsHeight,
+                                 knobsWidth, knobsHeight);
 
     viewport_.setBounds (r.reduced (4, 2));
     layoutContent();

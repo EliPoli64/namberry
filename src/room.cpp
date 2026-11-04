@@ -1,44 +1,117 @@
 #include "namberry/Room.h"
 
-#include <algorithm>
 #include <cmath>
+#include <iterator>
 
 namespace namberry {
 
 namespace {
 
-// Prime-ish reflection times for a small-to-medium room. Scaling these by the
-// size control keeps the reflection pattern irregular instead of producing a
-// single obvious echo.
-constexpr float kBaseDelays[] = {
-    0.0071f, 0.0113f, 0.0179f, 0.0233f, 0.0311f, 0.0437f, 0.0593f, 0.0797f
+// Prime-ish early reflections for the generated room impulse responses.
+constexpr float kEarlyDelays[] = {
+    0.0071f, 0.0113f, 0.0179f, 0.0233f, 0.0311f, 0.0437f
 };
 
-constexpr float kTapGains[] = {
-    0.36f, 0.29f, 0.23f, 0.18f, 0.14f, 0.09f, 0.06f, 0.03f
+constexpr float kEarlyGains[] = {
+    0.62f, 0.48f, 0.36f, 0.27f, 0.19f, 0.13f
 };
 
-constexpr float kMaxDelaySeconds = 0.16f;
-constexpr float kStereoSpreadSeconds = 0.0007f;
-constexpr float kLowpassHz = 6500.0f;
-constexpr float kFeedback = 0.30f;
+constexpr float kTailLevel = 0.32f;
+constexpr float kDampingHz = 6500.0f;
 
 } // namespace
+
+//==============================================================================
+juce::AudioBuffer<float> Room::makeRoomImpulse (double sampleRate,
+                                                float durationSeconds,
+                                                float rt60Seconds,
+                                                float earlyScale,
+                                                int seed)
+{
+    const int length = juce::jmax (1, static_cast<int> (std::round (sampleRate * durationSeconds)));
+    juce::AudioBuffer<float> impulse (2, length);
+    impulse.clear();
+
+    // Early reflections: deliberately sparse, with a little stereo offset and
+    // cross-feed so the room has width without being two unrelated mono rooms.
+    for (int tap = 0; tap < static_cast<int> (std::size (kEarlyDelays)); ++tap)
+    {
+        const float baseDelay = kEarlyDelays[tap] * earlyScale;
+        const float gain = kEarlyGains[tap];
+
+        for (int channel = 0; channel < 2; ++channel)
+        {
+            const float spread = (channel == 0 ? 1.0f : -1.0f)
+                               * 0.0008f * static_cast<float> (tap + 1);
+            const int sample = static_cast<int> (std::round ((baseDelay + spread) * sampleRate));
+
+            if (sample <= 0 || sample >= length)
+                continue;
+
+            const int other = 1 - channel;
+            impulse.setSample (channel, sample,
+                               impulse.getSample (channel, sample) + gain * 0.82f);
+            impulse.setSample (other, sample,
+                               impulse.getSample (other, sample) + gain * 0.18f);
+        }
+    }
+
+    // A short, damped diffuse tail makes the result read as a real room rather
+    // than a handful of discrete echoes.
+    const int tailStart = juce::jlimit (1, length - 1,
+                                        static_cast<int> (std::round (sampleRate * 0.012f * earlyScale)));
+    const float lowpassCoeff = 1.0f - std::exp (
+        -2.0f * juce::MathConstants<float>::pi * kDampingHz
+        / static_cast<float> (sampleRate));
+
+    juce::Random randomLeft (seed);
+    juce::Random randomRight (seed + 137);
+
+    float lowpassLeft = 0.0f;
+    float lowpassRight = 0.0f;
+
+    for (int sample = tailStart; sample < length; ++sample)
+    {
+        const float time = static_cast<float> (sample) / static_cast<float> (sampleRate);
+        const float envelope = std::exp (-6.907755f * time / rt60Seconds);
+
+        lowpassLeft += lowpassCoeff
+                     * ((randomLeft.nextFloat() * 2.0f - 1.0f) - lowpassLeft);
+        lowpassRight += lowpassCoeff
+                      * ((randomRight.nextFloat() * 2.0f - 1.0f) - lowpassRight);
+
+        impulse.addSample (0, sample, lowpassLeft * envelope * kTailLevel);
+        impulse.addSample (1, sample, lowpassRight * envelope * kTailLevel);
+    }
+
+    return impulse;
+}
 
 //==============================================================================
 void Room::prepare (const juce::dsp::ProcessSpec& spec)
 {
     sampleRate_ = spec.sampleRate;
 
-    const int tailSamples = static_cast<int> (std::ceil (sampleRate_ * kMaxDelaySeconds));
-    const int maxBlockSamples = static_cast<int> (std::ceil (spec.maximumBlockSize));
-    bufferSize_ = tailSamples + maxBlockSamples + 4;
+    const int wetChannels = juce::jmax (1, static_cast<int> (spec.numChannels));
+    const int maxBlockSize = juce::jmax (1, static_cast<int> (spec.maximumBlockSize));
 
-    for (auto& buffer : buffers_)
-        buffer.assign (static_cast<size_t> (bufferSize_), 0.0f);
+    smallWet_.setSize (wetChannels, maxBlockSize, false, false, true);
+    largeWet_.setSize (wetChannels, maxBlockSize, false, false, true);
 
-    lowpassCoeff_ = 1.0f - std::exp (-2.0f * juce::MathConstants<float>::pi
-                                     * kLowpassHz / static_cast<float> (sampleRate_));
+    auto smallImpulse = makeRoomImpulse (sampleRate_, 0.34f, 0.24f, 0.75f, 0x51a7);
+    auto largeImpulse = makeRoomImpulse (sampleRate_, 0.72f, 0.58f, 1.35f, 0x2b3d);
+
+    smallRoom_.loadImpulseResponse (std::move (smallImpulse), sampleRate_,
+                                    juce::dsp::Convolution::Stereo::yes,
+                                    juce::dsp::Convolution::Trim::no,
+                                    juce::dsp::Convolution::Normalise::yes);
+    largeRoom_.loadImpulseResponse (std::move (largeImpulse), sampleRate_,
+                                    juce::dsp::Convolution::Stereo::yes,
+                                    juce::dsp::Convolution::Trim::no,
+                                    juce::dsp::Convolution::Normalise::yes);
+
+    smallRoom_.prepare (spec);
+    largeRoom_.prepare (spec);
 
     sizeSmoothed_.reset (sampleRate_, 0.05);
     blendSmoothed_.reset (sampleRate_, 0.03);
@@ -48,11 +121,10 @@ void Room::prepare (const juce::dsp::ProcessSpec& spec)
 
 void Room::reset()
 {
-    for (auto& buffer : buffers_)
-        std::fill (buffer.begin(), buffer.end(), 0.0f);
-
-    writeIndex_.fill (0);
-    lowpassState_.fill (0.0f);
+    smallRoom_.reset();
+    largeRoom_.reset();
+    smallWet_.clear();
+    largeWet_.clear();
 
     sizeSmoothed_.setCurrentAndTargetValue (size_);
     blendSmoothed_.setCurrentAndTargetValue (0.0f);
@@ -72,117 +144,50 @@ void Room::setBlend (float blend)
     blendSmoothed_.setTargetValue (blend_);
 }
 
-void Room::setBypass (bool bypassed)
-{
-    if (bypassed == bypass_)
-        return;
-
-    bypass_ = bypassed;
-
-    if (bypassed)
-    {
-        reset();
-    }
-    else
-    {
-        // Fade the room in from silence instead of jumping to the blend value.
-        blendSmoothed_.setCurrentAndTargetValue (0.0f);
-        blendSmoothed_.setTargetValue (blend_);
-    }
-}
-
-//==============================================================================
-float Room::readTap (int channel, int writeIndex, float delaySamples) const
-{
-    float readPosition = static_cast<float> (writeIndex) - delaySamples;
-
-    while (readPosition < 0.0f)
-        readPosition += static_cast<float> (bufferSize_);
-
-    while (readPosition >= static_cast<float> (bufferSize_))
-        readPosition -= static_cast<float> (bufferSize_);
-
-    const int index0 = static_cast<int> (readPosition);
-    const int index1 = (index0 + 1) % bufferSize_;
-    const float fraction = readPosition - static_cast<float> (index0);
-
-    const auto& buffer = buffers_[static_cast<size_t> (channel)];
-    return buffer[static_cast<size_t> (index0)]
-         + fraction * (buffer[static_cast<size_t> (index1)]
-                       - buffer[static_cast<size_t> (index0)]);
-}
-
 //==============================================================================
 void Room::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& /*midi*/)
 {
-    if (bypass_ || bufferSize_ <= 0 || buffer.getNumSamples() <= 0 || buffer.getNumChannels() <= 0)
-        return;
-
     const int numSamples = buffer.getNumSamples();
     const int numChannels = juce::jmin (2, buffer.getNumChannels());
+
+    if (numSamples <= 0 || numChannels <= 0 || smallWet_.getNumChannels() == 0)
+        return;
+
+    // At 0 % mix the room is inaudible; skip the convolutions entirely.
+    if (blend_ <= 0.0f && blendSmoothed_.getCurrentValue() <= 1.0e-6f)
+        return;
+
+    const int wetChannels = juce::jmin (numChannels, smallWet_.getNumChannels());
+
+    for (int channel = 0; channel < wetChannels; ++channel)
+    {
+        const int sourceChannel = juce::jmin (channel, buffer.getNumChannels() - 1);
+        smallWet_.copyFrom (channel, 0, buffer, sourceChannel, 0, numSamples);
+        largeWet_.copyFrom (channel, 0, buffer, sourceChannel, 0, numSamples);
+    }
+
+    auto smallBlock = juce::dsp::AudioBlock<float> (smallWet_).getSubBlock (0, (size_t) numSamples);
+    auto largeBlock = juce::dsp::AudioBlock<float> (largeWet_).getSubBlock (0, (size_t) numSamples);
+
+    juce::dsp::ProcessContextReplacing<float> smallContext (smallBlock);
+    juce::dsp::ProcessContextReplacing<float> largeContext (largeBlock);
+
+    smallRoom_.process (smallContext);
+    largeRoom_.process (largeContext);
 
     for (int sample = 0; sample < numSamples; ++sample)
     {
         const float size = sizeSmoothed_.getNextValue();
         const float blend = blendSmoothed_.getNextValue();
-        const float scale = 0.65f + 1.05f * size;
 
-        std::array<int, 2> anchor {};
-
-        // Write the current sample and remember the read anchor.
-        for (int ch = 0; ch < numChannels; ++ch)
+        for (int channel = 0; channel < numChannels; ++channel)
         {
-            const int write = writeIndex_[static_cast<size_t> (ch)];
-            buffers_[static_cast<size_t> (ch)][static_cast<size_t> (write)] =
-                buffer.getSample (ch, sample);
-            anchor[static_cast<size_t> (ch)] = write;
-            writeIndex_[static_cast<size_t> (ch)] = (write + 1) % bufferSize_;
+            const float dry = buffer.getSample (channel, sample);
+            const float wet = smallWet_.getSample (channel, sample) * (1.0f - size)
+                            + largeWet_.getSample (channel, sample) * size;
+
+            buffer.setSample (channel, sample, dry + blend * (wet - dry));
         }
-
-        float wetLeft = 0.0f;
-        float wetRight = 0.0f;
-
-        for (int tap = 0; tap < kNumTaps; ++tap)
-        {
-            const float baseDelay = kBaseDelays[tap] * scale;
-            const float spread = (tap % 2 == 0 ? 1.0f : -1.0f)
-                               * kStereoSpreadSeconds * static_cast<float> (tap + 1);
-
-            const float leftDelaySamples = juce::jmax (1.0f, (baseDelay + spread) * static_cast<float> (sampleRate_));
-            const float rightDelaySamples = juce::jmax (1.0f, (baseDelay - spread) * static_cast<float> (sampleRate_));
-
-            const float leftTap = readTap (0, anchor[0], leftDelaySamples);
-            const float rightTap = numChannels > 1
-                ? readTap (1, anchor[1], rightDelaySamples)
-                : leftTap;
-
-            const float gain = kTapGains[tap];
-
-            // A little cross-feed creates width without collapsing the room
-            // into two unrelated mono reflections.
-            wetLeft  += gain * (leftTap  * 0.80f + rightTap * 0.20f);
-            wetRight += gain * (rightTap * 0.80f + leftTap  * 0.20f);
-        }
-
-        lowpassState_[0] += lowpassCoeff_ * (wetLeft  - lowpassState_[0]);
-        lowpassState_[1] += lowpassCoeff_ * (wetRight - lowpassState_[1]);
-
-        const float dryLeft  = buffer.getSample (0, sample);
-        buffer.setSample (0, sample, dryLeft + blend * (lowpassState_[0] - dryLeft));
-
-        if (numChannels > 1)
-        {
-            const float dryRight = buffer.getSample (1, sample);
-            buffer.setSample (1, sample, dryRight + blend * (lowpassState_[1] - dryRight));
-        }
-
-        // A low amount of feedback turns the taps into a dense, short room
-        // rather than an audible sequence of separate echoes. The fixed
-        // low-pass in the loop keeps the tail from becoming bright or long.
-        buffers_[0][static_cast<size_t> (anchor[0])] += lowpassState_[0] * kFeedback;
-
-        if (numChannels > 1)
-            buffers_[1][static_cast<size_t> (anchor[1])] += lowpassState_[1] * kFeedback;
     }
 }
 

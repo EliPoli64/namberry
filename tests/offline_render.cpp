@@ -613,7 +613,6 @@ int runRoomTest()
     room.prepare (spec);
     room.setSize (0.45f);
     room.setBlend (0.6f);
-    room.setBypass (false);
 
     juce::AudioBuffer<float> buffer (2, blockSize);
     juce::MidiBuffer midi;
@@ -636,8 +635,8 @@ int runRoomTest()
     for (int i = 1; i < blockSize; ++i)
         reflectionEnergy += std::abs (buffer.getSample (0, i));
 
-    // The short feedback network should still be audible in the next block,
-    // then decay to silence. It must not behave like a long reverb.
+    // The room IR should still be audible in the next block, then decay to
+    // silence. It must not behave like an endless reverb.
     buffer.clear();
     room.processBlock (buffer, midi);
 
@@ -658,33 +657,34 @@ int runRoomTest()
         }
     }
 
-    // Bypassed, the room must pass the dry impulse unchanged.
-    room.setBypass (true);
+    // Room Mix 0 must be completely dry and must not run the convolution.
+    room.setBlend (0.0f);
+    room.reset();
     buffer.clear();
     buffer.setSample (0, 0, 1.0f);
     buffer.setSample (1, 0, 1.0f);
     room.processBlock (buffer, midi);
 
-    const float bypassedDirect = buffer.getSample (0, 0);
-    float bypassedResidue = 0.0f;
+    const float dryDirect = buffer.getSample (0, 0);
+    float dryResidue = 0.0f;
     for (int i = 1; i < blockSize; ++i)
-        bypassedResidue += std::abs (buffer.getSample (0, i));
+        dryResidue += std::abs (buffer.getSample (0, i));
 
     const bool blendOk = direct > 0.35f && direct < 0.45f;
     const bool reflectionsOk = reflectionEnergy > 1.0e-4f;
     const bool shortTailOk = shortTailEnergy > 1.0e-5f;
     const bool tailDecaysOk = lateTailEnergy < 1.0e-5f;
-    const bool bypassOk = std::abs (bypassedDirect - 1.0f) < 1.0e-6f
-                       && bypassedResidue < 1.0e-7f;
+    const bool dryMixOk = std::abs (dryDirect - 1.0f) < 1.0e-6f
+                       && dryResidue < 1.0e-7f;
 
     const bool passed = blendOk && reflectionsOk && shortTailOk
-                     && tailDecaysOk && bypassOk;
+                     && tailDecaysOk && dryMixOk;
 
     std::cout << "room direct=" << direct
               << " reflections=" << reflectionEnergy
               << " shortTail=" << shortTailEnergy
               << " lateTail=" << lateTailEnergy
-              << " bypass=" << bypassedDirect
+              << " dry=" << dryDirect
               << " " << (passed ? "PASS" : "FAIL") << "\n";
 
     return passed ? 0 : 2;
@@ -743,7 +743,7 @@ int runModulationTest()
         fx.setChorusBypass (true);
         fx.setFlangerBypass (true);
         fx.setPhaserBypass (true);
-        fx.setRoomBypass (true);
+        fx.setRoomBlend (0.0f);
         fx.setDelayBypass (true);
         fx.setReverbBypass (true);
     };
@@ -835,6 +835,12 @@ int runFxStateMigrationTest()
     setValue ("flangerFeedback", 0.4f);
     setValue ("phaserDepth", 0.5f);
     setValue ("chorusRate", 1.5f);
+    setValue ("roomBlend", 50.0f);
+
+    juce::ValueTree oldRoomBypass ("PARAM");
+    oldRoomBypass.setProperty ("id", "roomBypass", nullptr);
+    oldRoomBypass.setProperty ("value", 1.0f, nullptr);
+    state.appendChild (oldRoomBypass, nullptr);
 
     removeChild ("chorusFeedback");
     removeChild ("chorusDelay");
@@ -857,6 +863,7 @@ int runFxStateMigrationTest()
     const float flangerManual = params.getRawParameterValue ("flangerManual")->load();
     const float phaserFeedback = params.getRawParameterValue ("phaserFeedback")->load();
     const float phaserStages = params.getRawParameterValue ("phaserStages")->load();
+    const float roomBlend = params.getRawParameterValue ("roomBlend")->load();
 
     const bool passed = std::abs (chorusMix - 20.0f) < 0.01f
                      && std::abs (chorusDepth - 35.0f) < 0.01f
@@ -866,7 +873,8 @@ int runFxStateMigrationTest()
                      && std::abs (chorusDelay - 15.0f) < 0.01f
                      && std::abs (flangerManual - 2.0f) < 0.01f
                      && std::abs (phaserFeedback - 30.0f) < 0.01f
-                     && std::abs (phaserStages - 8.0f) < 0.01f;
+                     && std::abs (phaserStages - 8.0f) < 0.01f
+                     && std::abs (roomBlend - 0.0f) < 0.01f;
 
     std::cout << "migration chorusMix=" << chorusMix
               << " chorusDepth=" << chorusDepth
@@ -874,6 +882,7 @@ int runFxStateMigrationTest()
               << " phaserDepth=" << phaserDepth
               << " new=" << chorusFeedback << "/" << chorusDelay << "/"
               << flangerManual << "/" << phaserFeedback << "/" << phaserStages
+              << " roomBlend=" << roomBlend
               << " " << (passed ? "PASS" : "FAIL") << "\n";
 
     return passed ? 0 : 2;
