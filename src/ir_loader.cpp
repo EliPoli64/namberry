@@ -72,6 +72,7 @@ void IrLoader::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&
     // (Previously the buffer was always cleared, which muted the whole chain
     // until an IR was loaded.)
     bool anyActive = false;
+    int activeSlots = 0;
     float maxMix = 0.0f;
     for (int s = 0; s < kNumSlots; ++s)
     {
@@ -79,12 +80,19 @@ void IrLoader::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&
         if (loaded_[static_cast<size_t>(s)] && m > 0.0f)
         {
             anyActive = true;
+            ++activeSlots;
             maxMix = juce::jmax (maxMix, m);
         }
     }
 
     if (! anyActive)
         return;
+
+    // Keep the summed cabinet level consistent as more IRs are enabled. One
+    // active IR at 100 % is unity; two active IRs contribute 50 % each; four
+    // contribute 25 % each. This prevents the mix from getting louder simply
+    // because more cabinets were loaded.
+    const float slotNormalisation = 1.0f / static_cast<float> (activeSlots);
 
     // Keep a dry copy because we rebuild the output from the slot mix.
     juce::AudioBuffer<float> dry (numChannels, numSamples);
@@ -120,7 +128,7 @@ void IrLoader::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&
             const float chGain = (numChannels == 1) ? 1.0f
                                 : ((ch == 0) ? leftGain : rightGain);
             buffer.addFrom (ch, 0, wet.getReadPointer (ch), numSamples,
-                            phase * mix * chGain);
+                            phase * mix * slotNormalisation * chGain);
         }
     }
 
