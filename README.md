@@ -29,7 +29,7 @@ NAMberry packages all of that into one plugin:
 - **Fast model management** — in-app NAM/IR browsers, two separate persisted roots, previous/next arrows, and drag-and-drop.
 - **Persistent choices** — the selected amp, pedal and all four IR files are restored on the next session.
 - **Preset save/load** — store the complete parameter state together with the current amp, pedal and IR file paths.
-- **Low-latency pitch** — 5 ms DualTap and PSOLA engines for capo and drop tuning.
+- **Studio-quality pitch** — Signalsmith Stretch handles capo and drop tuning; the 50 ms latency is only applied while pitch shifting is active.
 - **A usable tuner** — a strobe wheel with cents deviation and an editable reference frequency (440, 432, etc.).
 - **Stereo correctness** — the NAM stages are mono models, summed and copied to both channels; the dry path is always centred.
 
@@ -93,22 +93,15 @@ The capo and drop tune share one pitch stage:
 
 - **One semitones control**: −12…+12.
 - **Mix**: 0–100 % wet.
-- **Engine toggle**: DualTap or PSOLA.
-- **5 ms latency**, reported to the host.
-- **No automatic routing**: the selected engine is used for every semitone.
+- **Signalsmith Stretch** pitch shifting.
+- **50 ms latency while active**, reported to the host; zero latency when bypassed or at 0 semitones.
+- **No engine toggle**: Stretch is the only pitch engine.
 
-Two engines are implemented:
+Signalsmith Stretch uses a 50 ms STFT block with a 7 ms hop. This is a quality-over-latency trade-off: unlike the previous DualTap/PSOLA engines, it cannot run at 5 ms.
 
-| Engine | Behaviour |
-|---|---|
-| **DualTap** | Period-synchronised time-domain shifter. Accurate across the whole range and the recommended choice for downshifts. |
-| **PSOLA** | Pitch-synchronous overlap-add. Clean on upward/single-note material; downward shifts at 5 ms are limited. |
+The pitch detector still runs an 80 ms analysis window with decimated autocorrelation, first-peak selection, parabolic interpolation, confidence and median smoothing, but it is now only used for the tuner display; Stretch does not need the detected period.
 
-The pitch period comes from a dedicated detector with an 80 ms analysis window, decimated autocorrelation, first-peak selection, parabolic interpolation, confidence and median smoothing. It detects low E and drop tunings independently of the host block size.
-
-The dry path is delayed by the engine latency and **mono-summed**, so the dry signal is always centred. The stage only runs when active; bypassed or 0-semitone states output the delayed dry signal.
-
-The Signalsmith Stretch/Linear pair is vendored and kept for future/optional use, but the current UI uses DualTap and PSOLA.
+While pitch shifting is active, the dry path is delayed by the Stretch latency and **mono-summed**, so the dry signal is always centred. When the stage is bypassed, at 0 semitones, or at 0 % mix, it outputs the dry signal immediately with no latency compensation delay.
 
 ### Tuner
 
@@ -192,7 +185,7 @@ The editor is JUCE-native and hardware-inspired:
 | IR convolution | `juce::dsp::Convolution` |
 | EQ / dynamics | JUCE `dsp::IIR`, custom compressor/gate |
 | Post FX | Custom LFO/modulated-delay chorus and flanger; custom 4/8/12-stage phaser; generated-IR convolution `Room`; JUCE `dsp::DelayLine` and `dsp::Reverb` |
-| Pitch | Custom DualTap and PSOLA engines; optional Signalsmith Stretch/Linear kept in `deps/` |
+| Pitch | **Signalsmith Stretch** (50 ms block / 7 ms hop) |
 | Settings | JUCE `PropertiesFile` |
 | Build | CMake 3.22+, CMake presets, helper scripts |
 | Tests | JUCE console apps: offline render and headless UI snapshots |
@@ -221,8 +214,7 @@ src/
   PluginEditor.*        # hardware-style editor
   directory_browser.*   # in-app NAM / IR browser
   nam_model_loader.cpp
-  pitch_shifter.cpp     # optional Signalsmith wrapper
-  pitch_shift_engines.cpp
+  pitch_shifter.cpp     # Signalsmith Stretch wrapper
   digital_capo.cpp      # shared pitch stage
   drop_tuner.cpp
   modulation_effects.cpp
@@ -236,7 +228,6 @@ src/
 include/namberry/
   NamModelLoader.h
   PitchShifter.h
-  PitchShiftEngines.h
   DigitalCapo.h
   DropTuner.h
   ModulationEffects.h
@@ -431,14 +422,9 @@ The shared **PITCH** pedal controls both capo and drop tuning:
 |---|---|
 | **Semitones** | −12…+12; 0 = no shift |
 | **Mix** | 0–100 % wet (default 100 %) |
-| **PSOLA** | Off = DualTap; On = PSOLA |
 | **Footswitch** | Bypass |
 
-- **DualTap** is recommended for downward shifts and general use.
-- **PSOLA** is cleaner on upward/single-note material but is weaker on downward shifts at 5 ms.
-- The engine is always selected by the user; there is no automatic fallback.
-
-The pitch stage reports **5 ms latency** to the host. The dry path is delayed by the same amount.
+The pitch stage uses **Signalsmith Stretch**. While pitch shifting is active it reports **50 ms latency** to the host and delays the dry path by the same amount; when bypassed, at 0 semitones or 0 % mix it reports **0 ms** and passes the dry signal immediately. The dry path is always mono-centred. There is no engine toggle or automatic fallback.
 
 ### Amp
 
@@ -550,8 +536,8 @@ Run the full chain with a model:
 What they cover:
 
 - `--detector`: pitch detection across 82.41–440 Hz.
-- `--pitch`: engine accuracy with a known period.
-- `--detected-stage`: detector → pitch stage.
+- `--pitch`: Signalsmith Stretch pitch accuracy and dry/bypass behaviour.
+- `--detected-stage`: detector → Stretch pitch stage.
 - `--dry-center`: verifies both channels are identical when fully dry.
 - `--delay-reset`: verifies the delay tail is discarded on bypass.
 - `--room`: verifies the convolution room, IR decay, and dry 0 % mix.
@@ -588,10 +574,9 @@ The snapshot tool is headless and does not need a DAW.
 
 ## Known limitations
 
-- **5 ms pitch latency is constant and reported**, even when the pitch stage is bypassed. This keeps host delay compensation stable. The dry path is delayed to match.
-- The **Standalone app** does not apply host-style plugin delay compensation; the 5 ms pitch-stage latency is audible there. DAWs compensate it.
-- **PSOLA downshifts at 5 ms are limited**, especially on low notes; use DualTap for drop tunings. There is intentionally no automatic engine switch.
-- A 5 ms window is shorter than the period of low E, A and D; some artifacts on those notes are inherent to the latency target.
+- **50 ms pitch latency is reported only while pitch shifting is active**. Bypassed, 0-semitone or 0 % mix states report 0 ms and pass the dry signal immediately; the host latency changes when the pitch stage is toggled.
+- The **Standalone app** does not apply host-style plugin delay compensation; the 50 ms latency while pitch shifting is audible there. DAWs compensate it.
+- Signalsmith Stretch is an STFT shifter and cannot meet the previous 5 ms target. That is the deliberate quality/latency trade-off.
 - NAM model latency is not separately reported by the plugin; only the pitch-stage latency is reported.
 - The **Room** is a convolution ambience with a short controlled decay, not a long reverb; use the Reverb effect for a long tail.
 - The plugin is **stereo in / stereo out only**.

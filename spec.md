@@ -20,7 +20,7 @@
 | **NAM Inference** | **NeuralAmpModelerCore** or **NeuralAudio** | `NeuralAmpModelerCore` is the official high-performance DSP library for running `.nam` models (WaveNet, LSTM, ConvNet, Linear). `NeuralAudio` is an alternative that offers A1/A2 support with a simpler API and MIT license. |
 | **Build System** | **CMake** (v3.22+) | Enables reproducible cross-platform builds and static linking of JUCE modules and third-party dependencies. |
 | **IR Loading** | **JUCE `dsp::Convolution`** | Built-in JUCE module for zero-latency, real-time convolution with support for loading WAV/AIFF files. |
-| **Drop Tuner / Pitch Stage** | Custom low-latency pitch engines (DualTap + PSOLA) | The tuner detects the fundamental for display and provides the pitch period; one shared −12…+12 semitone stage handles capo and drop tuning with a mix control and engine toggle. Both engines target 5 ms latency and run at the head of the chain. |
+| **Drop Tuner / Pitch Stage** | **Signalsmith Stretch** | The tuner detects the fundamental for display; one shared −12…+12 semitone Stretch stage handles capo and drop tuning with a mix control. Stretch uses a 50 ms block and reports that latency while active, zero when inactive. |
 | **UI** | **JUCE `Component`** / **Visage** (optional) | JUCE’s native UI components are sufficient; Visage can be used for GPU-accelerated custom rendering if needed. |
 
 ---
@@ -91,8 +91,9 @@ A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and alwa
   - `Room` (convolution ambience using generated small/large room IRs, with size and dry/wet mix; not a long reverb)
   - `Delay` (stereo, with feedback, mix, time)
   - `Reverb` (algorithmic or convolution-based)
-  - `DropTuner` (polyphonic/monophonic pitch detection, tuning down control)
-  - `DigitalCapo` (fret position control, pitch transposition)
+  - `DropTuner` (fundamental frequency detection for the tuner display)
+  - `PitchShifter` (Signalsmith Stretch wrapper)
+  - `DigitalCapo` (shared semitone pitch stage)
 
 ---
 
@@ -167,14 +168,14 @@ A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and alwa
 - **Implementation**: Use JUCE's `juce::Reverb` (algorithmic) for a lightweight, real-time-safe reverb. Parameters: Room Size, Damping, Wet, Dry, Width.
 
 ### 4.10 DropTuner
-- **Goal**: Detect the input pitch for display and provide the period used by the pitch engine.
+- **Goal**: Detect the input pitch for display.
 - **Implementation**:
   - Autocorrelation-based fundamental frequency detection on the input signal.
   - Uses a long 80 ms analysis window, independent of the host block size, with decimation, first-peak selection, parabolic interpolation and median smoothing.
-  - Detects down to ~80 Hz reliably (low E and drop tunings), and feeds the measured pitch period to both pitch engines.
+  - Detects down to ~80 Hz reliably (low E and drop tunings).
   - Displays a **strobe tuning wheel**: the wheel rotates with the cents deviation, turns green when in tune, and shows the note and cents in the centre.
-  - **Reference frequency**: 400–480 Hz, default 440 Hz; note/cents calculations use this reference. The pitch stage uses the detected period and is unaffected by the reference.
-  - Detection only: the drop-tune shift is performed by the shared Pitch stage; the tuner no longer has its own audio path, offset, or bypass.
+  - **Reference frequency**: 400–480 Hz, default 440 Hz; note/cents calculations use this reference.
+  - Detection only: the drop-tune shift is performed by the shared Pitch stage; the tuner has no audio path, offset, or bypass.
   - Runs before the pitch stage so it analyses the clean input.
 - **Controls**: Tuning wheel (note + cents), reference frequency field (Hz).
 
@@ -182,14 +183,13 @@ A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and alwa
 - **Goal**: Transpose the guitar by a selected number of semitones, covering both capo (up) and drop-tuning (down) use.
 - **Implementation**:
   - **Semitones**: a single −12…+12 control shared by capo and drop tuning.
-  - **Mix/Dry-Wet**: blends the delayed dry signal with the transposed signal (default 100% wet).
-  - **Engine toggle**: switches between **DualTap** (time-domain, period-synchronised, accurate on upward and downward shifts) and **PSOLA** (pitch-synchronous, cleaner on single notes; downward shifts are weaker at 5 ms, especially on low notes).
-  - The engine is always selected explicitly by the user; there is no automatic engine switching or fallback. DualTap is recommended for drop tunings; PSOLA for clean upward shifts.
-  - Both engines target **5 ms latency** at 48 kHz; the latency is reported to the host via `setLatencySamples()`.
-  - The dry path is delayed by the engine latency so the blend stays time-aligned, and it is mono-summed so it is always panned dead centre.
-  - The pitch stage runs at the head of the chain (after the tuner detector, before the gate/compressor), so every downstream stage sees the transposed signal.
-  - The engines only run while the stage is active; bypassed or 0-semitone states output the delayed dry signal.
-- **Controls**: Semitones (−12…+12), mix level (0–100%), engine toggle, bypass footswitch.
+  - **Mix/Dry-Wet**: blends the dry signal with the transposed signal (default 100% wet); the dry signal is delayed only while pitch shifting is active.
+  - **Signalsmith Stretch**: a 50 ms STFT block with a 7 ms hop; no engine toggle and no automatic fallback.
+  - While active, the stage reports its Stretch latency to the host via `setLatencySamples()`; while inactive it reports 0.
+  - While active, the dry path is delayed by the Stretch latency so the blend stays time-aligned, and it is mono-summed so it is always panned dead centre. When inactive, the dry signal passes immediately.
+  - The stage runs at the head of the chain (after the tuner detector, before the gate/compressor), so every downstream stage sees the transposed signal.
+  - Stretch processing is skipped while the stage is inactive; bypassed, 0-semitone or 0% mix states output immediate dry signal.
+- **Controls**: Semitones (−12…+12), mix level (0–100%), bypass footswitch.
 
 ### 4.12 Preset save/load
 - **Goal**: Let users store and recall the complete rig without depending on the host’s project state.
