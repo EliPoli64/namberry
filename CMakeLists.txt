@@ -51,6 +51,7 @@ target_sources(NAMBerry PRIVATE
     src/PluginEditor.cpp
     src/directory_browser.cpp
     src/nam_model_loader.cpp
+    src/impersonator.cpp
     src/ir_loader.cpp
     src/multi_band_eq.cpp
     src/drop_tuner.cpp
