@@ -3,17 +3,18 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_dsp/juce_dsp.h>
 
-#include "namberry/PitchShiftEngines.h"
+#include "namberry/PitchShifter.h"
 
 namespace namberry {
 
-/// Shared pitch stage for the digital capo and drop tuner.
-/// Supports two low-latency engines (dual-tap and PSOLA) with a smooth toggle.
+/// Shared pitch stage for the digital capo and drop tuner, powered by
+/// Signalsmith Stretch.
+///
+/// The stage reports a fixed latency to the host; the dry path is delayed to
+/// match the wet path and is mono-summed so it stays dead centre.
 class DigitalCapo
 {
 public:
-    enum class Engine { DualTap, Psola };
-
     DigitalCapo() = default;
     ~DigitalCapo() = default;
 
@@ -30,13 +31,16 @@ public:
     void setBypass (bool bypassed) { bypass_ = bypassed; }
     bool isBypassed() const { return bypass_; }
 
-    void setEngine (Engine engine) { engine_ = engine; }
-    Engine getEngine() const { return engine_; }
-
-    void setPitchPeriodSamples (float periodSamples);
-
-    /// Latency introduced by the pitch engine, in samples.
+    /// Latency introduced by the Stretch stage when it is active, in samples.
     int getLatencySamples() const noexcept { return latencySamples_; }
+
+    /// Latency currently reported to the host: zero while pitch shifting is
+    /// inactive, full Stretch latency while it is active.
+    int getReportedLatencySamples() const noexcept
+    {
+        return active_ ? latencySamples_ : 0;
+    }
+
     bool isActive() const noexcept { return active_; }
 
     struct Params { float semitones = 0.0f; float mix = 1.0f; bool bypass = false; };
@@ -44,30 +48,23 @@ public:
     void setParams (const Params& p);
 
 private:
-    DualTapPitchShifter dualTap_;
-    PsolaPitchShifter psola_;
+    PitchShifter stretch_;
 
-    juce::AudioBuffer<float> wetDual_;
-    juce::AudioBuffer<float> wetPsola_;
-
+    juce::AudioBuffer<float> wet_;
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None> dryDelay_;
     juce::SmoothedValue<float> mixSmoothed_;
     juce::SmoothedValue<float> semitoneSmoothed_;
-    juce::SmoothedValue<float> engineMixSmoothed_;
 
     double sampleRate_ = 44100.0;
     int maxBlockSize_ = 512;
     int latencySamples_ = 0;
+
     float semitones_ = 0.0f;
     float mix_ = 1.0f;
-    float pitchPeriodSamples_ = 0.0f;
     bool bypass_ = false;
     bool active_ = false;
     bool prepared_ = false;
-    bool periodReady_ = false;
     int activationSamplesRemaining_ = 0;
-
-    Engine engine_ = Engine::DualTap;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DigitalCapo)
 };

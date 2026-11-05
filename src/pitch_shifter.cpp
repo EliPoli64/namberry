@@ -9,10 +9,11 @@ void PitchShifter::prepare (const juce::dsp::ProcessSpec& spec)
 
     const auto sampleRate = static_cast<float> (spec.sampleRate);
 
-    // 50 ms block / 6.25 ms hop: a compromise between latency and pitch
-    // accuracy (the full 120 ms default is more accurate but too latent).
+    // 50 ms block / 7 ms hop: a practical compromise between Stretch's
+    // quality and live-guitar latency. Stretch is an STFT shifter, so unlike
+    // the old DualTap/PSOLA path it cannot operate at 5 ms.
     const int blockSamples = juce::jmax (256, static_cast<int> (sampleRate * 0.050f));
-    const int intervalSamples = juce::jmax (64, static_cast<int> (sampleRate * 0.00625f));
+    const int intervalSamples = juce::jmax (64, static_cast<int> (sampleRate * 0.007f));
 
     stretch_.configure (numChannels_, blockSamples, intervalSamples, false);
 

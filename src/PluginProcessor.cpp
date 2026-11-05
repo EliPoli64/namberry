@@ -40,8 +40,6 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
         juce::AudioParameterFloatAttributes().withLabel ("%")));
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         "capoBypass", "Pitch Bypass", false));
-    params.push_back(std::make_unique<juce::AudioParameterBool>(
-        "pitchEngine", "PSOLA Engine", false));
 
     // ---- Compressor ----
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
@@ -445,7 +443,7 @@ void NAMBerryProcessor::prepareToPlay (double sampleRate, int maxSamplesPerBlock
     noiseGate_->prepare(spec);
     compressor_->prepare(spec);
     digitalCapo_->prepare(spec);
-    setLatencySamples(digitalCapo_->getLatencySamples());
+    setLatencySamples(digitalCapo_->getReportedLatencySamples());
     namModel_->prepare(spec);
     namPedal_->prepare(spec);
     irLoader_->prepare(spec);
@@ -486,20 +484,16 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         const bool pitchBypassed = apvts_.getRawParameterValue("capoBypass")->load() > 0.5f;
         const float semitones = apvts_.getRawParameterValue("capoFret")->load();
         const float mix = apvts_.getRawParameterValue("capoMix")->load() / 100.0f;
-        const bool psola = apvts_.getRawParameterValue("pitchEngine")->load() > 0.5f;
 
         digitalCapo_->setBypass (pitchBypassed);
         digitalCapo_->setSemitones (semitones);
         digitalCapo_->setMix (mix);
-        digitalCapo_->setEngine (psola ? DigitalCapo::Engine::Psola
-                                       : DigitalCapo::Engine::DualTap);
-
-        const float period = dropTuner_->getDetectedPeriodSamples();
-
-        if (period > 0.0f)
-            digitalCapo_->setPitchPeriodSamples (period);
-
         digitalCapo_->processBlock (buffer, midiMessages);
+
+        const int pitchLatency = digitalCapo_->getReportedLatencySamples();
+
+        if (pitchLatency != getLatencySamples())
+            setLatencySamples (pitchLatency);
     }
 
     // 3. Noise Gate

@@ -6,25 +6,18 @@ namespace namberry {
 void DigitalCapo::prepare (const juce::dsp::ProcessSpec& spec)
 {
     sampleRate_ = spec.sampleRate;
-    maxBlockSize_ = juce::jmax (1, (int) spec.maximumBlockSize);
+    maxBlockSize_ = juce::jmax (1, static_cast<int> (spec.maximumBlockSize));
 
-    dualTap_.prepare (spec);
-    psola_.prepare (spec);
-
-    // Both engines are designed for 5 ms. Keep the dry path on the same
-    // latency so the host PDC never changes when the engine is toggled.
-    latencySamples_ = juce::jmax (dualTap_.getLatencySamples(),
-                                  psola_.getLatencySamples());
+    stretch_.prepare (spec);
+    latencySamples_ = juce::jmax (1, stretch_.getLatencySamples());
 
     dryDelay_.setMaximumDelayInSamples (latencySamples_ + maxBlockSize_ + 8);
     dryDelay_.prepare (spec);
     dryDelay_.reset();
 
-    const int channels = juce::jmax (1, (int) spec.numChannels);
-    wetDual_.setSize (channels, maxBlockSize_);
-    wetPsola_.setSize (channels, maxBlockSize_);
-    wetDual_.clear();
-    wetPsola_.clear();
+    const int channels = juce::jmax (1, static_cast<int> (spec.numChannels));
+    wet_.setSize (channels, maxBlockSize_);
+    wet_.clear();
 
     mixSmoothed_.reset (spec.sampleRate, 0.020);
     mixSmoothed_.setCurrentAndTargetValue (0.0f);
@@ -32,32 +25,22 @@ void DigitalCapo::prepare (const juce::dsp::ProcessSpec& spec)
     semitoneSmoothed_.reset (spec.sampleRate, 0.020);
     semitoneSmoothed_.setCurrentAndTargetValue (semitones_);
 
-    engineMixSmoothed_.reset (spec.sampleRate, 0.020);
-    engineMixSmoothed_.setCurrentAndTargetValue (
-        engine_ == Engine::Psola ? 1.0f : 0.0f);
-
     active_ = false;
-    periodReady_ = false;
     activationSamplesRemaining_ = 0;
     prepared_ = true;
 }
 
 void DigitalCapo::reset()
 {
-    dualTap_.reset();
-    psola_.reset();
+    stretch_.reset();
     dryDelay_.reset();
 
     mixSmoothed_.setCurrentAndTargetValue (0.0f);
     semitoneSmoothed_.setCurrentAndTargetValue (semitones_);
-    engineMixSmoothed_.setCurrentAndTargetValue (
-        engine_ == Engine::Psola ? 1.0f : 0.0f);
 
     active_ = false;
-    periodReady_ = false;
     activationSamplesRemaining_ = 0;
-    wetDual_.clear();
-    wetPsola_.clear();
+    wet_.clear();
 }
 
 //==============================================================================
@@ -70,42 +53,24 @@ void DigitalCapo::processBlock (juce::AudioBuffer<float>& buffer,
     const int numChannels = buffer.getNumChannels();
     const int numSamples = buffer.getNumSamples();
 
-    if (wetDual_.getNumChannels() != numChannels
-        || wetDual_.getNumSamples() < numSamples)
+    if (wet_.getNumChannels() != numChannels || wet_.getNumSamples() < numSamples)
     {
-        wetDual_.setSize (numChannels, numSamples, false, false, true);
-        wetPsola_.setSize (numChannels, numSamples, false, false, true);
+        wet_.setSize (numChannels, numSamples, false, false, true);
+        wet_.clear();
     }
 
-    const bool wantActive = ! bypass_
-                         && semitones_ != 0.0f
-                         && mix_ > 0.0f
-                         && periodReady_;
-
+    const bool wantActive = ! bypass_ && semitones_ != 0.0f && mix_ > 0.0f;
     const bool wasActive = active_;
-    const bool rising = wantActive && ! wasActive;
 
     semitoneSmoothed_.setTargetValue (semitones_);
     semitoneSmoothed_.skip (numSamples);
-    const float engineSemitones = semitoneSmoothed_.getCurrentValue();
-
-    dualTap_.setTransposeSemitones (engineSemitones);
-    psola_.setTransposeSemitones (engineSemitones);
-
-    if (pitchPeriodSamples_ > 0.0f)
-    {
-        psola_.setPitchPeriodSamples (pitchPeriodSamples_, rising);
-        dualTap_.setPitchPeriodSamples (pitchPeriodSamples_);
-    }
-
-    engineMixSmoothed_.setTargetValue (engine_ == Engine::Psola ? 1.0f : 0.0f);
+    stretch_.setTransposeSemitones (semitoneSmoothed_.getCurrentValue());
 
     if (wantActive)
     {
         if (! wasActive)
         {
-            dualTap_.reset();
-            psola_.reset();
+            stretch_.reset();
             active_ = true;
             activationSamplesRemaining_ = latencySamples_;
         }
@@ -128,19 +93,15 @@ void DigitalCapo::processBlock (juce::AudioBuffer<float>& buffer,
             activationSamplesRemaining_ = 0;
     }
 
-    const bool runEngines = active_
+    const bool runStretch = active_
                          && (wantActive || mixSmoothed_.getCurrentValue() > 0.0001f);
 
-    if (runEngines)
-    {
-        dualTap_.process (buffer, wetDual_, numSamples);
-        psola_.process (buffer, wetPsola_, numSamples);
-    }
+    if (runStretch)
+        stretch_.process (buffer, wet_, numSamples);
 
     for (int i = 0; i < numSamples; ++i)
     {
         const float mix = mixSmoothed_.getNextValue();
-        const float engineMix = engineMixSmoothed_.getNextValue();
 
         // The dry path is always mono and panned dead centre.
         float dryInput = 0.0f;
@@ -148,22 +109,18 @@ void DigitalCapo::processBlock (juce::AudioBuffer<float>& buffer,
         for (int ch = 0; ch < numChannels; ++ch)
             dryInput += buffer.getSample (ch, i);
 
-        dryInput /= (float) numChannels;
+        dryInput /= static_cast<float> (numChannels);
 
         dryDelay_.pushSample (0, dryInput);
-        const float dry = dryDelay_.popSample (0, (float) latencySamples_);
+        const float delayedDry = dryDelay_.popSample (0, static_cast<float> (latencySamples_));
+
+        // The latency compensation delay is only audible while pitch shifting
+        // is active. Inactive states pass the dry signal immediately.
+        const float dry = active_ ? delayedDry : dryInput;
 
         for (int ch = 0; ch < numChannels; ++ch)
         {
-            float wet = 0.0f;
-
-            if (runEngines)
-            {
-                const float dual = wetDual_.getSample (ch, i);
-                const float psola = wetPsola_.getSample (ch, i);
-                wet = dual + (psola - dual) * engineMix;
-            }
-
+            const float wet = runStretch ? wet_.getSample (ch, i) : 0.0f;
             buffer.setSample (ch, i, dry + (wet - dry) * mix);
         }
     }
@@ -184,12 +141,6 @@ void DigitalCapo::setSemitones (float semitones)
 void DigitalCapo::setMix (float mix)
 {
     mix_ = juce::jlimit (0.0f, 1.0f, mix);
-}
-
-void DigitalCapo::setPitchPeriodSamples (float periodSamples)
-{
-    pitchPeriodSamples_ = juce::jmax (0.0f, periodSamples);
-    periodReady_ = pitchPeriodSamples_ > 0.0f;
 }
 
 void DigitalCapo::setParams (const Params& p)

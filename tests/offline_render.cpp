@@ -166,21 +166,56 @@ int runPitchTest()
         { 7,   true,  1.0f, "+7 st bypass" }
     };
 
-    struct EngineCase
-    {
-        const char* name;
-        namberry::DigitalCapo::Engine engine;
-    };
-
-    const EngineCase engines[] = {
-        { "DualTap", namberry::DigitalCapo::Engine::DualTap },
-        { "PSOLA",  namberry::DigitalCapo::Engine::Psola }
-    };
-
     bool allPassed = true;
 
-    for (const auto& engine : engines)
+    // Latency should only be reported while pitch shifting is active.
     {
+        namberry::DigitalCapo latencyCapo;
+        juce::dsp::ProcessSpec latencySpec;
+        latencySpec.sampleRate = sampleRate;
+        latencySpec.maximumBlockSize = blockSize;
+        latencySpec.numChannels = 2;
+        latencyCapo.prepare (latencySpec);
+
+        juce::AudioBuffer<float> latencyBuffer (2, blockSize);
+        juce::MidiBuffer latencyMidi;
+
+        const bool startsInactive = latencyCapo.getReportedLatencySamples() == 0;
+
+        latencyBuffer.clear();
+        latencyBuffer.setSample (0, 0, 1.0f);
+        latencyBuffer.setSample (1, 0, 1.0f);
+        latencyCapo.processBlock (latencyBuffer, latencyMidi);
+        const bool immediateDry = std::abs (latencyBuffer.getSample (0, 0) - 1.0f) < 1.0e-6f;
+
+        latencyCapo.setSemitones (7.0f);
+        latencyCapo.setMix (1.0f);
+        latencyCapo.setBypass (false);
+        latencyBuffer.clear();
+        latencyCapo.processBlock (latencyBuffer, latencyMidi);
+        const bool activeReportsLatency = latencyCapo.getReportedLatencySamples()
+                                       == latencyCapo.getLatencySamples()
+                                       && latencyCapo.getReportedLatencySamples() > 0;
+
+        latencyCapo.setSemitones (0.0f);
+        for (int block = 0; block < 12; ++block)
+        {
+            latencyBuffer.clear();
+            latencyCapo.processBlock (latencyBuffer, latencyMidi);
+        }
+
+        const bool inactiveAgain = latencyCapo.getReportedLatencySamples() == 0;
+        const bool latencyPassed = startsInactive && immediateDry
+                                && activeReportsLatency && inactiveAgain;
+        allPassed = allPassed && latencyPassed;
+
+        std::cout << "Stretch latency switching: inactive=" << startsInactive
+                  << " immediate-dry=" << immediateDry
+                  << " active=" << activeReportsLatency
+                  << " inactive-again=" << inactiveAgain
+                  << " " << (latencyPassed ? "PASS" : "FAIL") << "\n";
+    }
+
     for (const auto& testCase : cases)
     {
         namberry::DigitalCapo capo;
@@ -189,15 +224,12 @@ int runPitchTest()
         spec.maximumBlockSize = blockSize;
         spec.numChannels = 2;
         capo.prepare (spec);
-        capo.setEngine (engine.engine);
-        capo.setSemitones ((float) testCase.semitones);
+        capo.setSemitones (static_cast<float> (testCase.semitones));
         capo.setMix (testCase.mix);
         capo.setBypass (testCase.bypass);
-        capo.setPitchPeriodSamples ((float) (sampleRate / inputFrequency));
 
         if (&testCase == &cases[0])
-            std::cout << engine.name
-                      << " latency=" << capo.getLatencySamples()
+            std::cout << "Stretch latency=" << capo.getLatencySamples()
                       << " samples ("
                       << 1000.0 * capo.getLatencySamples() / sampleRate
                       << " ms)\n";
@@ -238,7 +270,6 @@ int runPitchTest()
         const float measured = estimateFrequency (captured, sampleRate);
         const float zeroCrossing = estimateZeroCrossingFrequency (captured, sampleRate);
 
-        // Independent FFT peak for diagnostics.
         constexpr int fftOrder = 13;
         constexpr int fftSize = 1 << fftOrder;
         std::vector<float> fftData (static_cast<size_t> (fftSize * 2), 0.0f);
@@ -268,24 +299,21 @@ int runPitchTest()
         const float magExpected = goertzelMagnitude (captured, expected, sampleRate);
         const float magInput = goertzelMagnitude (captured, inputFrequency, sampleRate);
 
-        // PSOLA needs at least a period of context; at 5 ms the octave-down
-        // case is intentionally kept as a known artifact (use DualTap for it).
-        const bool knownArtifact = engine.engine == namberry::DigitalCapo::Engine::Psola
-                                && testCase.semitones == -12;
+        const bool harmonicOk = shifted
+            ? magExpected > magInput
+            : magExpected >= magInput * 0.99f;
 
-        const bool passed = knownArtifact || std::abs (cents) < 25.0f;
+        const bool passed = std::abs (cents) < 30.0f && harmonicOk;
         allPassed = allPassed && passed;
 
-        std::cout << engine.name << " " << testCase.name
+        std::cout << "Stretch " << testCase.name
                   << ": expected " << expected
                   << " Hz, zero-cross " << zeroCrossing
                   << " Hz, autocorr " << measured
                   << " Hz (" << cents << " cents), FFT " << fftFrequency
                   << " Hz, magExp=" << magExpected
                   << " magIn=" << magInput
-                  << " " << (passed ? "PASS" : "FAIL")
-                  << (knownArtifact ? " [PSOLA -12 artifact]" : "") << "\n";
-    }
+                  << " " << (passed ? "PASS" : "FAIL") << "\n";
     }
 
     std::cout << (allPassed ? "PASS" : "FAIL") << "\n";
@@ -352,99 +380,77 @@ int runDetectedStageTest()
     const double frequencies[] = { 82.41, 110.0, 220.0 };
     const int semitones[] = { 7, -5, -12 };
 
-    struct EngineCase
-    {
-        const char* name;
-        namberry::DigitalCapo::Engine engine;
-    };
+    bool allPassed = true;
 
-    const EngineCase engines[] = {
-        { "DualTap", namberry::DigitalCapo::Engine::DualTap },
-        { "PSOLA",  namberry::DigitalCapo::Engine::Psola }
-    };
-
-    for (const auto& engine : engines)
+    for (int semis : semitones)
     {
-        for (int semis : semitones)
+        for (double inputFrequency : frequencies)
         {
-            for (double inputFrequency : frequencies)
+            namberry::DropTuner tuner;
+            namberry::DigitalCapo capo;
+            juce::dsp::ProcessSpec spec;
+            spec.sampleRate = sampleRate;
+            spec.maximumBlockSize = blockSize;
+            spec.numChannels = 2;
+            tuner.prepare (spec);
+            capo.prepare (spec);
+            capo.setSemitones ((float) semis);
+            capo.setMix (1.0f);
+            capo.setBypass (false);
+
+            juce::AudioBuffer<float> buffer (2, blockSize);
+            juce::MidiBuffer midi;
+            double phase = 0.0;
+            std::vector<float> captured;
+            captured.reserve (32768);
+
+            const int skipSamples = capo.getLatencySamples() + 24000;
+
+            for (int block = 0; block < 300; ++block)
             {
-                namberry::DropTuner tuner;
-                namberry::DigitalCapo capo;
-                juce::dsp::ProcessSpec spec;
-                spec.sampleRate = sampleRate;
-                spec.maximumBlockSize = blockSize;
-                spec.numChannels = 2;
-                tuner.prepare (spec);
-                capo.prepare (spec);
-                capo.setEngine (engine.engine);
-                capo.setSemitones ((float) semis);
-                capo.setMix (1.0f);
-                capo.setBypass (false);
-
-                juce::AudioBuffer<float> buffer (2, blockSize);
-                juce::MidiBuffer midi;
-                double phase = 0.0;
-                std::vector<float> captured;
-                captured.reserve (32768);
-
-                for (int block = 0; block < 300; ++block)
+                for (int i = 0; i < blockSize; ++i)
                 {
-                    for (int i = 0; i < blockSize; ++i)
-                    {
-                        const float s = 0.2f * (float) std::sin (phase);
-                        phase += 2.0 * juce::MathConstants<double>::pi
-                               * inputFrequency / sampleRate;
-                        buffer.setSample (0, i, s);
-                        buffer.setSample (1, i, s);
-                    }
-
-                    tuner.processBlock (buffer, midi);
-
-                    const float period = tuner.getDetectedPeriodSamples();
-                    if (period > 0.0f)
-                        capo.setPitchPeriodSamples (period);
-
-                    capo.processBlock (buffer, midi);
-
-                    if (block * blockSize >= 24000)
-                    {
-                        for (int i = 0; i < blockSize && captured.size() < 32768; ++i)
-                            captured.push_back (buffer.getSample (0, i));
-                    }
+                    const float s = 0.2f * (float) std::sin (phase);
+                    phase += 2.0 * juce::MathConstants<double>::pi
+                           * inputFrequency / sampleRate;
+                    buffer.setSample (0, i, s);
+                    buffer.setSample (1, i, s);
                 }
 
-                const double expected = inputFrequency
-                    * std::pow (2.0, semis / 12.0);
-                const float measured = estimateZeroCrossingFrequency (captured, sampleRate);
-                const float cents = measured > 0.0f
-                    ? 1200.0f * std::log2 (measured / (float) expected)
-                    : 9999.0f;
+                tuner.processBlock (buffer, midi);
+                capo.processBlock (buffer, midi);
 
-                const float magExpected = goertzelMagnitude (captured, expected, sampleRate);
-                const float magInput = goertzelMagnitude (captured, inputFrequency, sampleRate);
-
-                // PSOLA at 5 ms is limited on downward shifts, especially on
-                // low notes; the engine selection is deliberately left to the
-                // user (DualTap is the better choice for downshifts).
-                const bool knownArtifact = engine.engine == namberry::DigitalCapo::Engine::Psola
-                                        && (semis == -12
-                                            || (semis == -5 && inputFrequency < 130.0));
-
-                const bool passed = knownArtifact || std::abs (cents) < 30.0f;
-
-                std::cout << engine.name << " " << semis << " st @ "
-                          << inputFrequency << " Hz -> " << measured
-                          << " Hz (" << cents << " cents), magExp=" << magExpected
-                          << " magIn=" << magInput << " "
-                          << (passed ? "PASS" : "FAIL")
-                          << (knownArtifact ? " [PSOLA 5 ms downshift artifact]" : "")
-                          << "\n";
+                if (block * blockSize >= skipSamples)
+                {
+                    for (int i = 0; i < blockSize && captured.size() < 32768; ++i)
+                        captured.push_back (buffer.getSample (0, i));
+                }
             }
+
+            const double expected = inputFrequency
+                * std::pow (2.0, semis / 12.0);
+            const float measured = estimateZeroCrossingFrequency (captured, sampleRate);
+            const float cents = measured > 0.0f
+                ? 1200.0f * std::log2 (measured / (float) expected)
+                : 9999.0f;
+
+            const float magExpected = goertzelMagnitude (captured, expected, sampleRate);
+            const float magInput = goertzelMagnitude (captured, inputFrequency, sampleRate);
+
+            const bool passed = std::abs (cents) < 50.0f
+                             && magExpected > magInput;
+            allPassed = allPassed && passed;
+
+            std::cout << "Stretch " << semis << " st @ "
+                      << inputFrequency << " Hz -> " << measured
+                      << " Hz (" << cents << " cents), magExp=" << magExpected
+                      << " magIn=" << magInput << " "
+                      << (passed ? "PASS" : "FAIL") << "\n";
         }
     }
 
-    return 0;
+    std::cout << (allPassed ? "PASS" : "FAIL") << "\n";
+    return allPassed ? 0 : 2;
 }
 
 int runDryCenterTest()

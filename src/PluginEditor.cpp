@@ -1796,8 +1796,8 @@ void NAMBerryEditor::buildUi()
     {
         pitch->addItem (makeControl ("capoFret", "Semitones"));
         pitch->addItem (makeControl ("capoMix", "Mix"));
-        pitch->addItem (makeControl ("pitchEngine", "PSOLA", ParamControl::Kind::Toggle));
         pitch->setFooter (makeFootswitch ("capoBypass", capoAccent), 82);
+        pitch->setPreferredHeight (300);
     }
 
     if (auto* gate = makePanel (0, "GATE", UnitStyle::Pedal, 2, 0,
