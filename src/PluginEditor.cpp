@@ -323,144 +323,6 @@ private:
 };
 
 //==============================================================================
-/// Strobe-style tuning wheel. The strobe bands rotate with the cents error;
-/// when the note is in tune they line up with the fixed top pointer.
-class TuningWheel : public juce::Component
-{
-public:
-    void setState (float cents, const juce::String& note, float referenceHz)
-    {
-        if (! std::isfinite (cents))
-            cents = 0.0f;
-
-        targetCents_ = juce::jlimit (-100.0f, 100.0f, cents);
-        note_ = note;
-        referenceHz_ = referenceHz;
-        hasNote_ = note.isNotEmpty() && note != "---";
-
-        if (! hasNote_)
-            targetCents_ = 0.0f;
-
-        displayCents_ += (targetCents_ - displayCents_) * 0.35f;
-        repaint();
-    }
-
-    void paint (juce::Graphics& g) override
-    {
-        auto bounds = getLocalBounds().toFloat();
-        const float size = juce::jmin (bounds.getWidth(), bounds.getHeight());
-        auto circle = juce::Rectangle<float> (size, size).withCentre (bounds.getCentre());
-        const float radius = size * 0.5f - 2.0f;
-
-        if (radius < 10.0f)
-            return;
-
-        g.setColour (juce::Colours::black.withAlpha (0.45f));
-        g.fillEllipse (circle.translated (0.0f, 3.0f));
-
-        g.setGradientFill (juce::ColourGradient (
-            juce::Colour (0xff26262c), circle.getCentreX(), circle.getY(),
-            juce::Colour (0xff0b0b0d), circle.getCentreX(), circle.getBottom(), false));
-        g.fillEllipse (circle);
-
-        g.setColour (juce::Colour (0xff34343a));
-        g.drawEllipse (circle, 1.5f);
-
-        // Tick ring.
-        for (int i = 0; i < 36; ++i)
-        {
-            const float angle = (float) i / 36.0f * juce::MathConstants<float>::twoPi;
-            const auto dir = juce::Point<float> (std::sin (angle), -std::cos (angle));
-            const float inner = radius - ((i % 3 == 0) ? 12.0f : 7.0f);
-
-            g.setColour (i % 3 == 0 ? juce::Colour (0xff71717a)
-                                    : juce::Colour (0xff3f3f46));
-            g.drawLine ({ circle.getCentre() + dir * inner,
-                          circle.getCentre() + dir * (radius - 2.0f) }, 1.0f);
-        }
-
-        const auto tuning = tuningColour();
-        const float rotation = displayCents_ * 6.0f
-                             * juce::MathConstants<float>::pi / 180.0f;
-
-        // Rotating strobe bands.
-        for (int i = 0; i < 12; ++i)
-        {
-            const float angle = rotation + (float) i / 12.0f
-                              * juce::MathConstants<float>::twoPi;
-            const auto dir = juce::Point<float> (std::sin (angle), -std::cos (angle));
-
-            g.setColour (tuning.withAlpha (hasNote_ ? 0.9f : 0.2f));
-            g.drawLine ({ circle.getCentre() + dir * (radius * 0.54f),
-                          circle.getCentre() + dir * (radius * 0.86f) }, 3.0f);
-        }
-
-        // Fixed top pointer.
-        juce::Path pointer;
-        pointer.addTriangle (circle.getCentreX() - 6.0f, circle.getY() + 2.0f,
-                             circle.getCentreX() + 6.0f, circle.getY() + 2.0f,
-                             circle.getCentreX(), circle.getY() + 14.0f);
-        g.setColour (juce::Colour (0xfff4f4f5));
-        g.fillPath (pointer);
-
-        // Centre readout.
-        auto centre = circle.reduced (radius * 0.34f);
-        g.setGradientFill (juce::ColourGradient (
-            juce::Colour (0xff17171a), centre.getCentreX(), centre.getY(),
-            juce::Colour (0xff09090b), centre.getCentreX(), centre.getBottom(), false));
-        g.fillEllipse (centre);
-        g.setColour (juce::Colour (0xff34343a));
-        g.drawEllipse (centre, 1.0f);
-
-        g.setColour (tuning);
-        g.setFont (juce::FontOptions (26.0f, juce::Font::bold));
-        g.drawFittedText (hasNote_ ? note_ : "---",
-                          centre.toNearestInt().removeFromTop (38),
-                          juce::Justification::centred, 1);
-
-        juce::String centsText = "---";
-
-        if (hasNote_)
-            centsText = std::abs (targetCents_) < 2.0f
-                ? "IN TUNE"
-                : juce::String (targetCents_, 1) + " c";
-
-        g.setColour (juce::Colour (kTextDim));
-        g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-        g.drawFittedText (centsText,
-                          centre.toNearestInt().removeFromBottom (20),
-                          juce::Justification::centred, 1);
-
-        g.setColour (juce::Colour (kTextDim).withAlpha (0.8f));
-        g.setFont (juce::FontOptions (9.0f));
-        g.drawText ("REF " + juce::String (referenceHz_, 1) + " Hz",
-                    circle.toNearestInt().removeFromBottom (12),
-                    juce::Justification::centred);
-    }
-
-private:
-    juce::Colour tuningColour() const
-    {
-        if (! hasNote_)
-            return juce::Colour (kTextDim);
-
-        if (std::abs (targetCents_) < 2.0f)
-            return juce::Colour (0xff4ade80);
-
-        if (std::abs (targetCents_) < 10.0f)
-            return juce::Colour (0xfffbbf24);
-
-        return juce::Colour (0xfff87171);
-    }
-
-    float targetCents_ = 0.0f;
-    float displayCents_ = 0.0f;
-    float referenceHz_ = 440.0f;
-    juce::String note_ { "---" };
-    bool hasNote_ = false;
-};
-
-//==============================================================================
 /// A numeric reference-frequency field (typed value, not a knob).
 class ReferenceField : public juce::Component
 {
@@ -547,6 +409,151 @@ private:
     float currentHz_ = 440.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ReferenceField)
+};
+
+//==============================================================================
+/// Horizontal strobe tuning guide used in the wide Pre FX tuner panel.
+class TunerStrip : public juce::Component
+{
+public:
+    explicit TunerStrip (APVTS& state)
+    {
+        reference_ = std::make_unique<ReferenceField> (state, "tuningReference", "Ref Hz");
+        addAndMakeVisible (*reference_);
+    }
+
+    void setState (float cents, const juce::String& note, float referenceHz)
+    {
+        if (! std::isfinite (cents))
+            cents = 0.0f;
+
+        targetCents_ = juce::jlimit (-50.0f, 50.0f, cents);
+        note_ = note;
+        referenceHz_ = referenceHz;
+        hasNote_ = note.isNotEmpty() && note != "---";
+
+        if (! hasNote_)
+            targetCents_ = 0.0f;
+
+        displayCents_ += (targetCents_ - displayCents_) * 0.35f;
+        repaint();
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds();
+        auto referenceArea = r.removeFromRight (126);
+        reference_->setBounds (referenceArea.withSizeKeepingCentre (120, 80));
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto r = getLocalBounds();
+        r.removeFromRight (126);
+        auto noteArea = r.removeFromLeft (58);
+        auto guide = r.reduced (4, 8);
+
+        const auto tuning = tuningColour();
+
+        g.setColour (tuning);
+        g.setFont (juce::FontOptions (24.0f, juce::Font::bold));
+        g.drawFittedText (hasNote_ ? note_ : "---",
+                          noteArea.removeFromTop (34),
+                          juce::Justification::centred, 1);
+
+        juce::String centsText = "---";
+
+        if (hasNote_)
+            centsText = std::abs (targetCents_) < 2.0f
+                ? "IN TUNE"
+                : juce::String (targetCents_, 1) + " c";
+
+        g.setColour (juce::Colour (kTextDim));
+        g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
+        g.drawFittedText (centsText, noteArea.removeFromTop (20),
+                          juce::Justification::centred, 1);
+
+        g.setColour (juce::Colour (0xff121214));
+        g.fillRoundedRectangle (guide.toFloat(), 5.0f);
+        g.setColour (juce::Colour (kPanelLine));
+        g.drawRoundedRectangle (guide.toFloat(), 5.0f, 1.0f);
+
+        auto inner = guide.reduced (7, 5);
+        const float centreX = inner.getCentreX();
+        const float halfWidth = inner.getWidth() * 0.44f;
+        const float trackY = inner.getCentreY();
+
+        g.setColour (juce::Colour (0xff4a4a52));
+        g.drawLine (static_cast<float> (inner.getX()), trackY,
+                    static_cast<float> (inner.getRight()), trackY, 1.0f);
+
+        for (int c = -50; c <= 50; c += 10)
+        {
+            const float x = centreX + (float) c / 50.0f * halfWidth;
+            const bool major = (c == 0 || std::abs (c) == 50);
+            g.setColour (major ? juce::Colour (0xffa1a1aa) : juce::Colour (0xff52525b));
+            g.drawVerticalLine ((int) std::round (x),
+                                major ? trackY - 8.0f : trackY - 4.0f,
+                                major ? trackY + 8.0f : trackY + 4.0f);
+        }
+
+        // Moving strobe bands: they settle around the centre pointer when the
+        // note is in tune.
+        const float bandOffset = displayCents_ * 1.35f;
+        for (int band = -8; band <= 8; ++band)
+        {
+            const float x = centreX + band * 11.0f + bandOffset;
+
+            if (x < inner.getX() || x > inner.getRight())
+                continue;
+
+            g.setColour (tuning.withAlpha (hasNote_ ? 0.55f : 0.15f));
+            g.drawVerticalLine ((int) std::round (x), trackY - 10.0f, trackY + 10.0f);
+        }
+
+        const float needleX = juce::jlimit (static_cast<float> (inner.getX()),
+                                            static_cast<float> (inner.getRight()),
+                                            centreX + (targetCents_ / 50.0f) * halfWidth);
+        g.setColour (tuning);
+        g.drawVerticalLine ((int) std::round (needleX), trackY - 12.0f, trackY + 12.0f);
+
+        juce::Path pointer;
+        pointer.addTriangle (centreX - 4.0f, inner.getBottom() - 8.0f,
+                             centreX + 4.0f, inner.getBottom() - 8.0f,
+                             centreX, inner.getBottom() - 1.0f);
+        g.setColour (juce::Colour (0xfff4f4f5));
+        g.fillPath (pointer);
+
+        g.setColour (juce::Colour (kTextDim));
+        g.setFont (juce::FontOptions (8.0f, juce::Font::bold));
+        g.drawText ("-50", inner.removeFromLeft (20), juce::Justification::centredLeft);
+        g.drawText ("0", inner.withSizeKeepingCentre (20, 10), juce::Justification::centred);
+        g.drawText ("+50", inner.removeFromRight (24), juce::Justification::centredRight);
+    }
+
+private:
+    juce::Colour tuningColour() const
+    {
+        if (! hasNote_)
+            return juce::Colour (kTextDim);
+
+        if (std::abs (targetCents_) < 2.0f)
+            return juce::Colour (0xff4ade80);
+
+        if (std::abs (targetCents_) < 10.0f)
+            return juce::Colour (0xfffbbf24);
+
+        return juce::Colour (0xfff87171);
+    }
+
+    std::unique_ptr<ReferenceField> reference_;
+    float targetCents_ = 0.0f;
+    float displayCents_ = 0.0f;
+    float referenceHz_ = 440.0f;
+    juce::String note_ { "---" };
+    bool hasNote_ = false;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TunerStrip)
 };
 
 //==============================================================================
@@ -705,6 +712,62 @@ class InvisibleToggle : public juce::ToggleButton
 {
 public:
     void paint (juce::Graphics&) override {}
+};
+
+//==============================================================================
+/// Two-position pickup-direction switch for the Impersonator.
+class ModeSwitch : public juce::Component
+{
+public:
+    ModeSwitch (APVTS& state, const juce::String& paramId)
+    {
+        addAndMakeVisible (toggle_);
+        toggle_.setButtonText ({});
+        toggle_.setMouseCursor (juce::MouseCursor::PointingHandCursor);
+        toggle_.onStateChange = [this] { repaint(); };
+        attachment_ = std::make_unique<APVTS::ButtonAttachment> (state, paramId, toggle_);
+    }
+
+    void resized() override { toggle_.setBounds (getLocalBounds()); }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto r = getLocalBounds().reduced (2);
+        auto title = r.removeFromTop (14);
+
+        g.setColour (juce::Colour (kAccent));
+        g.setFont (juce::FontOptions (8.5f, juce::Font::bold));
+        g.drawText ("MODE", title, juce::Justification::centred);
+
+        auto body = r.reduced (1);
+        g.setColour (juce::Colour (0xff121214));
+        g.fillRoundedRectangle (body.toFloat(), 5.0f);
+        g.setColour (juce::Colour (kPanelLine));
+        g.drawRoundedRectangle (body.toFloat(), 5.0f, 1.0f);
+
+        auto drawOption = [&g] (juce::Rectangle<int> area, const juce::String& text, bool active)
+        {
+            if (active)
+            {
+                g.setColour (juce::Colour (kAccent).withAlpha (0.17f));
+                g.fillRoundedRectangle (area.toFloat().reduced (2.0f, 1.0f), 4.0f);
+            }
+
+            g.setColour (active ? juce::Colour (kAccent) : juce::Colour (kTextDim));
+            g.setFont (juce::FontOptions (8.5f, juce::Font::bold));
+            g.drawText (text, area, juce::Justification::centred);
+        };
+
+        auto top = body.removeFromTop (body.getHeight() / 2);
+        drawOption (top, "B \xe2\x86\x92 N", toggle_.getToggleState());
+        drawOption (body, "N \xe2\x86\x92 B", ! toggle_.getToggleState());
+    }
+
+private:
+    InvisibleToggle toggle_;
+    std::unique_ptr<APVTS::ButtonAttachment> attachment_;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ModeSwitch)
 };
 
 //==============================================================================
@@ -1156,6 +1219,48 @@ private:
     bool hovered_ = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SectionPanel)
+};
+
+//==============================================================================
+/// Places the horizontal tuner above the impersonator and pitch pedals,
+/// removing the tuner's narrow vertical strip from the main row.
+class PreFxTopGroup : public juce::Component
+{
+public:
+    PreFxTopGroup (SectionPanel& tuner, SectionPanel& impersonator, SectionPanel& pitch)
+        : tuner_ (tuner), impersonator_ (impersonator), pitch_ (pitch)
+    {
+        addAndMakeVisible (tuner_);
+        addAndMakeVisible (impersonator_);
+        addAndMakeVisible (pitch_);
+    }
+
+    int preferredWidth() const { return pedalWidth * 2 + pedalGap; }
+    int preferredHeight() const { return tunerHeight + pedalGap + pedalHeight; }
+
+    void resized() override
+    {
+        const int width = getWidth();
+        tuner_.setBounds (0, 0, width, tunerHeight);
+
+        const int pedalY = tunerHeight + pedalGap;
+        const int height = juce::jmax (1, getHeight() - pedalY);
+
+        impersonator_.setBounds (0, pedalY, pedalWidth, height);
+        pitch_.setBounds (pedalWidth + pedalGap, pedalY, pedalWidth, height);
+    }
+
+private:
+    static constexpr int pedalWidth = 176;
+    static constexpr int pedalGap = 8;
+    static constexpr int tunerHeight = 130;
+    static constexpr int pedalHeight = 300;
+
+    SectionPanel& tuner_;
+    SectionPanel& impersonator_;
+    SectionPanel& pitch_;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PreFxTopGroup)
 };
 
 //==============================================================================
@@ -1664,15 +1769,21 @@ void NAMBerryEditor::buildUi()
 
     auto makePanel = [this, &reduced] (int tabIndex, const juce::String& title,
                                        UnitStyle style, int cols, int width,
-                                       juce::Colour body, juce::Colour accent) -> SectionPanel*
+                                       juce::Colour body, juce::Colour accent,
+                                       bool registerPanel = true) -> SectionPanel*
     {
         auto panel = std::make_unique<SectionPanel> (
             title, style, cols, width, body, accent, reduced);
         auto* raw = panel.get();
         ownedControls_.push_back (std::move (panel));
-        tabPanels_[tabIndex].push_back (raw);
-        allPanels_.push_back (raw);
-        content_.addAndMakeVisible (raw);
+
+        if (registerPanel)
+        {
+            tabPanels_[tabIndex].push_back (raw);
+            allPanels_.push_back (raw);
+            content_.addAndMakeVisible (raw);
+        }
+
         return raw;
     };
 
@@ -1746,6 +1857,7 @@ void NAMBerryEditor::buildUi()
 
     // Unit colours.
     const juce::Colour tunerBody   (0xff0d5c58), tunerAccent   (0xff5eead4);
+    const juce::Colour impersonatorBody (0xff4a2e2e), impersonatorAccent (0xfff59e0b);
     const juce::Colour capoBody    (0xff7a4a10), capoAccent    (0xfffbbf24);
     const juce::Colour gateBody    (0xff34343c), gateAccent    (0xffcbd5e1);
     const juce::Colour compBody    (0xff82380f), compAccent    (0xfffb923c);
@@ -1761,43 +1873,66 @@ void NAMBerryEditor::buildUi()
     const juce::Colour reverbBody  (0xff1e3a5f), reverbAccent  (0xff93c5fd);
 
     // 1. Pre FX -------------------------------------------------------------
-    if (auto* tuner = makePanel (0, "TUNER", UnitStyle::Pedal, 1, 0,
-                                 tunerBody, tunerAccent))
+    auto* tunerPanel = makePanel (0, "TUNER", UnitStyle::RackUnit, 1, 360,
+                                  tunerBody, tunerAccent, false);
+
+    if (tunerPanel != nullptr)
     {
-        auto wheel = std::make_unique<TuningWheel>();
-        auto* rawWheel = wheel.get();
-        ownedControls_.push_back (std::move (wheel));
-
-        tuner->addRow (rawWheel, 170);
-        tuner->setRowsFirst (true);
-
-        auto reference = std::make_unique<ReferenceField> (
-            state, "tuningReference", "Ref Hz");
-        auto* rawReference = reference.get();
-        ownedControls_.push_back (std::move (reference));
-        tuner->addRow (rawReference, 70);
+        auto strip = std::make_unique<TunerStrip> (state);
+        auto* rawStrip = strip.get();
+        ownedControls_.push_back (std::move (strip));
+        tunerPanel->addRow (rawStrip, 90);
+        tunerPanel->setPreferredHeight (130);
 
         if (auto* t = processor_.getDropTuner())
-            rawWheel->setState (t->getCentsDeviation(),
+            rawStrip->setState (t->getCentsDeviation(),
                                 t->getDetectedNote(),
                                 t->getReferenceFrequency());
 
-        tunerUpdater_ = [this, rawWheel]
+        tunerUpdater_ = [this, rawStrip]
         {
             if (auto* tuner = processor_.getDropTuner())
-                rawWheel->setState (tuner->getCentsDeviation(),
+                rawStrip->setState (tuner->getCentsDeviation(),
                                     tuner->getDetectedNote(),
                                     tuner->getReferenceFrequency());
         };
     }
 
-    if (auto* pitch = makePanel (0, "PITCH", UnitStyle::Pedal, 2, 0,
-                                 capoBody, capoAccent))
+    auto* impersonatorPanel = makePanel (0, "IMPERSONATOR", UnitStyle::Pedal, 2, 0,
+                                         impersonatorBody, impersonatorAccent, false);
+
+    if (impersonatorPanel != nullptr)
     {
-        pitch->addItem (makeControl ("capoFret", "Semitones"));
-        pitch->addItem (makeControl ("capoMix", "Mix"));
-        pitch->setFooter (makeFootswitch ("capoBypass", capoAccent), 82);
-        pitch->setPreferredHeight (300);
+        auto mode = std::make_unique<ModeSwitch> (state, "impersonatorToNeck");
+        auto* rawMode = mode.get();
+        ownedControls_.push_back (std::move (mode));
+        impersonatorPanel->addItem (rawMode);
+        impersonatorPanel->addItem (makeControl ("impersonatorLevel", "Level"));
+        impersonatorPanel->setFooter (
+            makeFootswitch ("impersonatorBypass", impersonatorAccent), 82);
+        impersonatorPanel->setPreferredHeight (300);
+    }
+
+    auto* pitchPanel = makePanel (0, "PITCH", UnitStyle::Pedal, 2, 0,
+                                  capoBody, capoAccent, false);
+
+    if (pitchPanel != nullptr)
+    {
+        pitchPanel->addItem (makeControl ("capoFret", "Semitones"));
+        pitchPanel->addItem (makeControl ("capoMix", "Mix"));
+        pitchPanel->setFooter (makeFootswitch ("capoBypass", capoAccent), 82);
+        pitchPanel->setPreferredHeight (300);
+    }
+
+    if (tunerPanel != nullptr && impersonatorPanel != nullptr && pitchPanel != nullptr)
+    {
+        auto group = std::make_unique<PreFxTopGroup> (
+            *tunerPanel, *impersonatorPanel, *pitchPanel);
+        auto* rawGroup = group.get();
+        ownedControls_.push_back (std::move (group));
+        tabPanels_[0].push_back (rawGroup);
+        allPanels_.push_back (rawGroup);
+        content_.addAndMakeVisible (rawGroup);
     }
 
     if (auto* gate = makePanel (0, "GATE", UnitStyle::Pedal, 2, 0,
@@ -2010,7 +2145,7 @@ void NAMBerryEditor::layoutContent()
 
     struct Entry
     {
-        SectionPanel* panel;
+        juce::Component* panel;
         int width;
         int height;
     };
@@ -2020,22 +2155,34 @@ void NAMBerryEditor::layoutContent()
 
     for (auto* panel : tabPanels_[(size_t) tabIndex])
     {
-        auto* section = dynamic_cast<SectionPanel*> (panel);
-        if (section == nullptr)
+        int width = 0;
+        int wantedHeight = 0;
+
+        if (auto* section = dynamic_cast<SectionPanel*> (panel))
+        {
+            width = section->preferredWidth();
+
+            // The amp head stretches to the full window width.
+            if (section->isAmpHead())
+                width = juce::jmax (width, viewportWidth - 2 * margin);
+
+            wantedHeight = section->preferredHeight();
+        }
+        else if (auto* group = dynamic_cast<PreFxTopGroup*> (panel))
+        {
+            width = group->preferredWidth();
+            wantedHeight = group->preferredHeight();
+        }
+        else
+        {
             continue;
+        }
 
-        int width = section->preferredWidth();
-
-        // The amp head stretches to the full window width.
-        if (section->isAmpHead())
-            width = juce::jmax (width, viewportWidth - 2 * margin);
-
-        const int wantedHeight = section->preferredHeight();
         const int height = wantedHeight > 0
             ? juce::jmin (wantedHeight, contentHeight)
             : contentHeight;
 
-        entries.push_back ({ section, width, height });
+        entries.push_back ({ panel, width, height });
         totalWidth += width;
     }
 

@@ -10,6 +10,7 @@
 #include "namberry/DigitalCapo.h"
 #include "namberry/Compressor.h"
 #include "namberry/NoiseGate.h"
+#include "namberry/Impersonator.h"
 #include "namberry/PostEffects.h"
 
 namespace namberry {
@@ -84,6 +85,7 @@ private:
     std::unique_ptr<NoiseGate> noiseGate_;
     std::unique_ptr<Compressor> compressor_;
     std::unique_ptr<DigitalCapo> digitalCapo_;
+    std::unique_ptr<Impersonator> impersonator_;
     std::unique_ptr<NamModelLoader> namModel_;
     std::unique_ptr<NamModelLoader> namPedal_;
     std::unique_ptr<IrLoader> irLoader_;

@@ -894,6 +894,176 @@ int runFxStateMigrationTest()
     return passed ? 0 : 2;
 }
 
+int runIrLevelTest()
+{
+    const juce::File irFile ("/home/elipoli/Downloads/amps/IRs/cab Marshall 1960 celestion G12T75 sm57.wav");
+
+    if (! irFile.existsAsFile())
+    {
+        std::cout << "IR level test SKIP: test IR not found\n";
+        return 0;
+    }
+
+    constexpr double sampleRate = 48000.0;
+    constexpr int blockSize = 512;
+    constexpr int blocks = 10;
+
+    auto render = [&] (int loadedSlots)
+    {
+        namberry::IrLoader loader;
+        juce::dsp::ProcessSpec spec;
+        spec.sampleRate = sampleRate;
+        spec.maximumBlockSize = blockSize;
+        spec.numChannels = 2;
+        loader.prepare (spec);
+
+        for (int slot = 0; slot < loadedSlots; ++slot)
+        {
+            loader.loadIr (slot, irFile);
+            loader.setSlotMix (slot, 1.0f);
+            loader.setSlotPan (slot, 0.0f);
+            loader.setSlotPhaseInvert (slot, false);
+        }
+
+        // Convolution IR loading is asynchronous by default; prepare again so
+        // every slot is guaranteed to be active before measuring the level.
+        loader.prepare (spec);
+
+        juce::AudioBuffer<float> buffer (2, blockSize);
+        juce::MidiBuffer midi;
+        double phase = 0.0;
+        float rms = 0.0f;
+
+        for (int block = 0; block < blocks; ++block)
+        {
+            for (int i = 0; i < blockSize; ++i)
+            {
+                const float s = 0.2f * static_cast<float> (std::sin (phase));
+                phase += 2.0 * juce::MathConstants<double>::pi * 220.0 / sampleRate;
+                buffer.setSample (0, i, s);
+                buffer.setSample (1, i, s);
+            }
+
+            loader.processBlock (buffer, midi);
+
+            if (block == blocks - 1)
+            {
+                float sum = 0.0f;
+
+                for (int i = 0; i < blockSize; ++i)
+                    sum += buffer.getSample (0, i) * buffer.getSample (0, i);
+
+                rms = std::sqrt (sum / static_cast<float> (blockSize));
+            }
+        }
+
+        return rms;
+    };
+
+    const float one = render (1);
+    const float two = render (2);
+    const float three = render (3);
+    const float four = render (4);
+
+    const float reference = juce::jmax (1.0e-6f, one);
+    const bool passed = std::abs (one - two) / reference < 0.05f
+                     && std::abs (one - three) / reference < 0.05f
+                     && std::abs (one - four) / reference < 0.05f;
+
+    std::cout << "IR level 1=" << one << " 2=" << two
+              << " 3=" << three << " 4=" << four
+              << " " << (passed ? "PASS" : "FAIL") << "\n";
+
+    return passed ? 0 : 2;
+}
+
+int runImpersonatorTest()
+{
+    constexpr double sampleRate = 48000.0;
+    constexpr int blockSize = 512;
+    constexpr int blocks = 10;
+    constexpr float inputAmplitude = 0.2f;
+    constexpr float inputRms = inputAmplitude / 1.41421356f;
+
+    auto render = [&] (double frequency, namberry::Impersonator::Mode mode, bool bypassed,
+                       float levelDb = 0.0f) -> float
+    {
+        namberry::Impersonator impersonator;
+        juce::dsp::ProcessSpec spec;
+        spec.sampleRate = sampleRate;
+        spec.maximumBlockSize = blockSize;
+        spec.numChannels = 2;
+        impersonator.setMode (mode);
+        impersonator.setOutputLevelDb (levelDb);
+        impersonator.prepare (spec);
+        impersonator.setBypass (bypassed);
+
+        juce::AudioBuffer<float> buffer (2, blockSize);
+        juce::MidiBuffer midi;
+        double phase = 0.0;
+        float rms = 0.0f;
+
+        for (int block = 0; block < blocks; ++block)
+        {
+            for (int i = 0; i < blockSize; ++i)
+            {
+                const float s = inputAmplitude * static_cast<float> (std::sin (phase));
+                phase += 2.0 * juce::MathConstants<double>::pi * frequency / sampleRate;
+                buffer.setSample (0, i, s);
+                buffer.setSample (1, i, s);
+            }
+
+            impersonator.processBlock (buffer, midi);
+
+            if (block == blocks - 1)
+            {
+                float sum = 0.0f;
+
+                for (int i = 0; i < blockSize; ++i)
+                    sum += buffer.getSample (0, i) * buffer.getSample (0, i);
+
+                rms = std::sqrt (sum / static_cast<float> (blockSize));
+            }
+        }
+
+        return rms;
+    };
+
+    const auto toNeck150 = render (150.0, namberry::Impersonator::Mode::bridgeToNeck, false);
+    const auto toNeck3000 = render (3000.0, namberry::Impersonator::Mode::bridgeToNeck, false);
+    const auto toNeck6000 = render (6000.0, namberry::Impersonator::Mode::bridgeToNeck, false);
+
+    const auto toBridge400 = render (400.0, namberry::Impersonator::Mode::neckToBridge, false);
+    const auto toBridge3000 = render (3000.0, namberry::Impersonator::Mode::neckToBridge, false);
+    const auto toBridge6000 = render (6000.0, namberry::Impersonator::Mode::neckToBridge, false);
+
+    const auto bypassed = render (1000.0, namberry::Impersonator::Mode::bridgeToNeck, true);
+    const auto levelUnity = render (1000.0, namberry::Impersonator::Mode::bridgeToNeck, false, 0.0f);
+    const auto levelCut = render (1000.0, namberry::Impersonator::Mode::bridgeToNeck, false, -6.0f);
+
+    const bool toNeckOk = toNeck150 > inputRms * 1.02f
+                       && toNeck3000 < inputRms * 0.95f
+                       && toNeck6000 < inputRms * 0.85f;
+
+    const bool toBridgeOk = toBridge400 < inputRms * 0.95f
+                         && toBridge3000 > inputRms * 1.02f
+                         && toBridge6000 > inputRms * 1.01f;
+
+    const bool bypassOk = std::abs (bypassed - inputRms) < inputRms * 0.02f;
+    const bool levelOk = std::abs (levelCut / juce::jmax (1.0e-6f, levelUnity) - 0.501f) < 0.03f;
+
+    const bool passed = toNeckOk && toBridgeOk && bypassOk && levelOk;
+
+    std::cout << "impersonator toNeck=" << toNeck150 << "/" << toNeck3000 << "/" << toNeck6000
+              << " toBridge=" << toBridge400 << "/" << toBridge3000 << "/" << toBridge6000
+              << " bypass=" << bypassed << " level0=" << levelUnity
+              << " level-6=" << levelCut
+              << " input=" << inputRms
+              << " " << (passed ? "PASS" : "FAIL") << "\n";
+
+    return passed ? 0 : 2;
+}
+
 int runCompressorTest()
 {
     constexpr double sampleRate = 48000.0;
@@ -1122,6 +1292,12 @@ int main (int argc, char** argv)
 
     if (argc > 1 && juce::String (argv[1]) == "--compressor")
         return runCompressorTest();
+
+    if (argc > 1 && juce::String (argv[1]) == "--impersonator")
+        return runImpersonatorTest();
+
+    if (argc > 1 && juce::String (argv[1]) == "--ir-level")
+        return runIrLevelTest();
 
     if (argc > 1 && juce::String (argv[1]) == "--persist")
         return runPersistenceTest();

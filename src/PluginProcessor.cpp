@@ -18,6 +18,16 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
         juce::NormalisableRange<float>(400.0f, 480.0f, 0.1f), 440.0f,
         juce::AudioParameterFloatAttributes().withLabel ("Hz")));
 
+    // ---- Impersonator pickup shaper ----
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        "impersonatorToNeck", "Impersonator To Neck", true));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "impersonatorLevel", "Impersonator Level",
+        juce::NormalisableRange<float>(-12.0f, 12.0f, 0.1f), 0.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("dB")));
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        "impersonatorBypass", "Impersonator Bypass", true));
+
     // ---- Noise Gate ----
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "gateThreshold", "Gate Threshold",
@@ -421,6 +431,7 @@ NAMBerryProcessor::NAMBerryProcessor()
     noiseGate_ = std::make_unique<NoiseGate>();
     compressor_ = std::make_unique<Compressor>();
     digitalCapo_ = std::make_unique<DigitalCapo>();
+    impersonator_ = std::make_unique<Impersonator>();
     namModel_ = std::make_unique<NamModelLoader>();
     namPedal_ = std::make_unique<NamModelLoader>();
     irLoader_ = std::make_unique<IrLoader>();
@@ -443,6 +454,7 @@ void NAMBerryProcessor::prepareToPlay (double sampleRate, int maxSamplesPerBlock
     noiseGate_->prepare(spec);
     compressor_->prepare(spec);
     digitalCapo_->prepare(spec);
+    impersonator_->prepare(spec);
     setLatencySamples(digitalCapo_->getReportedLatencySamples());
     namModel_->prepare(spec);
     namPedal_->prepare(spec);
@@ -479,7 +491,18 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
 
     dropTuner_->processBlock(buffer, midiMessages);
 
-    // 2. Shared pitch stage for the digital capo and drop tuning
+    // 2. Impersonator pickup shaper (after the tuner detector, before pitch)
+    {
+        const bool toNeck = apvts_.getRawParameterValue("impersonatorToNeck")->load() > 0.5f;
+
+        impersonator_->setBypass (apvts_.getRawParameterValue("impersonatorBypass")->load() > 0.5f);
+        impersonator_->setMode (toNeck ? Impersonator::Mode::bridgeToNeck
+                                       : Impersonator::Mode::neckToBridge);
+        impersonator_->setOutputLevelDb (apvts_.getRawParameterValue("impersonatorLevel")->load());
+        impersonator_->processBlock (buffer, midiMessages);
+    }
+
+    // 3. Shared pitch stage for the digital capo and drop tuning
     {
         const bool pitchBypassed = apvts_.getRawParameterValue("capoBypass")->load() > 0.5f;
         const float semitones = apvts_.getRawParameterValue("capoFret")->load();
