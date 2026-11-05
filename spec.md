@@ -30,7 +30,7 @@
 ### 3.1 Signal Flow (Stereo Path)
 
 ```
-Input → Tuner (detect) → Pitch (capo/drop) → Noise Gate → Compressor → NAM Pedal/Preamp → Pre-Amp EQ →
+Input → Tuner (detect) → Impersonator (pickup shaper) → Pitch (capo/drop) → Noise Gate → Compressor → NAM Pedal/Preamp → Pre-Amp EQ →
 NAM Amp Loader (Gain, Bass, Mid, Treble, Presence, Depth, Output) →
 Post-Amp EQ (Multi-Band) → 4-Slot IR Loader (Blend/Pan/Phase) →
 Post Effects (Chorus/Flanger/Phaser/Room/Delay/Reverb) → Output
@@ -41,7 +41,9 @@ Post Effects (Chorus/Flanger/Phaser/Room/Delay/Reverb) → Output
 The editor should be organized into the following five sections, in this exact order:
 
 1. Pre Effects
-   - Tuner (detect) and Pitch (capo/drop)
+   - Tuner (detect; wide horizontal panel above Impersonator and Pitch)
+   - Impersonator (pickup shaper)
+   - Pitch (capo/drop)
    - Gate
    - Compressor
    - Pedal
@@ -92,6 +94,7 @@ A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and alwa
   - `Delay` (stereo, with feedback, mix, time)
   - `Reverb` (algorithmic or convolution-based)
   - `DropTuner` (fundamental frequency detection for the tuner display)
+  - `Impersonator` (bridge/neck pickup-shaping preamp)
   - `PitchShifter` (Signalsmith Stretch wrapper)
   - `DigitalCapo` (shared semitone pitch stage)
 
@@ -114,7 +117,7 @@ A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and alwa
 - **Implementation**:
   - Use four instances of `juce::dsp::Convolution`.
   - Each slot has its own file loader and a mix/level parameter (0–100%).
-  - **Blending**: To avoid phase issues, ensure all IRs are normalized to the same length/sample rate upon load. Use a `DryWetMixer` per slot or a final summing bus with individual gains.
+  - **Blending**: Normalize each IR on load, then normalize the summed cabinet bus by the number of active slots. One active IR at 100 % is unity; two contribute 50 % each; three 33 % each; four 25 % each, so adding slots does not increase overall level. Mix knobs remain relative amounts within that normalized bus.
   - **Smooth Switching**: When a user loads a new IR during playback, create the new `Convolution` object on a background thread and swap it in using a `ReferenceCountedObject` or a lock-free swap to prevent audio dropouts.
 
 ### 4.3 Multi-Band EQs (Pre and Post Amp)
@@ -159,6 +162,7 @@ A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and alwa
 - **Implementation**: A convolution `Room` stage placed after the modulation effects and before the delay.
   - Two short stereo room impulse responses are generated at prepare time: a small room and a larger room. Each contains early reflections and a damped diffuse tail.
   - **Size** crossfades between the small and large room responses; **Room Mix** crossfades the dry signal with the convolution output.
+  - The wet path has a fixed gain boost so the room is clearly audible at modest Mix settings.
   - Room Mix defaults to **0 %**; at zero the convolution is skipped and the stage is completely dry. There is no separate room bypass.
   - The generated IRs use independent stereo noise, early reflection spread and a fixed damping filter, avoiding the obvious echo pattern of a simple delay network.
 - **Controls**: Size lives in the Post FX Room pedal; **Room Mix** lives in the persistent bottom strip beside the tabs.
@@ -173,11 +177,11 @@ A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and alwa
   - Autocorrelation-based fundamental frequency detection on the input signal.
   - Uses a long 80 ms analysis window, independent of the host block size, with decimation, first-peak selection, parabolic interpolation and median smoothing.
   - Detects down to ~80 Hz reliably (low E and drop tunings).
-  - Displays a **strobe tuning wheel**: the wheel rotates with the cents deviation, turns green when in tune, and shows the note and cents in the centre.
+  - Displays a **horizontal strobe tuning guide**: moving bands and a needle follow the cents deviation, turn green when in tune, and show the note and cents.
   - **Reference frequency**: 400–480 Hz, default 440 Hz; note/cents calculations use this reference.
   - Detection only: the drop-tune shift is performed by the shared Pitch stage; the tuner has no audio path, offset, or bypass.
   - Runs before the pitch stage so it analyses the clean input.
-- **Controls**: Tuning wheel (note + cents), reference frequency field (Hz).
+- **Controls**: Horizontal tuning guide (note + cents), reference frequency field (Hz). The tuner panel sits above the Impersonator and Pitch pedals in the Pre FX tab.
 
 ### 4.11 Pitch stage (Digital Capo + Drop Tune)
 - **Goal**: Transpose the guitar by a selected number of semitones, covering both capo (up) and drop-tuning (down) use.
@@ -200,6 +204,17 @@ A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and alwa
   - The default preset folder is `NAMBerry/Presets` in the user application-data directory; the last-used folder is remembered in `NAMBerry.settings`.
   - The editor’s header exposes a **PRESET** menu with Load, Save and Open Preset Folder actions.
 - **Controls**: PRESET header menu (Load Preset, Save Preset, Open Preset Folder).
+
+### 4.13 Impersonator pickup shaper
+- **Goal**: Approximate the tonal shift between bridge and neck pickup positions before the pitch/amp chain.
+- **Placement**: Immediately after the tuner detector and before the pitch stage.
+- **Implementation**: Two fixed IIR filter chains with a short crossfade when the direction changes.
+  - **Bridge → Neck**: 80 Hz high-pass, +4.5 dB low shelf at 180 Hz, +2 dB peak at 450 Hz, −4 dB peak at 3 kHz, −8 dB high shelf at 4 kHz, 5 kHz low-pass.
+  - **Neck → Bridge**: 130 Hz high-pass, −5 dB peak at 400 Hz, +4 dB peak at 3 kHz, +3 dB high shelf at 5.5 kHz.
+  - **Level**: manual ±12 dB output trim, default 0 dB. No automatic makeup boost.
+  - The pedal starts bypassed; the bypass footswitch resets the filter state.
+  - The effect is an EQ approximation, not a physical pickup/phase model.
+- **Controls**: B → N / N → B switch, Level, bypass footswitch.
 
 ---
 

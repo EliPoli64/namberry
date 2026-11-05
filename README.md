@@ -23,14 +23,15 @@ NAM captures sound excellent, but the surrounding workflow is usually fragmented
 NAMberry packages all of that into one plugin:
 
 - **Two NAM captures** — one amp, one pedal/preamp.
-- **Four IR slots** with per-slot mix, pan and phase.
-- **A complete chain** — tuner, pitch stage, gate, compressor, pedal, pre-amp EQ, amp, post-amp EQ, IR, post effects, master.
+- **Four IR slots** with per-slot mix, pan and phase, plus automatic level normalization across active slots.
+- **Impersonator pickup shaper** — a bridge/neck EQ preamp immediately after the tuner.
+- **A complete chain** — tuner, pickup shaper, pitch stage, gate, compressor, pedal, pre-amp EQ, amp, post-amp EQ, IR, post effects, master.
 - **Room ambience** — a convolution room blend for a realistic sense of physical space, separate from the reverb.
 - **Fast model management** — in-app NAM/IR browsers, two separate persisted roots, previous/next arrows, and drag-and-drop.
 - **Persistent choices** — the selected amp, pedal and all four IR files are restored on the next session.
 - **Preset save/load** — store the complete parameter state together with the current amp, pedal and IR file paths.
 - **Studio-quality pitch** — Signalsmith Stretch handles capo and drop tuning; the 50 ms latency is only applied while pitch shifting is active.
-- **A usable tuner** — a strobe wheel with cents deviation and an editable reference frequency (440, 432, etc.).
+- **A usable tuner** — a horizontal strobe guide with cents deviation and an editable reference frequency (440, 432, etc.).
 - **Stereo correctness** — the NAM stages are mono models, summed and copied to both channels; the dry path is always centred.
 
 ---
@@ -42,6 +43,7 @@ The chain runs left to right through the five editor tabs:
 ```
 Input
   → Tuner (detection only)
+  → Impersonator (pickup shaper)
   → Pitch (capo / drop tune)
   → Noise Gate
   → Compressor
@@ -58,7 +60,7 @@ Input
 
 | Tab | Contents |
 |---|---|
-| **Pre FX** | Tuner, Pitch, Gate, Compressor, NAM Pedal, Pre-Amp EQ |
+| **Pre FX** | Tuner, Impersonator, Pitch, Gate, Compressor, NAM Pedal, Pre-Amp EQ |
 | **Amp** | NAM amp model, Power, Gain, Bass, Mid, Treble, Presence, Depth, Output |
 | **Post EQ** | 3-band post-amp EQ |
 | **IR** | Four IR slots with mix, pan, phase, browse and arrows |
@@ -87,6 +89,26 @@ Both loaders use the same tone-stack implementation (bass, mid and treble); the 
 - presence high shelf (amp),
 - depth low shelf (amp).
 
+### Impersonator pickup shaper
+
+`Impersonator` is a pre-amp EQ pedal placed immediately after the tuner and before the pitch stage. It approximates the broad tonal shift between pickup positions using two fixed IIR filter chains, with a short crossfade when the direction switch changes.
+
+**Bridge → Neck**
+- 80 Hz high-pass
+- +4.5 dB low shelf at 180 Hz
+- +2 dB peak at 450 Hz
+- −4 dB peak at 3 kHz
+- −8 dB high shelf at 4 kHz
+- 5 kHz low-pass
+
+**Neck → Bridge**
+- 130 Hz high-pass
+- −5 dB peak at 400 Hz
+- +4 dB peak at 3 kHz
+- +3 dB high shelf at 5.5 kHz
+
+Controls are the **B → N / N → B** switch, a manual **Level** trim (default 0 dB), and a bypass footswitch. The pedal starts bypassed. There is no automatic +3 dB compensation. EQ changes cannot reproduce the physical pick-attack geometry or the full phase relationship between pickup positions, so this is a tone-shaping approximation.
+
 ### Pitch stage (capo + drop tune)
 
 The capo and drop tune share one pitch stage:
@@ -112,7 +134,7 @@ While pitch shifting is active, the dry path is delayed by the Stretch latency a
 - note name and cents deviation,
 - editable **reference frequency** (400–480 Hz, default 440 Hz).
 
-The reference affects the note/cents display only; the pitch engines use the measured period. The UI draws a strobe wheel: the bands rotate with the cents error, turn green near zero, amber within ±10 cents, and red beyond that.
+The reference affects the note/cents display only. The UI draws a horizontal strobe guide: moving bands and a cents needle turn green near zero, amber within ±10 cents, and red beyond that. The wide tuner panel sits above the Impersonator and Pitch pedals to save horizontal space.
 
 ### IR loader
 
@@ -214,6 +236,7 @@ src/
   PluginEditor.*        # hardware-style editor
   directory_browser.*   # in-app NAM / IR browser
   nam_model_loader.cpp
+  impersonator.cpp      # pickup-shaping preamp
   pitch_shifter.cpp     # Signalsmith Stretch wrapper
   digital_capo.cpp      # shared pitch stage
   drop_tuner.cpp
@@ -227,6 +250,7 @@ src/
 
 include/namberry/
   NamModelLoader.h
+  Impersonator.h
   PitchShifter.h
   DigitalCapo.h
   DropTuner.h
@@ -399,20 +423,31 @@ The plugin restores the last selected amp, pedal and all four slots when it next
 
 ### Tuner
 
-The Tuner pedal contains a strobe wheel:
+The tuner is a wide horizontal panel above the Impersonator and Pitch pedals:
 
-- The wheel rotates with the cents deviation.
+- A horizontal strobe guide shows the cents error.
 - Green: within ±2 cents.
 - Amber: within ±10 cents.
 - Red: further out.
-- The centre shows the note and cents, e.g. `A3 23.4 c`.
-- **Ref Hz** is an editable numeric field:
+- The left readout shows the note and cents, e.g. `A3 23.4 c`.
+- **Ref Hz** is an editable numeric field on the right:
   - Allowed range 400–480 Hz.
   - Default 440.0 Hz.
   - Type a value (432, 440, 441, 442, etc.), press **Enter** or click away.
   - **Escape** restores the current value.
 
 The reference affects the note and cents display. It does not transpose audio.
+
+### Impersonator
+
+The **IMPERSONATOR** pedal sits between the tuner and pitch stage:
+
+- **B → N** softens bridge-pickup bite and adds body/warmth.
+- **N → B** tightens neck-pickup lows and adds bridge-like attack and presence.
+- **Level** is a manual −12…+12 dB trim, default 0 dB.
+- The pedal starts **bypassed** on the footswitch.
+
+There is no automatic +3 dB makeup gain; use the Level knob only if the shaped tone needs matching.
 
 ### Pitch (capo / drop tune)
 
@@ -458,7 +493,7 @@ Four independent slots, each with:
 - pan,
 - phase invert.
 
-The slots sum into the cabinet output. The default IR mix is 100 % wet; the IR section has its own bypass.
+The slots are summed with automatic level compensation. One active IR at 100 % is unity gain; two active IRs contribute 50 % each; three contribute 33 % each; four contribute 25 % each. This keeps the cabinet level consistent as slots are enabled. The default IR mix is 100 % wet; the IR section has its own bypass.
 
 ### Post FX
 
@@ -522,6 +557,8 @@ cmake --build build --target NAMBerryOfflineTest NAMBerryUiSnapshot
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --fx-state
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --preset
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --compressor
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --impersonator
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --ir-level
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --reference
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --persist
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --dirs
@@ -545,6 +582,8 @@ What they cover:
 - `--fx-state`: verifies migration of old post-FX parameter ranges/defaults.
 - `--preset`: verifies preset save/load, including amp/IR file paths.
 - `--compressor`: verifies gain reduction, automatic makeup gain and bypass.
+- `--impersonator`: verifies both pickup-direction EQ curves, manual Level and bypass.
+- `--ir-level`: verifies equal output level with 1, 2, 3 and 4 loaded IRs at 100 %.
 - `--reference`: verifies 432/440 Hz reference behaviour.
 - `--persist`: restores selected amp, pedal and IR paths; expects local sample files and skips if they are missing.
 - `--dirs`: sets the two root directories.
@@ -577,6 +616,7 @@ The snapshot tool is headless and does not need a DAW.
 - **50 ms pitch latency is reported only while pitch shifting is active**. Bypassed, 0-semitone or 0 % mix states report 0 ms and pass the dry signal immediately; the host latency changes when the pitch stage is toggled.
 - The **Standalone app** does not apply host-style plugin delay compensation; the 50 ms latency while pitch shifting is audible there. DAWs compensate it.
 - Signalsmith Stretch is an STFT shifter and cannot meet the previous 5 ms target. That is the deliberate quality/latency trade-off.
+- The **Impersonator** is an EQ approximation. It cannot reproduce the physical pick-attack geometry or the full phase relationship between pickup positions.
 - NAM model latency is not separately reported by the plugin; only the pitch-stage latency is reported.
 - The **Room** is a convolution ambience with a short controlled decay, not a long reverb; use the Reverb effect for a long tail.
 - The plugin is **stereo in / stereo out only**.
