@@ -18,6 +18,7 @@ constexpr float kEarlyGains[] = {
 
 constexpr float kTailLevel = 0.32f;
 constexpr float kDampingHz = 6500.0f;
+constexpr float kRoomWetGain = 2.0f;
 
 } // namespace
 
@@ -183,8 +184,9 @@ void Room::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& /*m
         for (int channel = 0; channel < numChannels; ++channel)
         {
             const float dry = buffer.getSample (channel, sample);
-            const float wet = smallWet_.getSample (channel, sample) * (1.0f - size)
-                            + largeWet_.getSample (channel, sample) * size;
+            const float wet = (smallWet_.getSample (channel, sample) * (1.0f - size)
+                             + largeWet_.getSample (channel, sample) * size)
+                             * kRoomWetGain;
 
             buffer.setSample (channel, sample, dry + blend * (wet - dry));
         }
