@@ -3,6 +3,8 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_data_structures/juce_data_structures.h>
 #include <juce_dsp/juce_dsp.h>
+
+#include <atomic>
 #include "namberry/NamModelLoader.h"
 #include "namberry/IrLoader.h"
 #include "namberry/MultiBandEQ.h"
@@ -15,7 +17,8 @@
 
 namespace namberry {
 
-class NAMBerryProcessor : public juce::AudioProcessor
+class NAMBerryProcessor : public juce::AudioProcessor,
+                          private juce::AsyncUpdater
 {
 public:
     NAMBerryProcessor();
@@ -79,6 +82,8 @@ public:
     IrLoader* getIrLoader() { return irLoader_.get(); }
 
 private:
+    void handleAsyncUpdate() override;
+
     //==============================================================================
     // DSP Modules
     std::unique_ptr<DropTuner> dropTuner_;
@@ -96,6 +101,9 @@ private:
     //==============================================================================
     juce::AudioProcessorValueTreeState apvts_;
     std::unique_ptr<juce::PropertiesFile> settings_;
+
+    std::atomic<int> pendingLatencySamples_ { 0 };
+    std::atomic<int> appliedLatencySamples_ { 0 };
 
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NAMBerryProcessor)

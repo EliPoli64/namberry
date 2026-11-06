@@ -549,6 +549,7 @@ cmake --build build --target NAMBerryOfflineTest NAMBerryUiSnapshot
 ```bash
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --detector
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --pitch
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --pitch-blocks
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --detected-stage
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --dry-center
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --delay-reset
@@ -574,6 +575,7 @@ What they cover:
 
 - `--detector`: pitch detection across 82.41–440 Hz.
 - `--pitch`: Signalsmith Stretch pitch accuracy and dry/bypass behaviour.
+- `--pitch-blocks`: Stretch at 128, 192, 256 and 512-sample host blocks.
 - `--detected-stage`: detector → Stretch pitch stage.
 - `--dry-center`: verifies both channels are identical when fully dry.
 - `--delay-reset`: verifies the delay tail is discarded on bypass.

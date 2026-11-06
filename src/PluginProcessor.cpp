@@ -455,7 +455,12 @@ void NAMBerryProcessor::prepareToPlay (double sampleRate, int maxSamplesPerBlock
     compressor_->prepare(spec);
     digitalCapo_->prepare(spec);
     impersonator_->prepare(spec);
-    setLatencySamples(digitalCapo_->getReportedLatencySamples());
+
+    const int initialPitchLatency = digitalCapo_->getReportedLatencySamples();
+    setLatencySamples (initialPitchLatency);
+    pendingLatencySamples_.store (initialPitchLatency);
+    appliedLatencySamples_.store (initialPitchLatency);
+
     namModel_->prepare(spec);
     namPedal_->prepare(spec);
     irLoader_->prepare(spec);
@@ -515,8 +520,15 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
 
         const int pitchLatency = digitalCapo_->getReportedLatencySamples();
 
-        if (pitchLatency != getLatencySamples())
-            setLatencySamples (pitchLatency);
+        // Never call setLatencySamples() from the audio thread. Some hosts
+        // respond by reconfiguring their audio stream, which can produce the
+        // ALSA "broken pipe" errors seen when pitch was activated.
+        if (pitchLatency != appliedLatencySamples_.load()
+            && pitchLatency != pendingLatencySamples_.load())
+        {
+            pendingLatencySamples_.store (pitchLatency);
+            triggerAsyncUpdate();
+        }
     }
 
     // 3. Noise Gate
@@ -681,6 +693,18 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         const float gainDb = apvts_.getRawParameterValue("masterOutput")->load();
         const float gain = juce::Decibels::decibelsToGain(gainDb);
         buffer.applyGain(gain);
+    }
+}
+
+//==============================================================================
+void NAMBerryProcessor::handleAsyncUpdate()
+{
+    const int latency = pendingLatencySamples_.load();
+
+    if (latency != appliedLatencySamples_.load())
+    {
+        setLatencySamples (latency);
+        appliedLatencySamples_.store (latency);
     }
 }
 

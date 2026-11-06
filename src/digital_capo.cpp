@@ -16,7 +16,11 @@ void DigitalCapo::prepare (const juce::dsp::ProcessSpec& spec)
     dryDelay_.reset();
 
     const int channels = juce::jmax (1, static_cast<int> (spec.numChannels));
-    wet_.setSize (channels, maxBlockSize_);
+
+    // Leave headroom for hosts that change their buffer size without calling
+    // prepareToPlay again. Resizing this buffer on the audio thread can cause
+    // dropouts and, with Stretch, very audible corruption.
+    wet_.setSize (channels, juce::jmax (maxBlockSize_, 8192));
     wet_.clear();
 
     mixSmoothed_.reset (spec.sampleRate, 0.020);

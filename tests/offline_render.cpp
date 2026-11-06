@@ -320,6 +320,70 @@ int runPitchTest()
     return allPassed ? 0 : 2;
 }
 
+int runPitchBlockSizeTest()
+{
+    constexpr double sampleRate = 48000.0;
+    constexpr double inputFrequency = 220.0;
+    const int blockSizes[] = { 128, 192, 256, 512 };
+
+    bool allPassed = true;
+
+    for (int blockSize : blockSizes)
+    {
+        namberry::DigitalCapo capo;
+        juce::dsp::ProcessSpec spec;
+        spec.sampleRate = sampleRate;
+        spec.maximumBlockSize = 128; // deliberately smaller than the first test block
+        spec.numChannels = 2;
+        capo.prepare (spec);
+        capo.setSemitones (7.0f);
+        capo.setMix (1.0f);
+        capo.setBypass (false);
+
+        juce::AudioBuffer<float> buffer (2, blockSize);
+        juce::MidiBuffer midi;
+        double phase = 0.0;
+        std::vector<float> captured;
+        captured.reserve (32768);
+        bool finite = true;
+
+        for (int block = 0; block < 220; ++block)
+        {
+            for (int i = 0; i < blockSize; ++i)
+            {
+                const float s = 0.2f * static_cast<float> (std::sin (phase));
+                phase += 2.0 * juce::MathConstants<double>::pi * inputFrequency / sampleRate;
+                buffer.setSample (0, i, s);
+                buffer.setSample (1, i, s);
+            }
+
+            capo.processBlock (buffer, midi);
+
+            for (int i = 0; i < blockSize; ++i)
+                finite = finite && std::isfinite (buffer.getSample (0, i));
+
+            if (block * blockSize >= 24000)
+                for (int i = 0; i < blockSize && captured.size() < 32768; ++i)
+                    captured.push_back (buffer.getSample (0, i));
+        }
+
+        const float measured = estimateZeroCrossingFrequency (captured, sampleRate);
+        const double expected = inputFrequency * std::pow (2.0, 7.0 / 12.0);
+        const float cents = measured > 0.0f
+            ? 1200.0f * std::log2 (measured / static_cast<float> (expected))
+            : 9999.0f;
+
+        const bool passed = finite && std::abs (cents) < 40.0f;
+        allPassed = allPassed && passed;
+
+        std::cout << "pitch block " << blockSize
+                  << ": " << measured << " Hz (" << cents << " cents)"
+                  << " " << (passed ? "PASS" : "FAIL") << "\n";
+    }
+
+    return allPassed ? 0 : 2;
+}
+
 int runDetectorTest()
 {
     constexpr double sampleRate = 48000.0;
@@ -1310,6 +1374,9 @@ int main (int argc, char** argv)
 
     if (argc > 1 && juce::String (argv[1]) == "--detected-stage")
         return runDetectedStageTest();
+
+    if (argc > 1 && juce::String (argv[1]) == "--pitch-blocks")
+        return runPitchBlockSizeTest();
 
     if (argc > 1 && juce::String (argv[1]) == "--pitch")
         return runPitchTest();
