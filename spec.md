@@ -20,7 +20,7 @@
 | **NAM Inference** | **NeuralAmpModelerCore** or **NeuralAudio** | `NeuralAmpModelerCore` is the official high-performance DSP library for running `.nam` models (WaveNet, LSTM, ConvNet, Linear). `NeuralAudio` is an alternative that offers A1/A2 support with a simpler API and MIT license. |
 | **Build System** | **CMake** (v3.22+) | Enables reproducible cross-platform builds and static linking of JUCE modules and third-party dependencies. |
 | **IR Loading** | **JUCE `dsp::Convolution`** | Built-in JUCE module for zero-latency, real-time convolution with support for loading WAV/AIFF files. |
-| **Drop Tuner / Pitch Stage** | **Signalsmith Stretch** | The tuner detects the fundamental for display; one shared −12…+12 semitone Stretch stage handles capo and drop tuning with a mix control. Stretch uses a 50 ms block and reports that latency while active, zero when inactive. |
+| **Drop Tuner / Pitch Stage** | **Rubber Band / Signalsmith Stretch** | The tuner detects the fundamental for display; one shared −12…+12 semitone stage handles capo and drop tuning with a mix control. Rubber Band is used when available at runtime, with a self-contained Stretch fallback. Both engines use a fixed-size streaming wrapper and report a measured active latency, zero when inactive. |
 | **UI** | **JUCE `Component`** / **Visage** (optional) | JUCE’s native UI components are sufficient; Visage can be used for GPU-accelerated custom rendering if needed. |
 
 ---
@@ -33,7 +33,7 @@
 Input → Tuner (detect) → Impersonator (pickup shaper) → Pitch (capo/drop) → Noise Gate → Compressor → NAM Pedal/Preamp → Pre-Amp EQ →
 NAM Amp Loader (Gain, Bass, Mid, Treble, Presence, Depth, Output) →
 Post-Amp EQ (Multi-Band) → 4-Slot IR Loader (Blend/Pan/Phase) →
-Post Effects (Chorus/Flanger/Phaser/Room/Delay/Reverb) → Output
+Post Effects (Chorus/Flanger/Phaser/Room/Delay/Reverb) → Master (+6 dB fixed trim) → Output
 ```
 
 ### 3.2 UI Section Order
@@ -49,6 +49,7 @@ The editor should be organized into the following five sections, in this exact o
    - Pedal
    - Pre EQ
 2. Amp
+   - Model browse, arrows and a current-model LCD
    - Gain
    - Bass
    - Mid
@@ -57,18 +58,21 @@ The editor should be organized into the following five sections, in this exact o
    - Depth
    - Output
 3. Post Amp EQ
-   - Multi-band EQ
+   - Multi-band EQ in a 3-3-2 layout
+   - High-pass and low-pass filters centered at the bottom
 4. IR
    - 4 slots with blend, pan, and phase controls
 5. Post Effects
    - Chorus
    - Flanger
    - Phaser
-   - Room (convolution room, not a long reverb)
+   - Room (short algorithmic ambience/doubler, not a long reverb)
    - Delay
    - Reverb
 
 This order keeps the pedal before the amp, keeps all pre-amp shaping before the core amp model, and preserves the clear signal-flow layout the plugin UI should reflect.
+
+Each tab uses a hardware icon (pedal, amp, EQ, speaker, sparkle) with a small label. Right-click any tab to bypass that section; the icon dims and shows a red LED while bypassed.
 
 A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and always exposes the Room Mix and master Output knobs.
 
@@ -90,12 +94,12 @@ A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and alwa
   - `ModulationLfo` (shared sine/triangle LFO)
   - `ModulatedDelay` (chorus/flanger delay core with feedback)
   - `Phaser` (selectable 4/8/12-stage all-pass cascade)
-  - `Room` (convolution ambience using generated small/large room IRs, with size and dry/wet mix; not a long reverb)
+  - `Room` (short algorithmic ambience/doubler-stereoizer using early reflections and an eight-line FDN, with a Size macro and equal-power dry/wet mix; decay capped at 0.3 s)
   - `Delay` (stereo, with feedback, mix, time)
   - `Reverb` (algorithmic or convolution-based)
   - `DropTuner` (fundamental frequency detection for the tuner display)
   - `Impersonator` (bridge/neck pickup-shaping preamp)
-  - `PitchShifter` (Signalsmith Stretch wrapper)
+  - `PitchShifter` (Rubber Band / Signalsmith streaming pitch engines)
   - `DigitalCapo` (shared semitone pitch stage)
 
 ---
@@ -125,6 +129,7 @@ A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and alwa
 - **Implementation**: Build a `MultiBandEQ` class using JUCE’s `dsp::IIR` filters.
   - **Bands**: At least 3 bands per EQ (Low Shelf, Peak (Mid), High Shelf).
   - **Parameters**: Frequency (20 Hz–20 kHz), Gain (-24 dB to +24 dB), Q (0.1–10).
+  - The Post-EQ additionally has a 12 dB/octave high-pass and low-pass (defaults 20 Hz and 20 kHz).
   - Instantiate two separate `MultiBandEQ` objects: one placed before the NAM loader, one after the IR loader.
 
 ### 4.4 Compressor
@@ -147,29 +152,30 @@ A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and alwa
 - **Goal**: Provide three independent, footswitchable modulation pedals with the parameter ranges from `fx-spec.md`.
 - **Implementation**:
   - A shared `ModulationLfo` class provides sine and triangle modulation with smoothed rate and optional per-channel phase offset.
-  - **Chorus**: A stereo modulated delay using a sine LFO with the right channel offset by 180°. Controls: Rate 0.1–5 Hz (0.8), Depth 0–100 % (50), Feedback 0–70 % (15), Delay 5–30 ms (15), Mix 0–100 % (50).
-  - **Flanger**: A shorter stereo delay using a triangle LFO and a signed feedback path. Controls: Rate 0.05–10 Hz (0.4), Depth 0–100 % (60), Manual 0.5–10 ms (2), Feedback −95…+95 % (40), Mix 0–100 % (50).
-  - **Phaser**: Cascaded first-order all-pass stages with a sine LFO sweeping around 600 Hz by up to ±1.5 octaves at full depth. Controls: Rate 0.05–8 Hz (0.5), Depth 0–100 % (70), Feedback 0–90 % (30), Stages 4/8/12 (8), Mix 0–100 % (50).
-  - Chorus and flanger use fractional delay lines with feedback and linear dry/wet mixing; the phaser uses 4, 8 or 12 all-pass stages and feedback.
+  - **Chorus**: A stereo modulated delay using a sine LFO with the right channel offset by 180°. Controls: Rate 0.1–5 Hz (0.8), Depth 0–100 % (50), Feedback 0–70 % (15), Delay 5–30 ms (15), Mix 0–50 % (50).
+  - **Flanger**: A shorter stereo delay using a triangle LFO and a signed feedback path. Controls: Rate 0.05–10 Hz (0.4), Depth 0–100 % (60), Manual 0.5–10 ms (2), Feedback −95…+95 % (40), Mix 0–50 % (50).
+  - **Phaser**: Cascaded first-order all-pass stages with a sine LFO sweeping around 600 Hz by up to ±1.5 octaves at full depth. Controls: Rate 0.05–8 Hz (0.5), Depth 0–100 % (70), Feedback 0–90 % (30), Stages 4/8/12 (8), Mix 0–50 % (50).
+  - The mix range ends at the old 50 % maximum; the wet path gets a 2× boost so maximum mix is both capped and louder. Chorus and flanger use fractional delay lines with feedback and dry/wet mixing; the phaser uses 4, 8 or 12 all-pass stages and feedback.
   - Each effect has its own bypass footswitch and resets its delay/filter state when bypassed.
 
 ### 4.7 Delay
 - **Goal**: Stereo delay with musical controls.
-- **Implementation**: Circular buffer delay line with parameters: Time (1 ms–2 s), Feedback (0–95%), Mix (0–100%), and optionally a high-cut filter in the feedback path.
+- **Implementation**: Circular buffer delay line with parameters: Time (1 ms–2 s), Feedback (0–10, where 0 is one repeat and 10 is a near-endless tail), Mix (0–100%), and optionally a high-cut filter in the feedback path.
 
 ### 4.8 Room ambience
 - **Goal**: Add a realistic sense of physical space and depth without turning the tone into a long reverb.
-- **Implementation**: A convolution `Room` stage placed after the modulation effects and before the delay.
-  - Two short stereo room impulse responses are generated at prepare time: a small room and a larger room. Each contains early reflections and a damped diffuse tail.
-  - **Size** crossfades between the small and large room responses; **Room Mix** crossfades the dry signal with the convolution output.
-  - The wet path has a fixed gain boost so the room is clearly audible at modest Mix settings.
-  - Room Mix defaults to **0 %**; at zero the convolution is skipped and the stage is completely dry. There is no separate room bypass.
-  - The generated IRs use independent stereo noise, early reflection spread and a fixed damping filter, avoiding the obvious echo pattern of a simple delay network.
+- **Implementation**: A short algorithmic `Room` stage placed after the modulation effects and before the delay.
+  - **Size** is a macro control: it moves the pre-delay (3–10 ms), early-reflection spacing (0.35×–1×), FDN delay lengths (0.6×–1.8×), decay time (25–300 ms) and high-frequency damping (12–4 kHz) together. Small sizes also widen the stereo image; the minimum is a doubler/stereoizer, the maximum a small 0.3 s room.
+  - The room is built from six sparse early-reflection taps plus an eight-line feedback delay network with a Hadamard feedback matrix, input diffusion and per-line one-pole damping.
+  - **Room Mix** uses an equal-power dry/wet law (`dry = cos(π/2·mix)`, `wet = sin(π/2·mix)`), so the overall level stays similar across the full range.
+  - The FDN input is normalized from the feedback gains, so a larger room does not simply get louder. The wet path has a fixed mid-focused filter (90 Hz high-pass, 1.2 kHz presence lift, 12 kHz low-pass).
+  - Room Mix defaults to **0 %**; at zero the room is skipped and the stage is completely dry. There is no separate room bypass.
+  - The decay is capped at 0.3 s to keep the stage a short ambience/doubler rather than a reverb.
 - **Controls**: Size lives in the Post FX Room pedal; **Room Mix** lives in the persistent bottom strip beside the tabs.
 
 ### 4.9 Reverb
 - **Goal**: Add ambience.
-- **Implementation**: Use JUCE's `juce::Reverb` (algorithmic) for a lightweight, real-time-safe reverb. Parameters: Room Size, Damping, Wet, Dry, Width.
+- **Implementation**: Use JUCE's `juce::Reverb` (algorithmic) for a lightweight, real-time-safe reverb. Parameters: Room Size, Damping, Wet, Dry, Width. Compensate for JUCE's internal 2× dry and 3× wet scaling so the dry guitar stays at unity instead of getting louder when reverb is mixed in.
 
 ### 4.10 DropTuner
 - **Goal**: Detect the input pitch for display.
@@ -187,13 +193,15 @@ A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and alwa
 - **Goal**: Transpose the guitar by a selected number of semitones, covering both capo (up) and drop-tuning (down) use.
 - **Implementation**:
   - **Semitones**: a single −12…+12 control shared by capo and drop tuning.
+  - **Tone Match**: auto-corrects the formant envelope to match the source guitar (0–100%). At 100% the original formants are held in place so detuning down does not darken the instrument; at 0% the formants shift naturally with the pitch. Blends continuously on both engines.
   - **Mix/Dry-Wet**: blends the dry signal with the transposed signal (default 100% wet); the dry signal is delayed only while pitch shifting is active.
-  - **Signalsmith Stretch**: a 50 ms STFT block with a 7 ms hop; no engine toggle and no automatic fallback.
+  - **Quality mode**: Low Latency and Quality modes select different analysis windows/engines.
+  - **Pitch engines**: a real-time Rubber Band engine is preferred when its runtime library is available, with a self-contained Signalsmith Stretch fallback. Both use fixed-size input/output FIFOs so arbitrary host block sizes and sample rates cannot reallocate or corrupt engine state. Low Latency and Quality modes are selectable.
   - While active, the stage reports its Stretch latency to the host via `setLatencySamples()`; while inactive it reports 0.
   - While active, the dry path is delayed by the Stretch latency so the blend stays time-aligned, and it is mono-summed so it is always panned dead centre. When inactive, the dry signal passes immediately.
   - The stage runs at the head of the chain (after the tuner detector, before the gate/compressor), so every downstream stage sees the transposed signal.
   - Stretch processing is skipped while the stage is inactive; bypassed, 0-semitone or 0% mix states output immediate dry signal.
-- **Controls**: Semitones (−12…+12), mix level (0–100%), bypass footswitch.
+- **Controls**: Semitones (−12…+12), Tone Match (0–100%), mix level (0–100%), bypass footswitch.
 
 ### 4.12 Preset save/load
 - **Goal**: Let users store and recall the complete rig without depending on the host’s project state.
@@ -271,15 +279,16 @@ Artifacts: `.vst3` (all), `.component` (AU, macOS), `.aaxplugin` (if SDK availab
 - [x] Implement 4/8/12-stage all-pass `Phaser`.
 - [x] Implement `Delay` (circular buffer).
 - [x] Integrate `juce::Reverb`.
-- [x] Implement convolution Room ambience (Size, Room Mix; default 0 %).
+- [x] Implement algorithmic Room ambience (Size macro, equal-power Room Mix; default 0 %).
 
 ### Phase 5: UI & State Management (Weeks 9–10)
 - [x] Design `NAMBerryEditor` with tabs or a scrollable rack layout.
 - [x] Bind all parameters to `AudioProcessorValueTreeState`.
 - [x] Implement preset save/load.
 - [x] Add file drag-and-drop for `.nam` and `.wav` IR files.
-- [x] Add in-app directory browsers with separate persisted NAM and IR roots.
-- [x] Add previous/next arrows to the NAM and IR fields to step through matching files in the current directory.
+- [x] Add in-app directory browsers with separate amp, pedal and IR roots.
+- [x] Add previous/next arrows to the amp, pedal and IR fields to step through matching files in the current directory.
+- [x] Remember the folder left in as the next root for each loader.
 - [x] Persist the selected amp model, pedal model and all four IR slot files.
 - [x] Clear the delay feedback tail when the delay is switched off.
 

@@ -7,11 +7,12 @@
 
 namespace namberry {
 
-/// Shared pitch stage for the digital capo and drop tuner, powered by
-/// Signalsmith Stretch.
+/// Shared pitch stage for the digital capo and drop tuner.
 ///
-/// The stage reports a fixed latency to the host; the dry path is delayed to
-/// match the wet path and is mono-summed so it stays dead centre.
+/// The stage selects between a low-latency and a quality engine mode. Both
+/// modes use the same streaming wrapper and report a fixed latency to the
+/// host; the dry path is delayed to match the wet path and is mono-summed so
+/// it stays dead centre.
 class DigitalCapo
 {
 public:
@@ -22,8 +23,14 @@ public:
     void processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi);
     void reset();
 
+    void setQualityMode (PitchShifter::QualityMode quality);
+    PitchShifter::QualityMode getQualityMode() const noexcept { return quality_; }
+
     void setSemitones (float semitones);
     float getSemitones() const { return semitones_; }
+
+    void setTone (float tone);
+    float getTone() const noexcept { return tone_; }
 
     void setMix (float mix);
     float getMix() const { return mix_; }
@@ -43,8 +50,8 @@ public:
 
     bool isActive() const noexcept { return active_; }
 
-    struct Params { float semitones = 0.0f; float mix = 1.0f; bool bypass = false; };
-    Params getParams() const { return { semitones_, mix_, bypass_ }; }
+    struct Params { float semitones = 0.0f; float tone = 1.0f; float mix = 1.0f; bool bypass = false; };
+    Params getParams() const { return { semitones_, tone_, mix_, bypass_ }; }
     void setParams (const Params& p);
 
 private:
@@ -55,11 +62,13 @@ private:
     juce::SmoothedValue<float> mixSmoothed_;
     juce::SmoothedValue<float> semitoneSmoothed_;
 
+    PitchShifter::QualityMode quality_ = PitchShifter::QualityMode::lowLatency;
     double sampleRate_ = 44100.0;
     int maxBlockSize_ = 512;
     int latencySamples_ = 0;
 
     float semitones_ = 0.0f;
+    float tone_ = 1.0f;
     float mix_ = 1.0f;
     bool bypass_ = false;
     bool active_ = false;

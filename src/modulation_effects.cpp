@@ -4,6 +4,10 @@ namespace namberry {
 
 namespace {
 float clamp01 (float x) { return juce::jlimit (0.0f, 1.0f, x); }
+
+// The UI now caps mix at the old 50 % point. Boost the wet side so the
+// stronger, capped mix remains clearly audible instead of getting quieter.
+constexpr float kModWetGain = 2.0f;
 }
 
 //==============================================================================
@@ -149,7 +153,7 @@ void ModulatedDelay::processBlock (juce::AudioBuffer<float>& buffer)
             const float delayed = delayLine_.popSample (channel, delaySamples, true);
 
             buffer.setSample (channel, sample,
-                              dry * (1.0f - mix) + delayed * mix);
+                              dry * (1.0f - mix) + delayed * mix * kModWetGain);
 
             delayLine_.pushSample (channel, dry + delayed * feedback);
         }
@@ -274,7 +278,7 @@ void Phaser::processBlock (juce::AudioBuffer<float>& buffer)
 
             lastOutput_[static_cast<size_t> (channel)] = wet;
             buffer.setSample (channel, sample,
-                              dry * (1.0f - mix) + wet * mix);
+                              dry * (1.0f - mix) + wet * mix * kModWetGain);
         }
 
         updateCounter_ = (updateCounter_ + 1) % coefficientUpdateInterval;

@@ -26,11 +26,11 @@ NAMberry packages all of that into one plugin:
 - **Four IR slots** with per-slot mix, pan and phase, plus automatic level normalization across active slots.
 - **Impersonator pickup shaper** — a bridge/neck EQ preamp immediately after the tuner.
 - **A complete chain** — tuner, pickup shaper, pitch stage, gate, compressor, pedal, pre-amp EQ, amp, post-amp EQ, IR, post effects, master.
-- **Room ambience** — a convolution room blend for a realistic sense of physical space, separate from the reverb.
-- **Fast model management** — in-app NAM/IR browsers, two separate persisted roots, previous/next arrows, and drag-and-drop.
+- **Room ambience** — a short algorithmic room/stereo widener with a single Size macro, separate from the reverb.
+- **Fast model management** — in-app amp/pedal/IR browsers, three separate persisted roots, previous/next arrows, and drag-and-drop.
 - **Persistent choices** — the selected amp, pedal and all four IR files are restored on the next session.
 - **Preset save/load** — store the complete parameter state together with the current amp, pedal and IR file paths.
-- **Studio-quality pitch** — Signalsmith Stretch handles capo and drop tuning; the 50 ms latency is only applied while pitch shifting is active.
+- **Studio-quality pitch** — a real-time Rubber Band engine handles capo and drop tuning when the optional runtime library is available, with a self-contained Stretch fallback. Low-latency and Quality modes are selectable.
 - **A usable tuner** — a horizontal strobe guide with cents deviation and an editable reference frequency (440, 432, etc.).
 - **Stereo correctness** — the NAM stages are mono models, summed and copied to both channels; the dry path is always centred.
 
@@ -62,11 +62,13 @@ Input
 |---|---|
 | **Pre FX** | Tuner, Impersonator, Pitch, Gate, Compressor, NAM Pedal, Pre-Amp EQ |
 | **Amp** | NAM amp model, Power, Gain, Bass, Mid, Treble, Presence, Depth, Output |
-| **Post EQ** | 3-band post-amp EQ |
+| **Post EQ** | 3-band post-amp EQ (3-3-2 layout) with centered high-pass and low-pass filters |
 | **IR** | Four IR slots with mix, pan, phase, browse and arrows |
 | **Post FX** | Chorus, Flanger, Phaser, Room (Size), Delay, Reverb |
 
-The bottom strip beside the tabs always exposes **Room Mix** and **Output** (master volume). The header contains the **Reduced Motion** preference and the **PRESET** menu. The engine is user-selected; there is no automatic engine switching.
+Each tab shows a hardware icon (pedal, amp, EQ, speaker, sparkle). **Right-click any tab** to bypass that whole section; the icon dims and shows a red LED while bypassed.
+
+The bottom strip beside the tabs always exposes **Room Mix** and **Output** (master volume). NAMBerry applies a fixed +6 dB output trim in addition to the saved Master value. The header contains the **Reduced Motion** preference and the **PRESET** menu.
 
 ---
 
@@ -115,15 +117,14 @@ The capo and drop tune share one pitch stage:
 
 - **One semitones control**: −12…+12.
 - **Mix**: 0–100 % wet.
-- **Signalsmith Stretch** pitch shifting.
-- **50 ms latency while active**, reported to the host; zero latency when bypassed or at 0 semitones.
-- **No engine toggle**: Stretch is the only pitch engine.
+- **Selectable pitch engine quality**: `Low Latency` keeps the response tight; `Quality` uses a longer analysis window for more stable low notes and chords.
+- **Measured active latency**, reported to the host; zero latency when bypassed or at 0 semitones.
 
-Signalsmith Stretch uses a 50 ms STFT block with a 7 ms hop. This is a quality-over-latency trade-off: unlike the previous DualTap/PSOLA engines, it cannot run at 5 ms.
+The pitch stage uses a real-time Rubber Band engine when its runtime library is available, with a self-contained Signalsmith Stretch fallback. Both engines use fixed-size FIFOs and process fixed internal chunks, so host sample-rate and block-size changes cannot reallocate or corrupt the shifter state. The fallback Stretch engine uses a 50 ms STFT block with a 5 ms hop in Low Latency mode and a 100 ms block with a 10 ms hop in Quality mode.
 
-The pitch detector still runs an 80 ms analysis window with decimated autocorrelation, first-peak selection, parabolic interpolation, confidence and median smoothing, but it is now only used for the tuner display; Stretch does not need the detected period.
+The pitch detector still runs an 80 ms analysis window with decimated autocorrelation, first-peak selection, parabolic interpolation, confidence and median smoothing, but it is now only used for the tuner display; the pitch engine does not need the detected period.
 
-While pitch shifting is active, the dry path is delayed by the Stretch latency and **mono-summed**, so the dry signal is always centred. When the stage is bypassed, at 0 semitones, or at 0 % mix, it outputs the dry signal immediately with no latency compensation delay.
+While pitch shifting is active, the dry path is delayed by the engine latency and **mono-summed**, so the dry signal is always centred. When the stage is bypassed, at 0 semitones, or at 0 % mix, it outputs the dry signal immediately with no latency compensation delay.
 
 ### Tuner
 
@@ -159,18 +160,19 @@ The reference affects the note/cents display only. The UI draws a horizontal str
 - a custom `ModulatedDelay` for chorus: sine LFO, right-channel 180° phase, 5–30 ms delay, feedback and mix,
 - a custom `ModulatedDelay` for flanger: triangle LFO, 0.5–10 ms manual delay, signed feedback and mix,
 - a custom `Phaser` with 4/8/12 first-order all-pass stages, sine LFO and feedback,
-- a convolution `Room` stage using generated short stereo room impulse responses,
+- a short algorithmic `Room` stage using early reflections and an eight-line feedback delay network,
 - `juce::dsp::DelayLine` with feedback and mix,
 - `juce::dsp::Reverb`.
 
-The chorus and flanger share the modulated-delay core; all three share the LFO and parameter-smoothing framework, but use different delay ranges, waveforms and filter topologies. The Room is a built-in convolution room, not a long reverb; its **Size** control crossfades between generated small and large room impulse responses, and its **Room Mix** control crossfades dry with room. The separate Reverb provides the long tail.
+The chorus and flanger share the modulated-delay core; all three share the LFO and parameter-smoothing framework, but use different delay ranges, waveforms and filter topologies. The Room is a short algorithmic ambience, not a reverb: **Size** moves the pre-delay (3–10 ms), early-reflection spacing (0.35×–1×), FDN delay lengths (0.6×–1.8×), decay time (25–300 ms) and high-frequency damping (12–4 kHz) together, while widening the stereo image at small settings. At the minimum it is essentially a wide doubler/stereoizer; at the maximum it is a small 0.3 s room. **Room Mix** uses an equal-power dry/wet law, so the level stays similar at every setting. Room Mix defaults to 0 %, where the stage is completely dry. The wet path has a fixed mid-focused filter (90 Hz high-pass, 1.2 kHz presence lift, 12 kHz low-pass). The separate Reverb provides the long tail.
 
 Switching the delay off clears its delay line, so old feedback cannot reappear when it is switched back on. Bypassing the whole post-FX block also clears the delay and room buffers.
 
 ### File management and persistence
 
-- Two separate roots: one for NAM models, one for IRs.
+- Three separate roots: one for amps, one for pedals, and one for IRs.
 - In-app `DirectoryBrowser` supports folder traversal, `SET ROOT...`, `LOAD`, double-click, and extension filtering.
+- The browser saves the folder you leave it in as the next root for that loader.
 - Previous/next arrows on the amp, pedal and IR fields step through matching files in the current file’s folder.
 - Drag-and-drop works for `.nam` and IR files.
 - Selected amp, pedal and all four IR paths are persisted and restored automatically.
@@ -206,8 +208,8 @@ The editor is JUCE-native and hardware-inspired:
 | NAM inference | **NeuralAudio** (with NeuralAmpModelerCore, RTNeural and its submodules) |
 | IR convolution | `juce::dsp::Convolution` |
 | EQ / dynamics | JUCE `dsp::IIR`, custom compressor/gate |
-| Post FX | Custom LFO/modulated-delay chorus and flanger; custom 4/8/12-stage phaser; generated-IR convolution `Room`; JUCE `dsp::DelayLine` and `dsp::Reverb` |
-| Pitch | **Signalsmith Stretch** (50 ms block / 7 ms hop) |
+| Post FX | Custom LFO/modulated-delay chorus and flanger; custom 4/8/12-stage phaser; algorithmic FDN `Room`; JUCE `dsp::DelayLine` and `dsp::Reverb` |
+| Pitch | **Rubber Band** when available, with **Signalsmith Stretch** fallback |
 | Settings | JUCE `PropertiesFile` |
 | Build | CMake 3.22+, CMake presets, helper scripts |
 | Tests | JUCE console apps: offline render and headless UI snapshots |
@@ -217,6 +219,7 @@ Third-party components:
 - JUCE — https://juce.com
 - NeuralAudio — https://github.com/mikeoliphant/NeuralAudio
 - NeuralAmpModelerCore — https://github.com/sdatkinson/NeuralAmpModelerCore
+- Rubber Band — https://breakfastquay.com/rubberband/ (optional runtime dependency; GPL or commercial licensing)
 - Signalsmith Stretch — https://github.com/signalsmith-audio/signalsmith-stretch
 - Signalsmith Linear — https://github.com/signalsmith-audio/linear
 
@@ -237,7 +240,7 @@ src/
   directory_browser.*   # in-app NAM / IR browser
   nam_model_loader.cpp
   impersonator.cpp      # pickup-shaping preamp
-  pitch_shifter.cpp     # Signalsmith Stretch wrapper
+  pitch_shifter.cpp     # Rubber Band / Signalsmith streaming pitch engines
   digital_capo.cpp      # shared pitch stage
   drop_tuner.cpp
   modulation_effects.cpp
@@ -396,23 +399,25 @@ The plugin is stereo in / stereo out. The NAM stages are mono internally and cop
 
 ### Loading models and IRs
 
-Each loader has a **BROWSE** button, a filename, and previous/next arrows.
+The amp has a **BROWSE** button and arrows on the left of the amp faceplate next to Power, plus a hardware-style **CURRENT AMP** display in the grille below the knobs. The pedal and IR loaders use their own browse controls and arrows.
 
-- **NAM amp**: Amp tab → **AMP MODEL** → **BROWSE .NAM**.
+- **NAM amp**: Amp tab → **AMP MODEL / BROWSE** next to Power; the loaded name appears in the **CURRENT AMP** display.
 - **NAM pedal**: Pre FX → **PEDAL** → **BROWSE .NAM**.
 - **IR slots**: IR tab → **BROWSE** on the required slot.
 
 The browser:
 
-1. Opens at the saved NAM or IR root.
+1. Opens at the saved root for that loader.
 2. Shows folders first, then matching files.
 3. Double-click a folder to enter; `UP` goes to the parent; `ROOT` returns to the root.
 4. `SET ROOT...` chooses and persists a new root folder.
 5. Select a file and press `LOAD`, or double-click it.
+6. When the browser closes, the folder you left it in becomes that loader’s root.
 
-The two roots are completely separate:
+The roots are completely separate:
 
-- NAM root for amp and pedal models.
+- Amp root for amp models.
+- Pedal root for pedal/preamp models.
 - IR root for all four IR slots.
 
 **Previous/next arrows** step through the matching files in the currently loaded file’s folder. The selection wraps at the ends. The amp, pedal and each IR slot remember their own selected path.
@@ -456,10 +461,14 @@ The shared **PITCH** pedal controls both capo and drop tuning:
 | Control | Meaning |
 |---|---|
 | **Semitones** | −12…+12; 0 = no shift |
+| **Tone Match** | 0–100 % formant matching; 100 % keeps the source brightness when detuning |
 | **Mix** | 0–100 % wet (default 100 %) |
+| **Quality** | Toggle between Low Latency and Quality engine modes |
 | **Footswitch** | Bypass |
 
-The pitch stage uses **Signalsmith Stretch**. While pitch shifting is active it reports **50 ms latency** to the host and delays the dry path by the same amount; when bypassed, at 0 semitones or 0 % mix it reports **0 ms** and passes the dry signal immediately. The dry path is always mono-centred. There is no engine toggle or automatic fallback.
+The pitch stage uses a real-time Rubber Band engine when `librubberband` is available at runtime, with a self-contained Signalsmith Stretch fallback. Two modes are available on the Pitch pedal: **Low Latency** and **Quality**. The engine accepts arbitrary host block sizes and sample rates through a fixed-size streaming layer, so block-size changes cannot reallocate or corrupt the shifter state. While pitch shifting is active it reports its measured latency to the host and delays the dry path by the same amount; when bypassed, at 0 semitones, or at 0 % mix it reports **0 ms** and passes the dry signal immediately. The dry path is always mono-centred.
+
+**Tone Match** auto-corrects the formant envelope to match the original guitar, so detuning down does not turn the instrument dark. At 100 % the source formants are held in place; at 0 % the formants shift naturally with the pitch. The control blends continuously on both engines.
 
 ### Amp
 
@@ -481,7 +490,7 @@ The pitch stage uses **Signalsmith Stretch**. While pitch shifting is active it 
 
 ### EQs
 
-Both Pre-EQ and Post-EQ use three bands: low shelf, mid peak, high shelf with frequency, gain and Q.
+Both Pre-EQ and Post-EQ use three bands: low shelf, mid peak, high shelf with frequency, gain and Q. The Post-EQ additionally has a 12 dB/octave high-pass and low-pass filter (defaults 20 Hz and 20 kHz).
 
 ### IR
 
@@ -497,12 +506,12 @@ The slots are summed with automatic level compensation. One active IR at 100 % i
 
 ### Post FX
 
-- Chorus: rate, depth, feedback, delay, mix, bypass.
-- Flanger: rate, depth, manual, feedback, mix, bypass.
-- Phaser: rate, depth, feedback, stages, mix, bypass.
-- Room: **Size** in the Post FX pedal; **Room Mix** in the bottom strip. This is a convolution room, not a long reverb: Size crossfades between generated small and large room impulse responses, and Room Mix sets the amount of room signal. Room Mix defaults to 0 %.
-- Delay: mix, time, feedback, bypass.
-- Reverb: mix, decay, width, bypass.
+- Chorus: rate, depth, feedback, delay, mix, bypass. Mix tops out at 50 %, which is the old maximum, with a 2× wet boost.
+- Flanger: rate, depth, manual, feedback, mix, bypass. Mix tops out at 50 %, with a 2× wet boost.
+- Phaser: rate, depth, feedback, stages, mix, bypass. Mix tops out at 50 %, with a 2× wet boost.
+- Room: **Size** in the Post FX pedal; **Room Mix** in the bottom strip. This is a short algorithmic ambience, not a reverb: Size moves pre-delay (3–10 ms), early-reflection spacing, FDN delay lengths, decay (25–300 ms), HF damping (12–4 kHz) and stereo width together. The minimum is a wide doubler/stereoizer; the maximum is a small 0.3 s room. Room Mix uses an equal-power law and defaults to 0 %, where the stage is completely dry; the wet level is normalized so moving Size does not make the room louder.
+- Delay: mix, time, feedback, bypass. Feedback is 0–10: 0 is one repeat and 10 is an almost endless tail.
+- Reverb: mix, decay, width, bypass. Its dry level is normalized so increasing reverb never boosts the dry guitar.
 - Master **Output** is in the bottom strip beside the tabs.
 
 Use **Room Mix** in the bottom strip to add ambience; there is no separate room bypass. Switching the delay off discards its feedback tail.
@@ -525,7 +534,8 @@ The default preset folder is `NAMBerry/Presets` under the user application-data 
 
 - DAW projects save all parameter values with the plugin.
 - The per-user settings file saves:
-  - NAM root,
+  - amp root,
+  - pedal root,
   - IR root,
   - last amp model path,
   - last pedal model path,
@@ -549,16 +559,21 @@ cmake --build build --target NAMBerryOfflineTest NAMBerryUiSnapshot
 ```bash
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --detector
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --pitch
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --pitch-low
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --pitch-robust
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --pitch-blocks
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --detected-stage
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --dry-center
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --delay-feedback
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --delay-reset
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --reverb-dry
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --room
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --modulation
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --fx-state
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --preset
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --compressor
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --impersonator
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --tone-match
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --ir-level
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --reference
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --persist
@@ -574,21 +589,26 @@ Run the full chain with a model:
 What they cover:
 
 - `--detector`: pitch detection across 82.41–440 Hz.
-- `--pitch`: Signalsmith Stretch pitch accuracy and dry/bypass behaviour.
+- `--pitch`: pitch accuracy and dry/bypass behaviour.
+- `--pitch-low`: low-note tracking at guitar low E and drop tuning.
+- `--pitch-robust`: sample-rate and randomized host-block-size robustness in both quality modes.
 - `--pitch-blocks`: Stretch at 128, 192, 256 and 512-sample host blocks.
+- `--delay-feedback`: one-repeat at 0 and a long tail at 10.
+- `--reverb-dry`: confirms the reverb does not boost the dry signal.
 - `--detected-stage`: detector → Stretch pitch stage.
 - `--dry-center`: verifies both channels are identical when fully dry.
 - `--delay-reset`: verifies the delay tail is discarded on bypass.
-- `--room`: verifies the convolution room, IR decay, and dry 0 % mix.
+- `--room`: verifies the algorithmic room's macro mapping, equal-power mix, decay, damping, stereo width, level consistency and dry 0 % mix.
 - `--modulation`: verifies finite chorus, flanger and phaser output, all phaser stage counts, and bypass.
 - `--fx-state`: verifies migration of old post-FX parameter ranges/defaults.
 - `--preset`: verifies preset save/load, including amp/IR file paths.
 - `--compressor`: verifies gain reduction, automatic makeup gain and bypass.
 - `--impersonator`: verifies both pickup-direction EQ curves, manual Level and bypass.
+- `--tone-match`: verifies Tone Match keeps the source brighter than a natural detune.
 - `--ir-level`: verifies equal output level with 1, 2, 3 and 4 loaded IRs at 100 %.
 - `--reference`: verifies 432/440 Hz reference behaviour.
 - `--persist`: restores selected amp, pedal and IR paths; expects local sample files and skips if they are missing.
-- `--dirs`: sets the two root directories.
+- `--dirs`: sets the amp, pedal and IR root directories.
 - `<model.nam>`: full processor with a NAM model.
 
 ### UI snapshots
@@ -615,12 +635,12 @@ The snapshot tool is headless and does not need a DAW.
 
 ## Known limitations
 
-- **50 ms pitch latency is reported only while pitch shifting is active**. Bypassed, 0-semitone or 0 % mix states report 0 ms and pass the dry signal immediately; the host latency changes when the pitch stage is toggled.
-- The **Standalone app** does not apply host-style plugin delay compensation; the 50 ms latency while pitch shifting is audible there. DAWs compensate it.
-- Signalsmith Stretch is an STFT shifter and cannot meet the previous 5 ms target. That is the deliberate quality/latency trade-off.
+- **50 ms pitch latency is reported only while pitch shifting is active** in Low Latency mode. Bypassed, 0-semitone or 0 % mix states report 0 ms and pass the dry signal immediately; the host latency changes when the pitch stage is toggled. Quality mode reports a longer measured latency.
+- The **Standalone app** does not apply host-style plugin delay compensation; the active pitch latency is audible there. DAWs compensate it.
+- The pitch stage uses an optional runtime Rubber Band engine and a self-contained Stretch fallback. Missing Rubber Band affects quality, not correctness.
 - The **Impersonator** is an EQ approximation. It cannot reproduce the physical pick-attack geometry or the full phase relationship between pickup positions.
 - NAM model latency is not separately reported by the plugin; only the pitch-stage latency is reported.
-- The **Room** is a convolution ambience with a short controlled decay, not a long reverb; use the Reverb effect for a long tail.
+- The **Room** is a short algorithmic ambience (25–300 ms decay) with early reflections and an FDN tail; at small sizes it acts as a doubler/stereoizer, not a long reverb. Use the Reverb effect for a long tail.
 - The plugin is **stereo in / stereo out only**.
 - Model and IR paths are **per-user settings**, not embedded in the DAW project. Moving a project to another machine may require reloading them.
 - `ui-spec.md` is an earlier Qt/QML exploration; the shipped UI is JUCE-native.
@@ -633,6 +653,7 @@ The snapshot tool is headless and does not need a DAW.
 
 - **JUCE 8.0.6** — see `JUCE/LICENSE.md`; JUCE is available under AGPLv3 or a commercial licence.
 - **NeuralAudio** — MIT (Mike Oliphant). Its submodules (NeuralAmpModelerCore, RTNeural, etc.) retain their own licences.
+- **Rubber Band Library** — GPL or commercial licence (Breakfast Quay). It is an optional runtime dependency loaded dynamically when present.
 - **Signalsmith Stretch / Linear** — MIT (Signalsmith Audio).
 - NAM model files and IR captures are supplied by the user and are not part of this repository.
 
@@ -645,5 +666,6 @@ Check the relevant upstream repositories before distributing binaries.
 - NAM / NeuralAmpModelerCore by Steven Atkinson and contributors.
 - NeuralAudio by Mike Oliphant.
 - JUCE by Raw Material Software.
+- Rubber Band Library by Breakfast Quay.
 - Signalsmith Stretch/Linear by Geraint Luff / Signalsmith Audio.
 - The guitar community who create and share NAM captures and IRs.

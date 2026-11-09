@@ -6,7 +6,6 @@ namespace namberry {
 
 namespace {
 float clamp01 (float x) { return juce::jlimit (0.0f, 1.0f, x); }
-float clampM1P1 (float x) { return juce::jlimit (-1.0f, 1.0f, x); }
 }
 
 //==============================================================================
@@ -64,7 +63,14 @@ void PostEffects::setRoomBlend (float value) { room_.setBlend (clamp01 (value));
 
 void PostEffects::setDelayMix (float value)      { delayMix_ = clamp01 (value); }
 void PostEffects::setDelayTimeMs (float value)   { delayTimeMs_ = juce::jlimit (10.0f, 2000.0f, value); }
-void PostEffects::setDelayFeedback (float value) { delayFeedback_ = clampM1P1 (value); }
+
+void PostEffects::setDelayFeedback (float value)
+{
+    // User range 0..10. Zero leaves one repeat; 10 is an almost endless tail
+    // without allowing an unbounded feedback loop.
+    const float amount = juce::jlimit (0.0f, 10.0f, value) * 0.1f;
+    delayFeedback_ = juce::jlimit (0.0f, 0.999f, amount * 0.999f);
+}
 
 void PostEffects::setReverbMix (float value)   { reverbMix_ = clamp01 (value); updateReverb(); }
 void PostEffects::setReverbDecay (float value) { reverbDecay_ = clamp01 (value); updateReverb(); }
@@ -76,8 +82,11 @@ void PostEffects::updateReverb()
     juce::Reverb::Parameters params;
     params.roomSize = juce::jlimit (0.0f, 1.0f, reverbDecay_);
     params.damping = 0.4f;
-    params.wetLevel = reverbMix_;
-    params.dryLevel = 1.0f - reverbMix_;
+
+    // juce::Reverb scales dry by 2 and wet by 3 internally. Compensate here so
+    // a 20 % mix does not make the dry guitar 1.6x louder.
+    params.wetLevel = reverbMix_ / 3.0f;
+    params.dryLevel = 0.5f * (1.0f - reverbMix_);
     params.width = juce::jlimit (0.0f, 1.0f, reverbWidth_);
     params.freezeMode = 0.0f;
     reverb_.setParameters (params);
@@ -105,9 +114,8 @@ void PostEffects::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     if (! phaserBypass_)
         phaser_.processBlock (buffer);
 
-    // Short delay-based room. The low fixed feedback adds density and a short
-    // decay, while the fixed damping keeps it from turning into a bright,
-    // long reverb.
+    // Short algorithmic room. The FDN feedback is normalized by Size so the
+    // ambience stays a controlled short space rather than a long reverb.
     room_.processBlock (buffer, midi);
 
     // Feedback delay (stereo, independent per channel).

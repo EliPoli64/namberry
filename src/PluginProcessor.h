@@ -58,9 +58,11 @@ public:
     bool loadNamPedalModel (const juce::File& file);
     bool loadIr (int slot, const juce::File& file);
 
-    // Last-used folders, stored separately for NAM models and IR files.
+    // Last-used folders, stored separately for amps, pedals and IR files.
     juce::File getNamDirectory() const;
     void setNamDirectory (const juce::File& directory);
+    juce::File getPedalDirectory() const;
+    void setPedalDirectory (const juce::File& directory);
     juce::File getIrDirectory() const;
     void setIrDirectory (const juce::File& directory);
 

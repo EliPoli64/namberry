@@ -23,10 +23,13 @@ public:
     void resized() override;
 
 private:
-    enum class BrowserKind { Nam, Ir };
+    enum class BrowserKind { Nam, Pedal, Ir };
 
     void timerCallback() override;
     void changeListenerCallback (juce::ChangeBroadcaster* source) override;
+    void mouseDown (const juce::MouseEvent& event) override;
+    void toggleTabBypass (int tabIndex);
+    void updateTabVisuals();
     void buildUi();
     void layoutContent();
     void openBrowser (BrowserKind kind,

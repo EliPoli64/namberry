@@ -255,6 +255,12 @@ public:
         if (isMouseOver) body = body.brighter (0.10f);
         if (isMouseDown) body = body.darker (0.12f);
 
+        const bool bypassed = static_cast<bool> (
+            button.getProperties().getWithDefault ("bypassed", false));
+
+        if (bypassed)
+            body = body.darker (0.25f);
+
         g.setGradientFill (juce::ColourGradient (
             body.brighter (0.12f), bounds.getX(), bounds.getY(),
             body.darker (0.18f), bounds.getX(), bounds.getBottom(), false));
@@ -263,10 +269,83 @@ public:
         g.setColour (front ? juce::Colour (kAccent) : juce::Colour (0xff2a2a2f));
         g.drawRoundedRectangle (bounds, 5.0f, front ? 1.6f : 1.0f);
 
-        g.setColour (front ? juce::Colours::white : juce::Colour (kTextDim));
-        g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
-        g.drawFittedText (button.getButtonText(), bounds.toNearestInt(),
+        auto content = bounds.reduced (7.0f, 4.0f);
+        auto iconArea = content.removeFromTop (27.0f);
+        auto textArea = content.removeFromTop (12.0f);
+
+        auto iconColour = front ? juce::Colours::white : juce::Colour (kTextDim);
+        if (bypassed)
+            iconColour = iconColour.withAlpha (0.30f);
+
+        g.setColour (iconColour);
+
+        const auto text = button.getButtonText();
+
+        if (text == "Pre FX")
+        {
+            auto pedal = iconArea.withSizeKeepingCentre (16.0f, 21.0f);
+            g.drawRoundedRectangle (pedal, 2.0f, 1.3f);
+            g.fillEllipse (pedal.getCentreX() - 5.0f, pedal.getY() + 3.0f, 3.2f, 3.2f);
+            g.fillEllipse (pedal.getCentreX() + 1.8f, pedal.getY() + 3.0f, 3.2f, 3.2f);
+            g.drawEllipse (pedal.getCentreX() - 3.0f, pedal.getBottom() - 7.0f,
+                           6.0f, 4.0f, 1.1f);
+        }
+        else if (text == "Amp")
+        {
+            auto head = iconArea.withSizeKeepingCentre (24.0f, 15.0f);
+            g.drawRoundedRectangle (head, 2.0f, 1.3f);
+            g.drawHorizontalLine ((int) (head.getY() + 3.0f),
+                                  head.getX() + 3.0f, head.getRight() - 3.0f);
+            for (int i = 0; i < 3; ++i)
+                g.fillEllipse (head.getX() + 5.0f + i * 5.0f,
+                               head.getY() + 6.0f, 2.6f, 2.6f);
+            g.drawRect (head.getX() + 3.0f, head.getBottom() - 4.0f,
+                        head.getWidth() - 6.0f, 2.0f, 0.8f);
+        }
+        else if (text == "Post EQ")
+        {
+            const float xs[] = { -7.0f, 0.0f, 7.0f };
+            const float ys[] = { -7.0f, 5.0f, -2.0f };
+            for (int i = 0; i < 3; ++i)
+            {
+                const float x = iconArea.getCentreX() + xs[i];
+                g.drawVerticalLine ((int) x, iconArea.getY() + 2.0f,
+                                    iconArea.getBottom() - 2.0f);
+                g.fillEllipse (x - 2.5f, iconArea.getCentreY() + ys[i], 5.0f, 5.0f);
+            }
+        }
+        else if (text == "IR")
+        {
+            auto cab = iconArea.withSizeKeepingCentre (20.0f, 23.0f);
+            g.drawRoundedRectangle (cab, 2.0f, 1.3f);
+            const auto cone = cab.reduced (4.0f, 4.0f);
+            g.drawEllipse (cone, 1.2f);
+            g.fillEllipse (cone.getCentreX() - 2.0f, cone.getCentreY() - 2.0f,
+                           4.0f, 4.0f);
+        }
+        else
+        {
+            juce::Path sparkle;
+            sparkle.addStar (iconArea.getCentre(), 4, 3.0f, 9.0f, 0.0f);
+            g.fillPath (sparkle);
+            g.fillEllipse (iconArea.getRight() - 6.0f, iconArea.getY() + 3.0f, 3.0f, 3.0f);
+            g.fillEllipse (iconArea.getX() + 2.0f, iconArea.getBottom() - 6.0f, 2.5f, 2.5f);
+        }
+
+        auto textColour = front ? juce::Colours::white : juce::Colour (kTextDim);
+        if (bypassed)
+            textColour = textColour.withAlpha (0.35f);
+
+        g.setColour (textColour);
+        g.setFont (juce::FontOptions (8.5f, juce::Font::bold));
+        g.drawFittedText (text, textArea.toNearestInt(),
                           juce::Justification::centred, 1);
+
+        if (bypassed)
+        {
+            g.setColour (juce::Colour (0xffef4444));
+            g.fillEllipse (bounds.getRight() - 8.0f, bounds.getY() + 4.0f, 4.0f, 4.0f);
+        }
     }
 };
 
@@ -759,8 +838,8 @@ public:
         };
 
         auto top = body.removeFromTop (body.getHeight() / 2);
-        drawOption (top, "B \xe2\x86\x92 N", toggle_.getToggleState());
-        drawOption (body, "N \xe2\x86\x92 B", ! toggle_.getToggleState());
+        drawOption (top, "B > N", toggle_.getToggleState());
+        drawOption (body, "N > B", ! toggle_.getToggleState());
     }
 
 private:
@@ -768,6 +847,178 @@ private:
     std::unique_ptr<APVTS::ButtonAttachment> attachment_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ModeSwitch)
+};
+
+//==============================================================================
+/// Compact amp-model browse button that sits on the amp faceplate next to Power.
+class AmpBrowseButton : public juce::Component,
+                        public juce::FileDragAndDropTarget
+{
+public:
+    AmpBrowseButton (std::function<void()> onClick,
+                     std::function<void()> onPrevious,
+                     std::function<void()> onNext,
+                     std::function<void (const juce::File&)> onFileDropped)
+        : onFileDropped_ (std::move (onFileDropped))
+    {
+        addAndMakeVisible (label_);
+        label_.setText ("AMP MODEL", juce::dontSendNotification);
+        label_.setJustificationType (juce::Justification::centred);
+        label_.setFont (juce::FontOptions (8.5f, juce::Font::bold));
+        label_.setColour (juce::Label::textColourId, juce::Colour (0xff3a2f18));
+
+        addAndMakeVisible (button_);
+        button_.setButtonText ("BROWSE");
+        button_.setTooltip ("Browse for a NAM amp model");
+        button_.onClick = std::move (onClick);
+
+        addAndMakeVisible (prevButton_);
+        prevButton_.setButtonText ("<");
+        prevButton_.setTooltip ("Previous .nam file in this folder");
+        prevButton_.onClick = std::move (onPrevious);
+
+        addAndMakeVisible (nextButton_);
+        nextButton_.setButtonText (">");
+        nextButton_.setTooltip ("Next .nam file in this folder");
+        nextButton_.onClick = std::move (onNext);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds();
+        label_.setBounds (r.removeFromTop (16));
+        button_.setBounds (r.removeFromTop (44).withSizeKeepingCentre (68, 38));
+
+        auto arrows = r.removeFromTop (24).reduced (2, 1);
+        prevButton_.setBounds (arrows.removeFromLeft (33));
+        nextButton_.setBounds (arrows.removeFromRight (33));
+    }
+
+    bool isInterestedInFileDrag (const juce::StringArray& files) override
+    {
+        return files.size() == 1 && files[0].endsWithIgnoreCase (".nam");
+    }
+
+    void fileDragEnter (const juce::StringArray&, int, int) override
+    {
+        dragOver_ = true;
+        repaint();
+    }
+
+    void fileDragExit (const juce::StringArray&) override
+    {
+        dragOver_ = false;
+        repaint();
+    }
+
+    void filesDropped (const juce::StringArray& files, int, int) override
+    {
+        dragOver_ = false;
+        repaint();
+
+        if (! files.isEmpty() && onFileDropped_ != nullptr)
+            onFileDropped_ (juce::File (files[0]));
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        if (! dragOver_)
+            return;
+
+        g.setColour (juce::Colour (0xff2dd4bf));
+        g.drawRect (getLocalBounds(), 2);
+    }
+
+private:
+    std::function<void (const juce::File&)> onFileDropped_;
+    juce::Label label_;
+    juce::TextButton button_;
+    juce::TextButton prevButton_, nextButton_;
+    bool dragOver_ = false;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AmpBrowseButton)
+};
+
+//==============================================================================
+/// Centers two controls in a row while keeping the standard knob footprint.
+class CenteredPairRow : public juce::Component
+{
+public:
+    CenteredPairRow (juce::Component* first, juce::Component* second)
+        : first_ (first), second_ (second)
+    {
+        addAndMakeVisible (first_);
+        addAndMakeVisible (second_);
+    }
+
+    void resized() override
+    {
+        const int controlWidth = ParamControl::cellWidth;
+        const int gap = 8;
+        const int totalWidth = controlWidth * 2 + gap;
+        const int height = juce::jmin (getHeight(), ParamControl::cellHeight);
+        const int x = (getWidth() - totalWidth) / 2;
+        const int y = (getHeight() - height) / 2;
+
+        first_->setBounds (x, y, controlWidth, height);
+        second_->setBounds (x + controlWidth + gap, y, controlWidth, height);
+    }
+
+private:
+    juce::Component* first_;
+    juce::Component* second_;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CenteredPairRow)
+};
+
+//==============================================================================
+/// A small hardware-style LCD in the amp grille for the current model name.
+class AmpModelDisplay : public juce::Component
+{
+public:
+    AmpModelDisplay()
+    {
+        setInterceptsMouseClicks (false, false);
+    }
+
+    void setName (const juce::String& name)
+    {
+        const auto display = name.isNotEmpty() ? name : juce::String ("No model loaded");
+
+        if (display != name_)
+        {
+            name_ = display;
+            repaint();
+        }
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto bounds = getLocalBounds().toFloat().reduced (2.0f);
+
+        g.setColour (juce::Colour (0xff070c0b));
+        g.fillRoundedRectangle (bounds, 6.0f);
+
+        g.setColour (juce::Colour (0xff2dd4bf).withAlpha (0.55f));
+        g.drawRoundedRectangle (bounds.reduced (0.5f), 6.0f, 1.2f);
+
+        g.setColour (juce::Colour (0xff2dd4bf).withAlpha (0.55f));
+        g.setFont (juce::FontOptions (9.0f, juce::Font::bold));
+        g.drawText ("CURRENT AMP",
+                    bounds.reduced (14.0f).removeFromTop (16.0f),
+                    juce::Justification::centredLeft);
+
+        g.setColour (juce::Colour (0xffb8fff1));
+        g.setFont (juce::FontOptions (22.0f, juce::Font::bold));
+        const auto textArea = bounds.reduced (14.0f, 8.0f).withTrimmedTop (16.0f).toNearestInt();
+        g.drawFittedText (name_, textArea,
+                          juce::Justification::centred, 1, 0.72f);
+    }
+
+private:
+    juce::String name_ { "No model loaded" };
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AmpModelDisplay)
 };
 
 //==============================================================================
@@ -1034,7 +1285,7 @@ public:
 
                 if (style_ == UnitStyle::AmpHead)
                 {
-                    rowW = juce::jmin (rowW, 360);
+                    rowW = juce::jmin (rowW, 460);
                     rowX = r.getX() + (r.getWidth() - rowW) / 2;
                 }
 
@@ -1254,7 +1505,7 @@ private:
     static constexpr int pedalWidth = 176;
     static constexpr int pedalGap = 8;
     static constexpr int tunerHeight = 130;
-    static constexpr int pedalHeight = 300;
+    static constexpr int pedalHeight = 340;
 
     SectionPanel& tuner_;
     SectionPanel& impersonator_;
@@ -1709,6 +1960,7 @@ NAMBerryEditor::NAMBerryEditor (NAMBerryProcessor& p)
     presetButton_.onClick = [this] { showPresetMenu(); };
 
     tabBar_.addChangeListener (this);
+    tabBar_.addMouseListener (this, true);
     addAndMakeVisible (tabBar_);
 
     viewport_.setViewedComponent (&content_, false);
@@ -1736,6 +1988,7 @@ NAMBerryEditor::NAMBerryEditor (NAMBerryProcessor& p)
 
 NAMBerryEditor::~NAMBerryEditor()
 {
+    tabBar_.removeMouseListener (this);
     tabBar_.removeChangeListener (this);
     stopTimer();
     setLookAndFeel (nullptr);
@@ -1815,7 +2068,11 @@ void NAMBerryEditor::buildUi()
                 return pedal ? processor_.loadNamPedalModel (file)
                              : processor_.loadNamModel (file);
             },
-            [this] { return processor_.getNamDirectory(); },
+            [this, pedal]
+            {
+                return pedal ? processor_.getPedalDirectory()
+                             : processor_.getNamDirectory();
+            },
             [this, pedal]
             {
                 auto* loader = pedal ? processor_.getNamPedal()
@@ -1827,9 +2084,10 @@ void NAMBerryEditor::buildUi()
         if (auto* loaderNow = pedal ? processor_.getNamPedal() : processor_.getNamModel())
             raw->setDisplayedFileName (loaderNow->getLoadedFileName());
 
-        raw->setOnBrowse ([this, raw]
+        raw->setOnBrowse ([this, raw, pedal]
         {
-            openBrowser (BrowserKind::Nam, [raw] (const juce::File& file)
+            openBrowser (pedal ? BrowserKind::Pedal : BrowserKind::Nam,
+                         [raw] (const juce::File& file)
             {
                 raw->loadFile (file);
             });
@@ -1854,6 +2112,15 @@ void NAMBerryEditor::buildUi()
     tabBar_.addTab ("IR", juce::Colour (0xff1c1c20), -1);
     tabBar_.addTab ("Post FX", juce::Colour (0xff1c1c20), -1);
     tabBar_.setCurrentTabIndex (currentTabIndex_, false);
+
+    const char* tabNames[] = { "Pre FX", "Amp", "Post EQ", "IR", "Post FX" };
+
+    for (int i = 0; i < tabBar_.getNumTabs() && i < 5; ++i)
+        if (auto* button = tabBar_.getTabButton (i))
+            button->setTooltip (juce::String (tabNames[i])
+                                + " — right-click to bypass this section");
+
+    updateTabVisuals();
 
     // Unit colours.
     const juce::Colour tunerBody   (0xff0d5c58), tunerAccent   (0xff5eead4);
@@ -1919,9 +2186,11 @@ void NAMBerryEditor::buildUi()
     if (pitchPanel != nullptr)
     {
         pitchPanel->addItem (makeControl ("capoFret", "Semitones"));
+        pitchPanel->addItem (makeControl ("capoTone", "Tone Match"));
         pitchPanel->addItem (makeControl ("capoMix", "Mix"));
+        pitchPanel->addItem (makeControl ("capoQuality", "Quality", ParamControl::Kind::Toggle));
         pitchPanel->setFooter (makeFootswitch ("capoBypass", capoAccent), 82);
-        pitchPanel->setPreferredHeight (300);
+        pitchPanel->setPreferredHeight (340);
     }
 
     if (tunerPanel != nullptr && impersonatorPanel != nullptr && pitchPanel != nullptr)
@@ -1983,7 +2252,7 @@ void NAMBerryEditor::buildUi()
     }
 
     // 2. Amp ----------------------------------------------------------------
-    if (auto* amp = makePanel (1, "AMP", UnitStyle::AmpHead, 8, 760,
+    if (auto* amp = makePanel (1, "AMP", UnitStyle::AmpHead, 9, 760,
                                ampBody, ampAccent))
     {
         auto addAmpControl = [&] (const juce::String& id, const juce::String& text,
@@ -1995,6 +2264,51 @@ void NAMBerryEditor::buildUi()
             return control;
         };
 
+        auto stepAmp = [this] (int delta)
+        {
+            auto* loader = processor_.getNamModel();
+
+            if (loader == nullptr)
+                return;
+
+            const auto current = loader->getLoadedFile();
+            const auto directory = current.existsAsFile()
+                ? current.getParentDirectory()
+                : processor_.getNamDirectory();
+            const auto files = listMatchingFiles (directory, juce::StringArray { ".nam" });
+
+            if (files.isEmpty())
+                return;
+
+            int index = files.indexOf (current);
+
+            if (index < 0)
+                index = delta > 0 ? 0 : files.size() - 1;
+            else
+                index = (index + delta + files.size()) % files.size();
+
+            processor_.loadNamModel (files[index]);
+        };
+
+        auto browse = std::make_unique<AmpBrowseButton> (
+            [this]
+            {
+                openBrowser (BrowserKind::Nam, [this] (const juce::File& file)
+                {
+                    processor_.loadNamModel (file);
+                });
+            },
+            [stepAmp] { stepAmp (-1); },
+            [stepAmp] { stepAmp (1); },
+            [this] (const juce::File& file)
+            {
+                processor_.loadNamModel (file);
+            });
+        auto* rawBrowse = browse.get();
+        ownedControls_.push_back (std::move (browse));
+
+        amp->addItem (rawBrowse);
+
         amp->addItem (addAmpControl ("ampBypass", "Power", ParamControl::Kind::Toggle, true));
         amp->addItem (addAmpControl ("ampGain", "Gain"));
         amp->addItem (addAmpControl ("ampBass", "Bass"));
@@ -2003,7 +2317,21 @@ void NAMBerryEditor::buildUi()
         amp->addItem (addAmpControl ("ampPresence", "Presence"));
         amp->addItem (addAmpControl ("ampDepth", "Depth"));
         amp->addItem (addAmpControl ("ampOutput", "Output"));
-        amp->addRow (makeNamBox ("AMP MODEL", false), 140);
+
+        auto display = std::make_unique<AmpModelDisplay>();
+        auto* rawDisplay = display.get();
+        ownedControls_.push_back (std::move (display));
+
+        if (auto* loader = processor_.getNamModel())
+            rawDisplay->setName (loader->getLoadedFileName());
+
+        nameUpdaters_.push_back ([this, rawDisplay]
+        {
+            if (auto* loader = processor_.getNamModel())
+                rawDisplay->setName (loader->getLoadedFileName());
+        });
+
+        amp->addRow (rawDisplay, 92);
     }
 
     // 3. Post EQ rack --------------------------------------------------------
@@ -2027,12 +2355,19 @@ void NAMBerryEditor::buildUi()
             addBandControl ("postEqQ" + i, juce::String (bandNames[band]) + " Q");
         }
 
+        auto passRow = std::make_unique<CenteredPairRow> (
+            makeControl ("postEqHpfFreq", "HPF"),
+            makeControl ("postEqLpfFreq", "LPF"));
+        auto* rawPassRow = passRow.get();
+        ownedControls_.push_back (std::move (passRow));
+        postEq->addRow (rawPassRow, 84);
+
         auto* bypass = makeControl ("postEqBypass", "Bypass", ParamControl::Kind::Toggle, true);
         bypass->setLabelFontSize (13.0f);
-        postEq->addRow (bypass, 64);
+        postEq->addRow (bypass, 48);
 
-        postEq->setItemCellHeight (120);
-        postEq->setPreferredHeight (480);
+        postEq->setItemCellHeight (84);
+        postEq->setPreferredHeight (500);
     }
 
     // 4. IR rack -------------------------------------------------------------
@@ -2215,16 +2550,17 @@ void NAMBerryEditor::openBrowser (BrowserKind kind,
     if (browser_ == nullptr)
         return;
 
-    const bool nam = kind == BrowserKind::Nam;
-    const auto root = nam ? processor_.getNamDirectory()
-                          : processor_.getIrDirectory();
+    const bool amp = kind == BrowserKind::Nam;
+    const bool pedal = kind == BrowserKind::Pedal;
+
+    const auto root = amp ? processor_.getNamDirectory()
+                      : pedal ? processor_.getPedalDirectory()
+                              : processor_.getIrDirectory();
 
     juce::StringArray extensions;
 
-    if (nam)
-    {
+    if (amp || pedal)
         extensions.add (".nam");
-    }
     else
     {
         extensions.add (".wav");
@@ -2232,13 +2568,15 @@ void NAMBerryEditor::openBrowser (BrowserKind kind,
         extensions.add (".aiff");
     }
 
-    browser_->open (nam ? "NAM BROWSER" : "IR BROWSER",
+    browser_->open (amp ? "AMP BROWSER" : pedal ? "PEDAL BROWSER" : "IR BROWSER",
                     extensions,
                     root,
-                    [this, nam] (const juce::File& directory)
+                    [this, amp, pedal] (const juce::File& directory)
                     {
-                        if (nam)
+                        if (amp)
                             processor_.setNamDirectory (directory);
+                        else if (pedal)
+                            processor_.setPedalDirectory (directory);
                         else
                             processor_.setIrDirectory (directory);
                     },
@@ -2430,6 +2768,76 @@ void NAMBerryEditor::paint (juce::Graphics& g)
     g.fillRect (getLocalBounds().removeFromTop (60).removeFromBottom (2));
 }
 
+void NAMBerryEditor::mouseDown (const juce::MouseEvent& event)
+{
+    if (! event.mods.isPopupMenu())
+        return;
+
+    // Resolve the clicked tab in tab-bar coordinates. The deep listener can
+    // receive the event relative to the tab button, not the bar itself.
+    const auto position = event.getEventRelativeTo (&tabBar_).getPosition();
+
+    for (int i = 0; i < tabBar_.getNumTabs(); ++i)
+    {
+        if (auto* button = tabBar_.getTabButton (i))
+        {
+            if (button->getBounds().contains (position))
+            {
+                toggleTabBypass (i);
+                break;
+            }
+        }
+    }
+}
+
+void NAMBerryEditor::toggleTabBypass (int tabIndex)
+{
+    static const char* ids[] = {
+        "preFxBypass", "ampBypass", "postEqBypass", "irBypass", "postFxBypass"
+    };
+
+    if (tabIndex < 0 || tabIndex >= 5)
+        return;
+
+    auto& state = processor_.getValueTreeState();
+
+    if (auto* parameter = state.getParameter (ids[tabIndex]))
+    {
+        const bool bypassed = parameter->getValue() > 0.5f;
+        parameter->setValueNotifyingHost (bypassed ? 0.0f : 1.0f);
+    }
+
+    updateTabVisuals();
+}
+
+void NAMBerryEditor::updateTabVisuals()
+{
+    static const char* ids[] = {
+        "preFxBypass", "ampBypass", "postEqBypass", "irBypass", "postFxBypass"
+    };
+
+    auto& state = processor_.getValueTreeState();
+
+    for (int i = 0; i < tabBar_.getNumTabs() && i < 5; ++i)
+    {
+        auto* button = tabBar_.getTabButton (i);
+        auto* value = state.getRawParameterValue (ids[i]);
+
+        if (button == nullptr || value == nullptr)
+            continue;
+
+        const bool bypassed = value->load() > 0.5f;
+        const bool wasBypassed = static_cast<bool> (
+            button->getProperties().getWithDefault ("bypassed", false));
+
+        if (bypassed != wasBypassed)
+        {
+            button->getProperties().set ("bypassed", bypassed);
+            button->repaint();
+        }
+    }
+}
+
 void NAMBerryEditor::timerCallback()
 {
     if (tunerUpdater_)
@@ -2437,6 +2845,8 @@ void NAMBerryEditor::timerCallback()
 
     for (auto& updater : nameUpdaters_)
         updater();
+
+    updateTabVisuals();
 }
 
 } // namespace namberry

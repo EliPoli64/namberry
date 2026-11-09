@@ -12,7 +12,8 @@ namespace namberry {
 /// Reverb.
 ///
 /// The three modulation pedals use a shared custom LFO/delay framework; Room
-/// is a generated-IR convolution ambience, and Delay/Reverb use JUCE DSP.
+/// is an algorithmic early-reflection/FDN ambience, and Delay/Reverb use JUCE
+/// DSP.
 class PostEffects
 {
 public:

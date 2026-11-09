@@ -45,6 +45,7 @@ private:
     void refresh();
     void navigateTo (const juce::File& directory);
     void setRoot (const juce::File& directory);
+    void close();
     void loadSelected();
     void chooseRoot();
     bool isUnderRoot (const juce::File& file) const;

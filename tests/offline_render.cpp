@@ -320,6 +320,118 @@ int runPitchTest()
     return allPassed ? 0 : 2;
 }
 
+int runPitchLowNoteTest()
+{
+    constexpr double sampleRate = 48000.0;
+    constexpr int blockSize = 512;
+
+    struct Case { double frequency; int semitones; };
+    const Case cases[] = {
+        { 82.41,   7 },
+        { 82.41, -12 },
+        { 110.0,  -5 }
+    };
+
+    bool allPassed = true;
+
+    for (const auto& testCase : cases)
+    {
+        namberry::DigitalCapo capo;
+        juce::dsp::ProcessSpec spec;
+        spec.sampleRate = sampleRate;
+        spec.maximumBlockSize = blockSize;
+        spec.numChannels = 2;
+        capo.prepare (spec);
+        capo.setSemitones (static_cast<float> (testCase.semitones));
+        capo.setMix (1.0f);
+        capo.setBypass (false);
+
+        juce::AudioBuffer<float> buffer (2, blockSize);
+        juce::MidiBuffer midi;
+        double phase = 0.0;
+        std::vector<float> captured;
+        captured.reserve (32768);
+        double inputEnergy = 0.0;
+        double outputEnergy = 0.0;
+
+        const int totalBlocks = 320;
+        const int skipSamples = capo.getLatencySamples() + 24000;
+
+        for (int block = 0; block < totalBlocks; ++block)
+        {
+            for (int i = 0; i < blockSize; ++i)
+            {
+                const float s = 0.2f * static_cast<float> (std::sin (phase));
+                phase += 2.0 * juce::MathConstants<double>::pi * testCase.frequency / sampleRate;
+                buffer.setSample (0, i, s);
+                buffer.setSample (1, i, s);
+                inputEnergy += static_cast<double> (s) * s;
+            }
+
+            capo.processBlock (buffer, midi);
+
+            if (block * blockSize >= skipSamples)
+            {
+                for (int i = 0; i < blockSize; ++i)
+                {
+                    const float sample = buffer.getSample (0, i);
+                    outputEnergy += static_cast<double> (sample) * sample;
+
+                    if (captured.size() < 32768)
+                        captured.push_back (sample);
+                }
+            }
+        }
+
+        const double expected = testCase.frequency
+            * std::pow (2.0, testCase.semitones / 12.0);
+        const float measured = estimateFrequency (captured, sampleRate);
+        const float zeroCrossing = estimateZeroCrossingFrequency (captured, sampleRate);
+
+        constexpr int fftOrder = 14;
+        constexpr int fftSize = 1 << fftOrder;
+        std::vector<float> fftData (static_cast<size_t> (fftSize * 2), 0.0f);
+
+        for (int i = 0; i < fftSize && i < (int) captured.size(); ++i)
+        {
+            const float window = 0.5f - 0.5f * std::cos (
+                2.0f * juce::MathConstants<float>::pi * (float) i / (float) (fftSize - 1));
+            fftData[(size_t) i] = captured[(size_t) i] * window;
+        }
+
+        juce::dsp::FFT fft (fftOrder);
+        fft.performFrequencyOnlyForwardTransform (fftData.data());
+
+        int peakBin = 1;
+        for (int i = 2; i < fftSize / 2; ++i)
+            if (fftData[(size_t) i] > fftData[(size_t) peakBin])
+                peakBin = i;
+
+        const float fftFrequency = (float) peakBin * (float) sampleRate / (float) fftSize;
+        const float primary = fftFrequency;
+        const float cents = primary > 0.0f
+            ? 1200.0f * std::log2 (primary / static_cast<float> (expected))
+            : 9999.0f;
+
+        const double energyRatio = inputEnergy > 0.0
+            ? std::sqrt (outputEnergy / inputEnergy)
+            : 0.0;
+        const bool passed = std::abs (cents) < 40.0f && energyRatio > 0.25;
+
+        allPassed = allPassed && passed;
+        std::cout << "low pitch " << testCase.frequency << " Hz "
+                  << testCase.semitones << " st: expected " << expected
+                  << " Hz, zero-cross " << zeroCrossing
+                  << " Hz, autocorr " << measured
+                  << " Hz, FFT " << fftFrequency
+                  << " Hz (" << cents << " cents), energy=" << energyRatio
+                  << " " << (passed ? "PASS" : "FAIL") << "\n";
+    }
+
+    std::cout << (allPassed ? "PASS" : "FAIL") << "\n";
+    return allPassed ? 0 : 2;
+}
+
 int runPitchBlockSizeTest()
 {
     constexpr double sampleRate = 48000.0;
@@ -381,6 +493,108 @@ int runPitchBlockSizeTest()
                   << " " << (passed ? "PASS" : "FAIL") << "\n";
     }
 
+    return allPassed ? 0 : 2;
+}
+
+int runPitchRobustnessTest()
+{
+    const double sampleRates[] = { 44100.0, 48000.0, 96000.0 };
+    const int hostBlocks[] = { 32, 64, 96, 128, 256, 512, 1024, 2048 };
+    const namberry::PitchShifter::QualityMode modes[] = {
+        namberry::PitchShifter::QualityMode::lowLatency,
+        namberry::PitchShifter::QualityMode::quality
+    };
+
+    bool allPassed = true;
+
+    for (double sampleRate : sampleRates)
+    {
+        for (auto quality : modes)
+        {
+            namberry::DigitalCapo capo;
+            juce::dsp::ProcessSpec spec;
+            spec.sampleRate = sampleRate;
+            spec.maximumBlockSize = 2048;
+            spec.numChannels = 2;
+            capo.prepare (spec);
+            capo.setQualityMode (quality);
+            capo.setSemitones (7.0f);
+            capo.setTone (0.0f); // isolate engine robustness from tone matching
+            capo.setMix (1.0f);
+            capo.setBypass (false);
+
+            juce::AudioBuffer<float> buffer (2, 2048);
+            juce::MidiBuffer midi;
+            std::vector<float> captured;
+            captured.reserve (static_cast<size_t> (sampleRate * 3.0));
+            double phase = 0.0;
+            int total = 0;
+            int blockIndex = 0;
+
+            while (total < static_cast<int> (sampleRate * 3.0))
+            {
+                const int numSamples = hostBlocks[blockIndex++ % 8];
+                const int chunk = std::min (numSamples, buffer.getNumSamples());
+
+                for (int i = 0; i < chunk; ++i)
+                {
+                    const float value = 0.2f * static_cast<float> (
+                        std::sin (2.0 * juce::MathConstants<double>::pi * 82.41
+                                  * (total + i) / sampleRate));
+                    buffer.setSample (0, i, value);
+                    buffer.setSample (1, i, value);
+                    phase += 1.0;
+                }
+
+                if (chunk < buffer.getNumSamples())
+                    buffer.clear (0, chunk, buffer.getNumSamples() - chunk);
+
+                juce::AudioBuffer<float> slice (2, chunk);
+                for (int ch = 0; ch < 2; ++ch)
+                    slice.copyFrom (ch, 0, buffer, ch, 0, chunk);
+
+                capo.processBlock (slice, midi);
+
+                for (int i = 0; i < chunk; ++i)
+                {
+                    const float value = slice.getSample (0, i);
+                    captured.push_back (value);
+                    allPassed = allPassed && std::isfinite (value);
+                }
+
+                total += chunk;
+            }
+
+            const int skip = juce::jmax (capo.getLatencySamples(),
+                                         static_cast<int> (sampleRate * 0.5));
+            std::vector<float> analysis (captured.begin() + std::min<size_t> (
+                static_cast<size_t> (skip), captured.size()), captured.end());
+
+            const float measured = estimateZeroCrossingFrequency (analysis, sampleRate);
+            const double expected = 82.41 * std::pow (2.0, 7.0 / 12.0);
+            const float cents = measured > 0.0f
+                ? 1200.0f * std::log2 (measured / static_cast<float> (expected))
+                : 9999.0f;
+
+            double outputEnergy = 0.0;
+            for (float value : analysis)
+                outputEnergy += static_cast<double> (value) * value;
+
+            const double energyRatio = std::sqrt (outputEnergy / analysis.size()) / 0.1414;
+            const bool passed = std::abs (cents) < 20.0f && energyRatio > 0.5;
+            allPassed = allPassed && passed;
+
+            std::cout << "pitch robust sr=" << sampleRate
+                      << " quality=" << (quality == namberry::PitchShifter::QualityMode::quality ? "HQ" : "fast")
+                      << " latency=" << capo.getLatencySamples()
+                      << " freq=" << measured
+                      << " cents=" << cents
+                      << " energy=" << energyRatio
+                      << " " << (passed ? "PASS" : "FAIL") << "\n";
+        }
+    }
+
+    std::cout << (allPassed ? "PASS" : "FAIL") << "\n";
     return allPassed ? 0 : 2;
 }
 
@@ -618,6 +832,120 @@ int runReferenceTest()
     return passed ? 0 : 2;
 }
 
+int runReverbDryTest()
+{
+    constexpr double sampleRate = 48000.0;
+    constexpr int blockSize = 4096;
+
+    namberry::PostEffects fx;
+    juce::dsp::ProcessSpec spec;
+    spec.sampleRate = sampleRate;
+    spec.maximumBlockSize = blockSize;
+    spec.numChannels = 2;
+    fx.prepare (spec);
+
+    fx.setBypass (false);
+    fx.setChorusBypass (true);
+    fx.setFlangerBypass (true);
+    fx.setPhaserBypass (true);
+    fx.setRoomBlend (0.0f);
+    fx.setDelayBypass (true);
+    fx.setReverbBypass (false);
+
+    auto directAtMix = [&] (float mix)
+    {
+        fx.setReverbMix (mix);
+
+        juce::AudioBuffer<float> buffer (2, blockSize);
+        juce::MidiBuffer midi;
+
+        for (int settle = 0; settle < 3; ++settle)
+        {
+            buffer.clear();
+            fx.processBlock (buffer, midi);
+        }
+
+        buffer.clear();
+        buffer.setSample (0, 0, 0.5f);
+        buffer.setSample (1, 0, 0.5f);
+        fx.processBlock (buffer, midi);
+        return buffer.getSample (0, 0);
+    };
+
+    const float dryAtZero = directAtMix (0.0f);
+    const float dryAtTwenty = directAtMix (0.2f);
+
+    const bool dryUnity = std::abs (dryAtZero - 0.5f) < 1.0e-4f;
+    const bool dryNotBoosted = dryAtTwenty <= 0.5f * 1.01f && dryAtTwenty > 0.25f;
+    const bool passed = dryUnity && dryNotBoosted;
+
+    std::cout << "reverb dry0=" << dryAtZero
+              << " dry20=" << dryAtTwenty
+              << " " << (passed ? "PASS" : "FAIL") << "\n";
+
+    return passed ? 0 : 2;
+}
+
+int runDelayFeedbackTest()
+{
+    constexpr double sampleRate = 48000.0;
+    constexpr int blockSize = 4096;
+    constexpr int delaySamples = 2400; // 50 ms
+
+    auto echoEnergies = [&] (float feedback)
+    {
+        namberry::PostEffects fx;
+        juce::dsp::ProcessSpec spec;
+        spec.sampleRate = sampleRate;
+        spec.maximumBlockSize = blockSize;
+        spec.numChannels = 2;
+        fx.prepare (spec);
+        fx.setBypass (false);
+        fx.setChorusBypass (true);
+        fx.setFlangerBypass (true);
+        fx.setPhaserBypass (true);
+        fx.setRoomBlend (0.0f);
+        fx.setReverbBypass (true);
+        fx.setDelayBypass (false);
+        fx.setDelayMix (1.0f);
+        fx.setDelayTimeMs (50.0f);
+        fx.setDelayFeedback (feedback);
+
+        juce::AudioBuffer<float> buffer (2, blockSize);
+        juce::MidiBuffer midi;
+        buffer.clear();
+        buffer.setSample (0, 0, 1.0f);
+        buffer.setSample (1, 0, 1.0f);
+        fx.processBlock (buffer, midi);
+
+        float first = 0.0f;
+        for (int i = delaySamples - 3; i < delaySamples + 4; ++i)
+            first += std::abs (buffer.getSample (0, i));
+
+        buffer.clear();
+        fx.processBlock (buffer, midi);
+
+        float second = 0.0f;
+        for (int i = 0; i < blockSize; ++i)
+            second += std::abs (buffer.getSample (0, i));
+
+        return std::pair<float, float> { first, second };
+    };
+
+    const auto zero = echoEnergies (0.0f);
+    const auto max = echoEnergies (10.0f);
+
+    const bool oneRepeat = zero.first > 0.5f && zero.second < 1.0e-5f;
+    const bool longTail = max.first > 0.5f && max.second > 0.5f;
+    const bool passed = oneRepeat && longTail;
+
+    std::cout << "delay feedback 0: first=" << zero.first << " second=" << zero.second
+              << " | 10: first=" << max.first << " second=" << max.second
+              << " " << (passed ? "PASS" : "FAIL") << "\n";
+
+    return passed ? 0 : 2;
+}
+
 int runDelayResetTest()
 {
     constexpr double sampleRate = 48000.0;
@@ -633,7 +961,7 @@ int runDelayResetTest()
     fx.setDelayBypass (false);
     fx.setDelayMix (1.0f);
     fx.setDelayTimeMs (50.0f);
-    fx.setDelayFeedback (0.8f);
+    fx.setDelayFeedback (8.0f);
 
     juce::AudioBuffer<float> buffer (2, blockSize);
     juce::MidiBuffer midi;
@@ -670,91 +998,280 @@ int runDelayResetTest()
     return passed ? 0 : 2;
 }
 
+struct RoomRender
+{
+    std::vector<float> left;
+    std::vector<float> right;
+};
+
+RoomRender renderRoom (namberry::Room& room,
+                       float size,
+                       float blend,
+                       const std::vector<float>& inputLeft,
+                       const std::vector<float>& inputRight)
+{
+    const int numSamples = static_cast<int> (
+        juce::jmin (inputLeft.size(), inputRight.size()));
+
+    room.setSize (size);
+    room.setBlend (blend);
+    room.reset();
+
+    juce::AudioBuffer<float> buffer (2, numSamples);
+    buffer.copyFrom (0, 0, inputLeft.data(), numSamples);
+    buffer.copyFrom (1, 0, inputRight.data(), numSamples);
+
+    juce::MidiBuffer midi;
+    room.processBlock (buffer, midi);
+
+    RoomRender result;
+    result.left.assign (buffer.getReadPointer (0),
+                        buffer.getReadPointer (0) + numSamples);
+    result.right.assign (buffer.getReadPointer (1),
+                         buffer.getReadPointer (1) + numSamples);
+    return result;
+}
+
+double windowEnergy (const std::vector<float>& samples,
+                     double sampleRate,
+                     double startSeconds,
+                     double endSeconds)
+{
+    const int start = juce::jlimit (0, static_cast<int> (samples.size()),
+                                    static_cast<int> (std::round (startSeconds * sampleRate)));
+    const int end = juce::jlimit (start, static_cast<int> (samples.size()),
+                                  static_cast<int> (std::round (endSeconds * sampleRate)));
+
+    double sum = 0.0;
+    for (int i = start; i < end; ++i)
+        sum += static_cast<double> (samples[static_cast<size_t> (i)])
+             * static_cast<double> (samples[static_cast<size_t> (i)]);
+
+    return sum;
+}
+
+float windowRms (const std::vector<float>& samples,
+                 double sampleRate,
+                 double startSeconds,
+                 double endSeconds)
+{
+    const int start = juce::jlimit (0, static_cast<int> (samples.size()),
+                                    static_cast<int> (std::round (startSeconds * sampleRate)));
+    const int end = juce::jlimit (start, static_cast<int> (samples.size()),
+                                  static_cast<int> (std::round (endSeconds * sampleRate)));
+
+    const int count = juce::jmax (1, end - start);
+    return static_cast<float> (std::sqrt (
+        windowEnergy (samples, sampleRate, startSeconds, endSeconds) / count));
+}
+
+int firstSampleAbove (const std::vector<float>& samples, float threshold)
+{
+    for (int i = 0; i < static_cast<int> (samples.size()); ++i)
+        if (std::abs (samples[static_cast<size_t> (i)]) > threshold)
+            return i;
+
+    return -1;
+}
+
+double highFrequencyRatio (const std::vector<float>& samples,
+                           double sampleRate,
+                           double startSeconds,
+                           double endSeconds)
+{
+    const int start = juce::jlimit (0, static_cast<int> (samples.size()),
+                                    static_cast<int> (std::round (startSeconds * sampleRate)));
+    const int end = juce::jlimit (start, static_cast<int> (samples.size()),
+                                  static_cast<int> (std::round (endSeconds * sampleRate)));
+
+    double differenceEnergy = 0.0;
+    double totalEnergy = 0.0;
+
+    for (int i = start + 1; i < end; ++i)
+    {
+        const double current = samples[static_cast<size_t> (i)];
+        const double previous = samples[static_cast<size_t> (i - 1)];
+        const double difference = current - previous;
+        differenceEnergy += difference * difference;
+        totalEnergy += current * current;
+    }
+
+    return totalEnergy > 1.0e-20 ? std::sqrt (differenceEnergy / totalEnergy) : 0.0;
+}
+
+void makeRoomNoise (std::vector<float>& left,
+                    std::vector<float>& right,
+                    float amplitude)
+{
+    juce::Random random (0x51a7);
+    float stateLeft = 0.0f;
+    float stateRight = 0.0f;
+
+    for (size_t i = 0; i < left.size(); ++i)
+    {
+        stateLeft += 0.25f * ((random.nextFloat() * 2.0f - 1.0f) - stateLeft);
+        stateRight += 0.25f * ((random.nextFloat() * 2.0f - 1.0f) - stateRight);
+
+        left[i] = stateLeft * amplitude;
+        right[i] = stateRight * amplitude;
+    }
+}
+
+double stereoCorrelation (const RoomRender& render,
+                          double sampleRate,
+                          double startSeconds,
+                          double endSeconds)
+{
+    const int start = juce::jlimit (0, static_cast<int> (render.left.size()),
+                                    static_cast<int> (std::round (startSeconds * sampleRate)));
+    const int end = juce::jlimit (start, static_cast<int> (render.left.size()),
+                                  static_cast<int> (std::round (endSeconds * sampleRate)));
+
+    double sumLR = 0.0;
+    double sumLL = 0.0;
+    double sumRR = 0.0;
+
+    for (int i = start; i < end; ++i)
+    {
+        const double left = render.left[static_cast<size_t> (i)];
+        const double right = render.right[static_cast<size_t> (i)];
+        sumLR += left * right;
+        sumLL += left * left;
+        sumRR += right * right;
+    }
+
+    const double denominator = std::sqrt (sumLL * sumRR);
+    return denominator > 1.0e-20 ? sumLR / denominator : 1.0;
+}
+
 int runRoomTest()
 {
     constexpr double sampleRate = 48000.0;
-    constexpr int blockSize = 4096;
+    constexpr int totalSamples = static_cast<int> (sampleRate * 2.0);
 
     namberry::Room room;
     juce::dsp::ProcessSpec spec;
     spec.sampleRate = sampleRate;
-    spec.maximumBlockSize = blockSize;
+    spec.maximumBlockSize = 512;
     spec.numChannels = 2;
     room.prepare (spec);
-    room.setSize (0.45f);
-    room.setBlend (0.6f);
 
-    juce::AudioBuffer<float> buffer (2, blockSize);
-    juce::MidiBuffer midi;
+    std::vector<float> impulseLeft (totalSamples, 0.0f);
+    std::vector<float> impulseRight (totalSamples, 0.0f);
+    impulseLeft[0] = 1.0f;
+    impulseRight[0] = 1.0f;
 
-    // Let the dry/wet ramp settle before measuring.
-    for (int i = 0; i < 2; ++i)
+    bool passed = true;
+
+    const auto check = [&passed] (bool condition, const char* name)
     {
-        buffer.clear();
-        room.processBlock (buffer, midi);
-    }
-
-    buffer.clear();
-    buffer.setSample (0, 0, 1.0f);
-    buffer.setSample (1, 0, 1.0f);
-    room.processBlock (buffer, midi);
-
-    const float direct = buffer.getSample (0, 0);
-
-    float reflectionEnergy = 0.0f;
-    for (int i = 1; i < blockSize; ++i)
-        reflectionEnergy += std::abs (buffer.getSample (0, i));
-
-    // The room IR should still be audible in the next block, then decay to
-    // silence. It must not behave like an endless reverb.
-    buffer.clear();
-    room.processBlock (buffer, midi);
-
-    float shortTailEnergy = 0.0f;
-    for (int i = 0; i < blockSize; ++i)
-        shortTailEnergy += std::abs (buffer.getSample (0, i));
-
-    float lateTailEnergy = 0.0f;
-    for (int block = 0; block < 8; ++block)
-    {
-        buffer.clear();
-        room.processBlock (buffer, midi);
-
-        if (block == 7)
+        if (! condition)
         {
-            for (int i = 0; i < blockSize; ++i)
-                lateTailEnergy += std::abs (buffer.getSample (0, i));
+            std::cout << "room " << name << " FAIL\n";
+            passed = false;
         }
+    };
+
+    // Room Mix 0 % must be completely dry and must not run the room.
+    const auto dry = renderRoom (room, 0.45f, 0.0f, impulseLeft, impulseRight);
+    check (std::abs (dry.left[0] - 1.0f) < 1.0e-6f, "dry-direct");
+
+    double dryResidue = 0.0;
+    for (int i = 1; i < totalSamples; ++i)
+        dryResidue += std::abs (dry.left[static_cast<size_t> (i)]);
+    check (dryResidue < 1.0e-9, "dry-residue");
+
+    // Equal-power dry law. At sample 0 the wet path has not arrived yet, so
+    // the direct output is exactly the dry gain.
+    for (const float mix : { 0.25f, 0.5f, 0.75f, 1.0f })
+    {
+        const auto rendered = renderRoom (room, 0.45f, mix, impulseLeft, impulseRight);
+        const float expected = std::cos (juce::MathConstants<float>::halfPi * mix);
+        check (std::abs (rendered.left[0] - expected) < 1.0e-4f, "equal-power");
     }
 
-    // Room Mix 0 must be completely dry and must not run the convolution.
-    room.setBlend (0.0f);
-    room.reset();
-    buffer.clear();
-    buffer.setSample (0, 0, 1.0f);
-    buffer.setSample (1, 0, 1.0f);
-    room.processBlock (buffer, midi);
+    const auto small = renderRoom (room, 0.0f, 1.0f, impulseLeft, impulseRight);
+    const auto large = renderRoom (room, 1.0f, 1.0f, impulseLeft, impulseRight);
 
-    const float dryDirect = buffer.getSample (0, 0);
-    float dryResidue = 0.0f;
-    for (int i = 1; i < blockSize; ++i)
-        dryResidue += std::abs (buffer.getSample (0, i));
+    const int smallOnset = firstSampleAbove (small.left, 1.0e-4f);
+    const int largeOnset = firstSampleAbove (large.left, 1.0e-4f);
 
-    const bool blendOk = direct > 0.35f && direct < 0.45f;
-    const bool reflectionsOk = reflectionEnergy > 1.0e-4f;
-    const bool shortTailOk = shortTailEnergy > 1.0e-5f;
-    const bool tailDecaysOk = lateTailEnergy < 1.0e-5f;
-    const bool dryMixOk = std::abs (dryDirect - 1.0f) < 1.0e-6f
-                       && dryResidue < 1.0e-7f;
+    check (smallOnset > static_cast<int> (0.001 * sampleRate), "predelay-small");
+    check (smallOnset < static_cast<int> (0.006 * sampleRate), "predelay-small-short");
+    check (largeOnset > static_cast<int> (0.008 * sampleRate), "predelay-large");
+    check (largeOnset > smallOnset + static_cast<int> (0.005 * sampleRate),
+           "predelay-macro");
 
-    const bool passed = blendOk && reflectionsOk && shortTailOk
-                     && tailDecaysOk && dryMixOk;
+    // The top of the Size range must ring noticeably longer than the bottom.
+    const double smallLate = windowEnergy (small.left, sampleRate, 0.10, 0.20);
+    const double largeLate = windowEnergy (large.left, sampleRate, 0.10, 0.20);
+    check (largeLate > 1.0e-7, "decay-length");
+    check (smallLate < largeLate * 0.01, "decay-scaling");
+    check (windowEnergy (small.left, sampleRate, 0.50, 0.70) < 1.0e-9, "decay-small");
+    check (windowEnergy (large.left, sampleRate, 0.50, 0.70) < largeLate * 0.01,
+           "decay-large");
 
-    std::cout << "room direct=" << direct
-              << " reflections=" << reflectionEnergy
-              << " shortTail=" << shortTailEnergy
-              << " lateTail=" << lateTailEnergy
-              << " dry=" << dryDirect
+    // HF damping: the late tail should be darker than the early tail.
+    const double earlyHf = highFrequencyRatio (large.left, sampleRate, 0.02, 0.06);
+    const double lateHf = highFrequencyRatio (large.left, sampleRate, 0.15, 0.25);
+    check (lateHf < earlyHf * 0.85, "hf-damping");
+
+    // Level should stay close as Size moves from 0 to 100 %.
+    std::vector<float> noiseLeft (static_cast<size_t> (totalSamples));
+    std::vector<float> noiseRight (static_cast<size_t> (totalSamples));
+    makeRoomNoise (noiseLeft, noiseRight, 0.25f);
+
+    const float rmsSmall = windowRms (renderRoom (room, 0.0f, 1.0f, noiseLeft, noiseRight).left,
+                                      sampleRate, 0.20, 0.40);
+    const float rmsMid = windowRms (renderRoom (room, 0.5f, 1.0f, noiseLeft, noiseRight).left,
+                                    sampleRate, 0.20, 0.40);
+    const float rmsLarge = windowRms (renderRoom (room, 1.0f, 1.0f, noiseLeft, noiseRight).left,
+                                      sampleRate, 0.20, 0.40);
+
+    const float sizeMin = juce::jmin (rmsSmall, rmsMid, rmsLarge);
+    const float sizeMax = juce::jmax (rmsSmall, rmsMid, rmsLarge);
+    check (sizeMin > 1.0e-5f && sizeMax < sizeMin * 1.5f, "size-level");
+
+    // Equal-power mix should not dip in the middle.
+    const float mixDry = windowRms (renderRoom (room, 0.5f, 0.0f, noiseLeft, noiseRight).left,
+                                    sampleRate, 0.20, 0.40);
+    const float mixHalf = windowRms (renderRoom (room, 0.5f, 0.5f, noiseLeft, noiseRight).left,
+                                     sampleRate, 0.20, 0.40);
+    const float mixWet = windowRms (renderRoom (room, 0.5f, 1.0f, noiseLeft, noiseRight).left,
+                                    sampleRate, 0.20, 0.40);
+
+    const float mixMin = juce::jmin (mixDry, mixHalf, mixWet);
+    const float mixMax = juce::jmax (mixDry, mixHalf, mixWet);
+    check (mixMin > 1.0e-5f && mixMax < mixMin * 1.5f, "mix-level");
+
+    // The smallest setting is deliberately a wide doubler/stereoizer: a mono
+    // source should come out with a low L/R correlation at that setting.
+    const auto smallStereo = renderRoom (room, 0.0f, 1.0f, noiseLeft, noiseLeft);
+    const auto largeStereo = renderRoom (room, 1.0f, 1.0f, noiseLeft, noiseLeft);
+    const double corrSmall = stereoCorrelation (smallStereo, sampleRate, 0.10, 0.40);
+    const double corrLarge = stereoCorrelation (largeStereo, sampleRate, 0.10, 0.40);
+    check (corrSmall < 0.90, "stereo-width-small");
+    check (corrSmall < corrLarge, "stereo-width-macro");
+
+    bool finite = true;
+    for (const float value : large.left)
+        finite = finite && std::isfinite (value);
+    check (finite, "finite");
+
+    std::cout << "room smallOnset=" << smallOnset
+              << " largeOnset=" << largeOnset
+              << " lateSmall=" << smallLate
+              << " lateLarge=" << largeLate
+              << " earlyHf=" << earlyHf
+              << " lateHf=" << lateHf
+              << " rmsSmall=" << rmsSmall
+              << " rmsMid=" << rmsMid
+              << " rmsLarge=" << rmsLarge
+              << " mixDry=" << mixDry
+              << " mixHalf=" << mixHalf
+              << " mixWet=" << mixWet
+              << " corrSmall=" << corrSmall
+              << " corrLarge=" << corrLarge
               << " " << (passed ? "PASS" : "FAIL") << "\n";
 
     return passed ? 0 : 2;
@@ -825,7 +1342,7 @@ int runModulationTest()
     fx.setChorusDepth (50.0f);
     fx.setChorusFeedback (15.0f);
     fx.setChorusDelay (15.0f);
-    fx.setChorusMix (100.0f);
+    fx.setChorusMix (50.0f);
     const auto chorus = render (8);
 
     bypassAll();
@@ -834,7 +1351,7 @@ int runModulationTest()
     fx.setFlangerDepth (60.0f);
     fx.setFlangerManual (2.0f);
     fx.setFlangerFeedback (95.0f);
-    fx.setFlangerMix (100.0f);
+    fx.setFlangerMix (50.0f);
     const auto flanger = render (8);
 
     bypassAll();
@@ -842,7 +1359,7 @@ int runModulationTest()
     fx.setPhaserRate (0.5f);
     fx.setPhaserDepth (70.0f);
     fx.setPhaserFeedback (30.0f);
-    fx.setPhaserMix (100.0f);
+    fx.setPhaserMix (50.0f);
 
     std::pair<bool, float> phaser { true, 0.0f };
 
@@ -905,6 +1422,7 @@ int runFxStateMigrationTest()
     setValue ("flangerFeedback", 0.4f);
     setValue ("phaserDepth", 0.5f);
     setValue ("chorusRate", 1.5f);
+    setValue ("delayFeedback", 0.4f);
     setValue ("roomBlend", 50.0f);
 
     juce::ValueTree oldRoomBypass ("PARAM");
@@ -933,6 +1451,7 @@ int runFxStateMigrationTest()
     const float flangerManual = params.getRawParameterValue ("flangerManual")->load();
     const float phaserFeedback = params.getRawParameterValue ("phaserFeedback")->load();
     const float phaserStages = params.getRawParameterValue ("phaserStages")->load();
+    const float delayFeedback = params.getRawParameterValue ("delayFeedback")->load();
     const float roomBlend = params.getRawParameterValue ("roomBlend")->load();
 
     const bool passed = std::abs (chorusMix - 20.0f) < 0.01f
@@ -944,6 +1463,7 @@ int runFxStateMigrationTest()
                      && std::abs (flangerManual - 2.0f) < 0.01f
                      && std::abs (phaserFeedback - 30.0f) < 0.01f
                      && std::abs (phaserStages - 8.0f) < 0.01f
+                     && std::abs (delayFeedback - 4.0f) < 0.01f
                      && std::abs (roomBlend - 0.0f) < 0.01f;
 
     std::cout << "migration chorusMix=" << chorusMix
@@ -952,6 +1472,7 @@ int runFxStateMigrationTest()
               << " phaserDepth=" << phaserDepth
               << " new=" << chorusFeedback << "/" << chorusDelay << "/"
               << flangerManual << "/" << phaserFeedback << "/" << phaserStages
+              << " delayFeedback=" << delayFeedback
               << " roomBlend=" << roomBlend
               << " " << (passed ? "PASS" : "FAIL") << "\n";
 
@@ -1128,6 +1649,109 @@ int runImpersonatorTest()
     return passed ? 0 : 2;
 }
 
+int runToneMatchTest()
+{
+    constexpr double sampleRate = 48000.0;
+    constexpr int blockSize = 512;
+    constexpr float shift = -12.0f;
+
+    // Bright source: a strong harmonic stack with lots of upper partials, so a
+    // detune that shifts formants down is clearly audible as lost brightness.
+    auto render = [&] (float tone) -> std::vector<float>
+    {
+        namberry::DigitalCapo capo;
+        juce::dsp::ProcessSpec spec;
+        spec.sampleRate = sampleRate;
+        spec.maximumBlockSize = blockSize;
+        spec.numChannels = 2;
+        capo.prepare (spec);
+        capo.setSemitones (shift);
+        capo.setTone (tone);
+        capo.setMix (1.0f);
+        capo.setBypass (false);
+
+        juce::AudioBuffer<float> buffer (2, blockSize);
+        juce::MidiBuffer midi;
+        std::vector<float> captured;
+        captured.reserve (65536);
+
+        const int skipSamples = capo.getLatencySamples() + 24000;
+        long long produced = 0;
+
+        for (int block = 0; block < 400; ++block)
+        {
+            for (int i = 0; i < blockSize; ++i)
+            {
+                const double t = (double) produced / sampleRate;
+                double s = 0.0;
+
+                for (int h = 1; h <= 12; ++h)
+                    s += std::sin (2.0 * juce::MathConstants<double>::pi
+                                   * 110.0 * h * t) / std::sqrt ((double) h);
+
+                buffer.setSample (0, i, 0.18f * (float) s);
+                buffer.setSample (1, i, 0.18f * (float) s);
+                ++produced;
+            }
+
+            capo.processBlock (buffer, midi);
+
+            if (produced >= skipSamples && captured.size() < 48000)
+            {
+                for (int i = 0; i < blockSize; ++i)
+                    captured.push_back (buffer.getSample (0, i));
+            }
+        }
+
+        return captured;
+    };
+
+    // Spectral centroid via FFT energy weighting: brighter tone => higher Hz.
+    auto centroid = [&] (const std::vector<float>& x) -> double
+    {
+        constexpr int fftOrder = 13;
+        constexpr int fftSize = 1 << fftOrder;
+        std::vector<float> data ((size_t) fftSize * 2, 0.0f);
+
+        for (int i = 0; i < fftSize && i < (int) x.size(); ++i)
+        {
+            const float window = 0.5f - 0.5f * std::cos (
+                2.0f * juce::MathConstants<float>::pi * (float) i / (float) (fftSize - 1));
+            data[(size_t) i] = x[(size_t) i] * window;
+        }
+
+        juce::dsp::FFT fft (fftOrder);
+        fft.performFrequencyOnlyForwardTransform (data.data());
+
+        double num = 0.0, den = 0.0;
+        for (int k = 1; k < fftSize / 2; ++k)
+        {
+            const double mag = data[(size_t) k];
+            num += mag * (k * sampleRate / fftSize);
+            den += mag;
+        }
+
+        return den > 0.0 ? num / den : 0.0;
+    };
+
+    const auto natural = render (0.0f);
+    const auto matched = render (1.0f);
+
+    const double cNatural = centroid (natural);
+    const double cMatched = centroid (matched);
+
+    // The tone-match path must keep the source brighter than the natural
+    // detune. A clear margin keeps this stable across engines.
+    const bool passed = cMatched > cNatural * 1.15;
+
+    std::cout << "tone-match shift=" << shift
+              << " natural=" << (int) cNatural << " Hz"
+              << " matched=" << (int) cMatched << " Hz"
+              << " " << (passed ? "PASS" : "FAIL") << "\n";
+
+    return passed ? 0 : 2;
+}
+
 int runCompressorTest()
 {
     constexpr double sampleRate = 48000.0;
@@ -1228,7 +1852,7 @@ int runPresetTest()
             parameter->setValueNotifyingHost (normalised);
     };
 
-    setParameter ("chorusMix", 0.75f);
+    setParameter ("chorusMix", 1.0f);
     setParameter ("phaserStages", 1.0f);
     setParameter ("reverbDecay", 0.8f);
 
@@ -1260,7 +1884,7 @@ int runPresetTest()
                       && (! haveIr || restored.getIrLoader()->isSlotLoaded (0));
 
     const bool passed = loaded && filesOk
-                     && std::abs (chorusMix - 75.0f) < 0.01f
+                     && std::abs (chorusMix - 50.0f) < 0.01f
                      && std::abs (phaserStages - 12.0f) < 0.01f
                      && std::abs (reverbDecay - 0.8f) < 0.01f;
 
@@ -1297,6 +1921,7 @@ int runPersistenceTest()
         processor.setPlayConfigDetails (2, 2, 48000, 512);
         processor.prepareToPlay (48000, 512);
         processor.setNamDirectory (namRoot);
+        processor.setPedalDirectory (pedal.getParentDirectory());
         processor.setIrDirectory (ir.getParentDirectory());
         processor.loadNamModel (model);
         processor.loadNamPedalModel (pedal);
@@ -1313,6 +1938,7 @@ int runPersistenceTest()
     const bool irLoaded = restored.getIrLoader()->isSlotLoaded (0);
     const bool ir2Loaded = restored.getIrLoader()->isSlotLoaded (1);
     const bool namRootOk = restored.getNamDirectory() == namRoot;
+    const bool pedalRootOk = restored.getPedalDirectory() == pedal.getParentDirectory();
     const bool irRootOk = restored.getIrDirectory() == ir.getParentDirectory();
 
     std::cout << "restored amp=" << ampLoaded
@@ -1323,11 +1949,12 @@ int runPersistenceTest()
               << " (" << restored.getIrLoader()->getLoadedFileName (0) << ")"
               << " ir1=" << ir2Loaded
               << " (" << restored.getIrLoader()->getLoadedFileName (1) << ")"
-              << " namRoot=" << namRootOk
+              << " ampRoot=" << namRootOk
+              << " pedalRoot=" << pedalRootOk
               << " irRoot=" << irRootOk << "\n";
 
     const bool passed = ampLoaded && pedalLoaded && irLoaded && ir2Loaded
-                     && namRootOk && irRootOk;
+                     && namRootOk && pedalRootOk && irRootOk;
     std::cout << (passed ? "PASS" : "FAIL") << "\n";
     return passed ? 0 : 2;
 }
@@ -1338,6 +1965,12 @@ int main (int argc, char** argv)
 {
     if (argc > 1 && juce::String (argv[1]) == "--reference")
         return runReferenceTest();
+
+    if (argc > 1 && juce::String (argv[1]) == "--reverb-dry")
+        return runReverbDryTest();
+
+    if (argc > 1 && juce::String (argv[1]) == "--delay-feedback")
+        return runDelayFeedbackTest();
 
     if (argc > 1 && juce::String (argv[1]) == "--delay-reset")
         return runDelayResetTest();
@@ -1360,6 +1993,9 @@ int main (int argc, char** argv)
     if (argc > 1 && juce::String (argv[1]) == "--impersonator")
         return runImpersonatorTest();
 
+    if (argc > 1 && juce::String (argv[1]) == "--tone-match")
+        return runToneMatchTest();
+
     if (argc > 1 && juce::String (argv[1]) == "--ir-level")
         return runIrLevelTest();
 
@@ -1381,18 +2017,28 @@ int main (int argc, char** argv)
     if (argc > 1 && juce::String (argv[1]) == "--pitch")
         return runPitchTest();
 
+    if (argc > 1 && juce::String (argv[1]) == "--pitch-low")
+        return runPitchLowNoteTest();
+
+    if (argc > 1 && juce::String (argv[1]) == "--pitch-robust")
+        return runPitchRobustnessTest();
+
     if (argc > 1 && juce::String (argv[1]) == "--dirs")
     {
         namberry::NAMBerryProcessor processor;
-        const juce::File namDir ("/tmp/opencode/namberry-nam-dir");
+        const juce::File namDir ("/tmp/opencode/namberry-amp-dir");
+        const juce::File pedalDir ("/tmp/opencode/namberry-pedal-dir");
         const juce::File irDir ("/tmp/opencode/namberry-ir-dir");
         namDir.createDirectory();
+        pedalDir.createDirectory();
         irDir.createDirectory();
 
         processor.setNamDirectory (namDir);
+        processor.setPedalDirectory (pedalDir);
         processor.setIrDirectory (irDir);
 
-        std::cout << "nam=" << processor.getNamDirectory().getFullPathName() << "\n";
+        std::cout << "amp=" << processor.getNamDirectory().getFullPathName() << "\n";
+        std::cout << "pedal=" << processor.getPedalDirectory().getFullPathName() << "\n";
         std::cout << "ir=" << processor.getIrDirectory().getFullPathName() << "\n";
         return 0;
     }

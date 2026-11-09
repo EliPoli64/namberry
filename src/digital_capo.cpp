@@ -1,5 +1,7 @@
 #include "namberry/DigitalCapo.h"
 
+#include <array>
+
 namespace namberry {
 
 //==============================================================================
@@ -8,18 +10,19 @@ void DigitalCapo::prepare (const juce::dsp::ProcessSpec& spec)
     sampleRate_ = spec.sampleRate;
     maxBlockSize_ = juce::jmax (1, static_cast<int> (spec.maximumBlockSize));
 
-    stretch_.prepare (spec);
+    stretch_.prepare (spec, quality_);
     latencySamples_ = juce::jmax (1, stretch_.getLatencySamples());
 
-    dryDelay_.setMaximumDelayInSamples (latencySamples_ + maxBlockSize_ + 8);
+    dryDelay_.setMaximumDelayInSamples (stretch_.getMaxLatencySamples()
+                                        + maxBlockSize_ + 8);
     dryDelay_.prepare (spec);
     dryDelay_.reset();
 
     const int channels = juce::jmax (1, static_cast<int> (spec.numChannels));
 
-    // Leave headroom for hosts that change their buffer size without calling
-    // prepareToPlay again. Resizing this buffer on the audio thread can cause
-    // dropouts and, with Stretch, very audible corruption.
+    // Preallocate for the largest host block we are told about. The pitch
+    // engine accepts arbitrary sizes, so this buffer is only a wet scratch
+    // area and is never resized from processBlock().
     wet_.setSize (channels, juce::jmax (maxBlockSize_, 8192));
     wet_.clear();
 
@@ -54,14 +57,9 @@ void DigitalCapo::processBlock (juce::AudioBuffer<float>& buffer,
     if (! prepared_ || buffer.getNumChannels() == 0 || buffer.getNumSamples() == 0)
         return;
 
-    const int numChannels = buffer.getNumChannels();
+    const int numChannels = std::min (8, std::min (buffer.getNumChannels(),
+                                                  wet_.getNumChannels()));
     const int numSamples = buffer.getNumSamples();
-
-    if (wet_.getNumChannels() != numChannels || wet_.getNumSamples() < numSamples)
-    {
-        wet_.setSize (numChannels, numSamples, false, false, true);
-        wet_.clear();
-    }
 
     const bool wantActive = ! bypass_ && semitones_ != 0.0f && mix_ > 0.0f;
     const bool wasActive = active_;
@@ -100,32 +98,51 @@ void DigitalCapo::processBlock (juce::AudioBuffer<float>& buffer,
     const bool runStretch = active_
                          && (wantActive || mixSmoothed_.getCurrentValue() > 0.0001f);
 
-    if (runStretch)
-        stretch_.process (buffer, wet_, numSamples);
+    const int chunkSize = wet_.getNumSamples();
 
-    for (int i = 0; i < numSamples; ++i)
+    for (int offset = 0; offset < numSamples; offset += chunkSize)
     {
-        const float mix = mixSmoothed_.getNextValue();
+        const int chunk = juce::jmin (chunkSize, numSamples - offset);
 
-        // The dry path is always mono and panned dead centre.
-        float dryInput = 0.0f;
-
-        for (int ch = 0; ch < numChannels; ++ch)
-            dryInput += buffer.getSample (ch, i);
-
-        dryInput /= static_cast<float> (numChannels);
-
-        dryDelay_.pushSample (0, dryInput);
-        const float delayedDry = dryDelay_.popSample (0, static_cast<float> (latencySamples_));
-
-        // The latency compensation delay is only audible while pitch shifting
-        // is active. Inactive states pass the dry signal immediately.
-        const float dry = active_ ? delayedDry : dryInput;
-
-        for (int ch = 0; ch < numChannels; ++ch)
+        if (runStretch)
         {
-            const float wet = runStretch ? wet_.getSample (ch, i) : 0.0f;
-            buffer.setSample (ch, i, dry + (wet - dry) * mix);
+            std::array<const float*, 8> inputPointers {};
+            std::array<float*, 8> wetPointers {};
+
+            for (int ch = 0; ch < numChannels; ++ch)
+            {
+                inputPointers[static_cast<size_t> (ch)] = buffer.getReadPointer (ch) + offset;
+                wetPointers[static_cast<size_t> (ch)] = wet_.getWritePointer (ch);
+            }
+
+            stretch_.process (inputPointers.data(), wetPointers.data(), chunk);
+        }
+
+        for (int i = 0; i < chunk; ++i)
+        {
+            const int sampleIndex = offset + i;
+            const float mix = mixSmoothed_.getNextValue();
+
+            // The dry path is always mono and panned dead centre.
+            float dryInput = 0.0f;
+
+            for (int ch = 0; ch < numChannels; ++ch)
+                dryInput += buffer.getSample (ch, sampleIndex);
+
+            dryInput /= static_cast<float> (numChannels);
+
+            dryDelay_.pushSample (0, dryInput);
+            const float delayedDry = dryDelay_.popSample (0, static_cast<float> (latencySamples_));
+
+            // The latency compensation delay is only audible while pitch shifting
+            // is active. In inactive states pass the dry signal immediately.
+            const float dry = active_ ? delayedDry : dryInput;
+
+            for (int ch = 0; ch < numChannels; ++ch)
+            {
+                const float wet = runStretch ? wet_.getSample (ch, i) : 0.0f;
+                buffer.setSample (ch, sampleIndex, dry + (wet - dry) * mix);
+            }
         }
     }
 
@@ -136,10 +153,32 @@ void DigitalCapo::processBlock (juce::AudioBuffer<float>& buffer,
     }
 }
 
+void DigitalCapo::setQualityMode (PitchShifter::QualityMode quality)
+{
+    if (quality == quality_)
+        return;
+
+    quality_ = quality;
+    stretch_.setQualityMode (quality);
+    latencySamples_ = juce::jmax (1, stretch_.getLatencySamples());
+
+    if (active_)
+    {
+        stretch_.reset();
+        activationSamplesRemaining_ = latencySamples_;
+    }
+}
+
 //==============================================================================
 void DigitalCapo::setSemitones (float semitones)
 {
     semitones_ = juce::jlimit (-12.0f, 12.0f, semitones);
+}
+
+void DigitalCapo::setTone (float tone)
+{
+    tone_ = juce::jlimit (0.0f, 1.0f, tone);
+    stretch_.setTone (tone_);
 }
 
 void DigitalCapo::setMix (float mix)
@@ -150,6 +189,7 @@ void DigitalCapo::setMix (float mix)
 void DigitalCapo::setParams (const Params& p)
 {
     semitones_ = juce::jlimit (-12.0f, 12.0f, p.semitones);
+    tone_ = juce::jlimit (0.0f, 1.0f, p.tone);
     mix_ = juce::jlimit (0.0f, 1.0f, p.mix);
     bypass_ = p.bypass;
 }

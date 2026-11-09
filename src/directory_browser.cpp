@@ -43,7 +43,7 @@ DirectoryBrowser::DirectoryBrowser()
     rootButton_.onClick = [this] { navigateTo (root_); };
     setRootButton_.onClick = [this] { chooseRoot(); };
     loadButton_.onClick = [this] { loadSelected(); };
-    cancelButton_.onClick = [this] { setVisible (false); };
+    cancelButton_.onClick = [this] { close(); };
 
     setVisible (false);
 }
@@ -139,6 +139,15 @@ void DirectoryBrowser::setRoot (const juce::File& directory)
     refresh();
 }
 
+void DirectoryBrowser::close()
+{
+    // Remember the folder the user actually left in as the next root.
+    if (current_.isDirectory() && onRootChanged_ != nullptr)
+        onRootChanged_ (current_);
+
+    setVisible (false);
+}
+
 void DirectoryBrowser::chooseRoot()
 {
     rootChooser_ = std::make_unique<juce::FileChooser> (
@@ -173,7 +182,7 @@ void DirectoryBrowser::loadSelected()
     if (onFileChosen_ != nullptr)
         onFileChosen_ (entry.file);
 
-    setVisible (false);
+    close();
 }
 
 //==============================================================================
@@ -312,7 +321,7 @@ bool DirectoryBrowser::keyPressed (const juce::KeyPress& key)
 {
     if (key == juce::KeyPress::escapeKey)
     {
-        setVisible (false);
+        close();
         return true;
     }
 
@@ -345,7 +354,7 @@ void DirectoryBrowser::visibilityChanged()
 void DirectoryBrowser::mouseDown (const juce::MouseEvent& event)
 {
     if (! innerBounds_.contains (event.getPosition()))
-        setVisible (false);
+        close();
 }
 
 } // namespace namberry
