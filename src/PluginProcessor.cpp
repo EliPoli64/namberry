@@ -322,19 +322,15 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         "irBypass", "IR Bypass", false));
 
-    // ---- IR Loader (4 slots) ----
-    for (int slot = 0; slot < 4; ++slot)
-    {
-        const auto idx = juce::String(slot);
-        params.push_back(std::make_unique<juce::AudioParameterFloat>(
-            "irMix" + idx, "IR " + idx + " Mix",
-            juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 1.0f));
-        params.push_back(std::make_unique<juce::AudioParameterFloat>(
-            "irPan" + idx, "IR " + idx + " Pan",
-            juce::NormalisableRange<float>(-1.0f, 1.0f, 0.001f), 0.0f));
-        params.push_back(std::make_unique<juce::AudioParameterBool>(
-            "irPhase" + idx, "IR " + idx + " Phase", false));
-    }
+    // ---- IR Loader (2 IRs, one crossfade) ----
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "irBlend", "IR Blend",
+        juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.0f,
+        juce::AudioParameterFloatAttributes()
+            .withStringFromValueFunction ([] (float value, int)
+            {
+                return juce::String (juce::roundToInt (value * 100.0f)) + "%";
+            })));
 
     return { params.begin(), params.end() };
 }
@@ -342,7 +338,9 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
 //==============================================================================
 namespace {
 
-constexpr int kFxStateVersion = 3;
+constexpr int kPostFxStateVersion = 3;
+constexpr int kIrStateVersion = 4;
+constexpr int kFxStateVersion = kIrStateVersion;
 
 juce::ValueTree findParameterState (const juce::ValueTree& state, const juce::String& id)
 {
@@ -440,7 +438,43 @@ void migratePostFxRangeState (juce::ValueTree& state)
 
     addParameterIfMissing (state, "preFxBypass", 0.0f);
     addParameterIfMissing (state, "postFxBypass", 0.0f);
-    state.setProperty ("fxVersion", kFxStateVersion, nullptr);
+    state.setProperty ("fxVersion", kPostFxStateVersion, nullptr);
+}
+
+void migrateIrBlendState (juce::ValueTree& state)
+{
+    // Version 4 replaced the four-slot mixer (per-slot mix/pan/phase) with two
+    // IRs crossfaded by a single blend control.
+    const bool hadIr0 = findParameterState (state, "irMix0").isValid();
+    const float mix0 = parameterValue (state, "irMix0", 1.0f);
+    const float mix1 = parameterValue (state, "irMix1", 1.0f);
+
+    // Remove the legacy four-slot mixer parameters wherever they appear.
+    for (int slot = 0; slot < 4; ++slot)
+    {
+        const auto idx = juce::String (slot);
+
+        for (const auto* prefix : { "irMix", "irPan", "irPhase" })
+        {
+            auto child = findParameterState (state, juce::String (prefix) + idx);
+
+            if (child.isValid())
+                state.removeChild (child, nullptr);
+        }
+    }
+
+    if (! findParameterState (state, "irBlend").isValid())
+    {
+        // Keep the cabinet an old project was actually hearing: if only the
+        // second slot was up, the blend follows it.
+        const float blend = (hadIr0 && mix0 <= 0.001f && mix1 > 0.001f)
+            ? 1.0f
+            : 0.0f;
+
+        addParameterIfMissing (state, "irBlend", blend);
+    }
+
+    state.setProperty ("fxVersion", kIrStateVersion, nullptr);
 }
 
 } // namespace
@@ -683,17 +717,11 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         postAmpEQ_->processBlock(buffer, midiMessages);
     }
 
-    // 9. IR Loader (4 slots)
+    // 9. IR Loader (two IRs, crossfaded by one blend control)
     {
         const bool irBypassed = apvts_.getRawParameterValue("irBypass")->load() > 0.5f;
         irLoader_->setBypass(irBypassed);
-        for (int slot = 0; slot < 4; ++slot)
-        {
-            const auto idx = juce::String(slot);
-            irLoader_->setSlotMix(slot, apvts_.getRawParameterValue("irMix" + idx)->load());
-            irLoader_->setSlotPan(slot, apvts_.getRawParameterValue("irPan" + idx)->load());
-            irLoader_->setSlotPhaseInvert(slot, apvts_.getRawParameterValue("irPhase" + idx)->load() > 0.5f);
-        }
+        irLoader_->setBlend(apvts_.getRawParameterValue("irBlend")->load());
         irLoader_->processBlock(buffer, midiMessages);
     }
 
@@ -807,8 +835,11 @@ void NAMBerryProcessor::setStateInformation (const void* data, int sizeInBytes)
             if (version < 2)
                 migrateFxCamelCaseState (state);
 
-            if (version < kFxStateVersion)
+            if (version < kPostFxStateVersion)
                 migratePostFxRangeState (state);
+
+            if (version < kIrStateVersion)
+                migrateIrBlendState (state);
 
             migrateRoomBypassState (state);
             apvts_.replaceState (state);
@@ -887,7 +918,7 @@ bool NAMBerryProcessor::savePreset (const juce::File& file)
     addFile ("pedal", namPedal_ != nullptr ? namPedal_->getLoadedFile() : juce::File());
 
     if (irLoader_ != nullptr)
-        for (int slot = 0; slot < 4; ++slot)
+        for (int slot = 0; slot < IrLoader::kNumSlots; ++slot)
             addFile (("ir" + juce::String (slot)).toRawUTF8(),
                      irLoader_->getLoadedFile (slot));
 
@@ -935,7 +966,7 @@ bool NAMBerryProcessor::loadPreset (const juce::File& file)
         loadFile ("amp", [this] (const juce::File& f) { return loadNamModel (f); });
         loadFile ("pedal", [this] (const juce::File& f) { return loadNamPedalModel (f); });
 
-        for (int slot = 0; slot < 4; ++slot)
+        for (int slot = 0; slot < IrLoader::kNumSlots; ++slot)
         {
             const auto attribute = "ir" + juce::String (slot);
             loadFile (attribute.toRawUTF8(),
@@ -1013,7 +1044,7 @@ void NAMBerryProcessor::restoreSavedFiles()
 
     if (irLoader_ != nullptr)
     {
-        for (int slot = 0; slot < 4; ++slot)
+        for (int slot = 0; slot < IrLoader::kNumSlots; ++slot)
         {
             const auto path = settings_->getValue ("irSlot" + juce::String (slot) + "Path");
 

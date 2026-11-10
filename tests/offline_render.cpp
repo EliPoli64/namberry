@@ -1493,7 +1493,7 @@ int runIrLevelTest()
     constexpr int blockSize = 512;
     constexpr int blocks = 10;
 
-    auto render = [&] (int loadedSlots)
+    auto render = [&] (int loadedSlots, float blend) -> std::pair<float, float>
     {
         namberry::IrLoader loader;
         juce::dsp::ProcessSpec spec;
@@ -1503,21 +1503,21 @@ int runIrLevelTest()
         loader.prepare (spec);
 
         for (int slot = 0; slot < loadedSlots; ++slot)
-        {
             loader.loadIr (slot, irFile);
-            loader.setSlotMix (slot, 1.0f);
-            loader.setSlotPan (slot, 0.0f);
-            loader.setSlotPhaseInvert (slot, false);
-        }
+
+        loader.setBlend (blend);
 
         // Convolution IR loading is asynchronous by default; prepare again so
         // every slot is guaranteed to be active before measuring the level.
         loader.prepare (spec);
+        loader.setBlend (blend);
 
         juce::AudioBuffer<float> buffer (2, blockSize);
+        juce::AudioBuffer<float> input (2, blockSize);
         juce::MidiBuffer midi;
         double phase = 0.0;
         float rms = 0.0f;
+        float maxDiff = 0.0f;
 
         for (int block = 0; block < blocks; ++block)
         {
@@ -1529,6 +1529,7 @@ int runIrLevelTest()
                 buffer.setSample (1, i, s);
             }
 
+            input.makeCopyOf (buffer);
             loader.processBlock (buffer, midi);
 
             if (block == blocks - 1)
@@ -1536,27 +1537,155 @@ int runIrLevelTest()
                 float sum = 0.0f;
 
                 for (int i = 0; i < blockSize; ++i)
+                {
                     sum += buffer.getSample (0, i) * buffer.getSample (0, i);
+                    maxDiff = juce::jmax (maxDiff,
+                                          std::abs (buffer.getSample (0, i)
+                                                    - input.getSample (0, i)));
+                }
 
                 rms = std::sqrt (sum / static_cast<float> (blockSize));
             }
         }
 
-        return rms;
+        return { rms, maxDiff };
     };
 
-    const float one = render (1);
-    const float two = render (2);
-    const float three = render (3);
-    const float four = render (4);
+    // With nothing loaded the dry signal must pass through untouched.
+    const auto dry = render (0, 0.0f);
+
+    // One IR at unity. Because both slots hold the same IR, every blend
+    // position must still sum to unity: (1 - blend) + blend = 1.
+    const float one = render (1, 0.0f).first;
+    const float atA = render (2, 0.0f).first;
+    const float atB = render (2, 1.0f).first;
+    const float middle = render (2, 0.5f).first;
+    const float quarter = render (2, 0.25f).first;
 
     const float reference = juce::jmax (1.0e-6f, one);
-    const bool passed = std::abs (one - two) / reference < 0.05f
-                     && std::abs (one - three) / reference < 0.05f
-                     && std::abs (one - four) / reference < 0.05f;
+    const bool unity = std::abs (one - atA) / reference < 0.05f
+                    && std::abs (one - atB) / reference < 0.05f
+                    && std::abs (one - middle) / reference < 0.05f
+                    && std::abs (one - quarter) / reference < 0.05f;
 
-    std::cout << "IR level 1=" << one << " 2=" << two
-              << " 3=" << three << " 4=" << four
+    // Nothing loaded: the output must be sample-for-sample the input.
+    const bool passesDry = dry.second < 1.0e-6f;
+
+    const bool passed = unity && passesDry;
+
+    std::cout << "IR level dryDiff=" << dry.second << " 1=" << one
+              << " A=" << atA << " B=" << atB
+              << " mid=" << middle << " quarter=" << quarter
+              << " " << (passed ? "PASS" : "FAIL") << "\n";
+
+    return passed ? 0 : 2;
+}
+
+int runIrStateMigrationTest()
+{
+    // Build the state an old project would carry: no fxVersion, no irBlend and
+    // the legacy four-slot mixer parameters.
+    auto buildOldState = [] (float mix0, float mix1)
+    {
+        namberry::NAMBerryProcessor processor;
+        auto state = processor.getValueTreeState().copyState();
+        state.removeProperty ("fxVersion", nullptr);
+
+        auto addParameter = [&state] (const juce::String& id, float value)
+        {
+            juce::ValueTree parameter ("PARAM");
+            parameter.setProperty ("id", id, nullptr);
+            parameter.setProperty ("value", value, nullptr);
+            state.appendChild (parameter, nullptr);
+        };
+
+        for (int i = 0; i < state.getNumChildren(); ++i)
+        {
+            if (state.getChild (i).getProperty ("id").toString() == "irBlend")
+            {
+                state.removeChild (i, nullptr);
+                break;
+            }
+        }
+
+        addParameter ("irMix0", mix0);
+        addParameter ("irMix1", mix1);
+        addParameter ("irMix2", 1.0f);
+        addParameter ("irMix3", 1.0f);
+        addParameter ("irPan0", 0.5f);
+        addParameter ("irPan3", -0.5f);
+        addParameter ("irPhase2", 1.0f);
+        return state;
+    };
+
+    auto apply = [] (namberry::NAMBerryProcessor& processor,
+                     const juce::ValueTree& state)
+    {
+        std::unique_ptr<juce::XmlElement> xml (state.createXml());
+        juce::MemoryBlock block;
+        juce::AudioProcessor::copyXmlToBinary (*xml, block);
+        processor.setStateInformation (block.getData(), static_cast<int> (block.getSize()));
+    };
+
+    // Old project with only the second cabinet up: the blend follows it.
+    namberry::NAMBerryProcessor onlyB;
+    apply (onlyB, buildOldState (0.0f, 1.0f));
+    const float blendOnlyB = onlyB.getValueTreeState().getRawParameterValue ("irBlend")->load();
+
+    // Old project with both cabinets up: the blend stays on the first one.
+    namberry::NAMBerryProcessor both;
+    apply (both, buildOldState (1.0f, 1.0f));
+    const float blendBoth = both.getValueTreeState().getRawParameterValue ("irBlend")->load();
+
+    // The legacy mixer parameters must be gone from the migrated state.
+    auto hasLegacyParameter = [] (namberry::NAMBerryProcessor& processor)
+    {
+        const auto state = processor.getValueTreeState().copyState();
+
+        for (int i = 0; i < state.getNumChildren(); ++i)
+        {
+            const auto id = state.getChild (i).getProperty ("id").toString();
+
+            if (id.startsWith ("irMix") || id.startsWith ("irPan")
+                || id.startsWith ("irPhase"))
+                return true;
+        }
+
+        return false;
+    };
+
+    const bool migratedBoth = ! hasLegacyParameter (both)
+                           && ! hasLegacyParameter (onlyB);
+
+    // A state that already carries irBlend must keep it untouched.
+    namberry::NAMBerryProcessor current;
+    auto currentState = current.getValueTreeState().copyState();
+
+    {
+        for (int i = 0; i < currentState.getNumChildren(); ++i)
+        {
+            if (currentState.getChild (i).getProperty ("id").toString() == "irBlend")
+            {
+                currentState.getChild (i).setProperty ("value", 0.75f, nullptr);
+                break;
+            }
+        }
+
+        currentState.removeProperty ("fxVersion", nullptr);
+    }
+
+    apply (current, currentState);
+    const float keptBlend = current.getValueTreeState().getRawParameterValue ("irBlend")->load();
+
+    const bool passed = std::abs (blendOnlyB - 1.0f) < 1.0e-4f
+                     && std::abs (blendBoth - 0.0f) < 1.0e-4f
+                     && std::abs (keptBlend - 0.75f) < 1.0e-4f
+                     && migratedBoth;
+
+    std::cout << "ir migration onlyB=" << blendOnlyB
+              << " both=" << blendBoth
+              << " kept=" << keptBlend
+              << " legacyRemoved=" << (migratedBoth ? "yes" : "no")
               << " " << (passed ? "PASS" : "FAIL") << "\n";
 
     return passed ? 0 : 2;
@@ -1998,6 +2127,9 @@ int main (int argc, char** argv)
 
     if (argc > 1 && juce::String (argv[1]) == "--ir-level")
         return runIrLevelTest();
+
+    if (argc > 1 && juce::String (argv[1]) == "--ir-state")
+        return runIrStateMigrationTest();
 
     if (argc > 1 && juce::String (argv[1]) == "--persist")
         return runPersistenceTest();

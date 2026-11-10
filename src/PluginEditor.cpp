@@ -1,6 +1,6 @@
 #include "PluginEditor.h"
-#include "namberry/DirectoryBrowser.h"
 
+#include <algorithm>
 #include <cmath>
 #include <functional>
 #include <utility>
@@ -74,6 +74,20 @@ juce::Array<juce::File> listMatchingFiles (const juce::File& directory,
 
     files.sort();
     return files;
+}
+
+void showLoadFailure (const juce::String& kind, const juce::File& file)
+{
+    juce::AlertWindow::showMessageBoxAsync (
+        juce::MessageBoxIconType::WarningIcon,
+        "Could not load " + kind,
+        "NAMberry could not load: " + file.getFileName());
+}
+
+/// The folder a picker should list: the loaded file's folder, or the fallback.
+juce::File folderOf (const juce::File& current, const juce::File& fallback)
+{
+    return current.existsAsFile() ? current.getParentDirectory() : fallback;
 }
 
 //==============================================================================
@@ -868,8 +882,8 @@ public:
         label_.setColour (juce::Label::textColourId, juce::Colour (0xff3a2f18));
 
         addAndMakeVisible (button_);
-        button_.setButtonText ("BROWSE");
-        button_.setTooltip ("Browse for a NAM amp model");
+        button_.setButtonText ("LOAD");
+        button_.setTooltip ("Choose a NAM amp model from disk");
         button_.onClick = std::move (onClick);
 
         addAndMakeVisible (prevButton_);
@@ -972,53 +986,82 @@ private:
 };
 
 //==============================================================================
-/// A small hardware-style LCD in the amp grille for the current model name.
-class AmpModelDisplay : public juce::Component
+/// Hardware-style filename LCD. Clicking it opens the popup that lists the
+/// files in the folder, so the screen doubles as the file picker.
+class FileScreen : public juce::Component,
+                   public juce::SettableTooltipClient
 {
 public:
-    AmpModelDisplay()
+    FileScreen (juce::String caption, juce::String placeholder)
+        : caption_ (std::move (caption)), placeholder_ (std::move (placeholder))
     {
-        setInterceptsMouseClicks (false, false);
+        setMouseCursor (juce::MouseCursor::PointingHandCursor);
+        setTooltip (caption.isNotEmpty() ? caption + " — click to list the folder"
+                                        : "Click to list the folder");
     }
 
-    void setName (const juce::String& name)
+    void setOnOpenPopup (std::function<void (juce::Component&)> callback)
     {
-        const auto display = name.isNotEmpty() ? name : juce::String ("No model loaded");
+        onOpenPopup_ = std::move (callback);
+    }
 
-        if (display != name_)
+    void setFileName (const juce::String& name)
+    {
+        const auto display = name.isNotEmpty() ? name : placeholder_;
+        const bool hasFile = name.isNotEmpty();
+
+        if (display != text_ || hasFile != hasFile_)
         {
-            name_ = display;
+            text_ = display;
+            hasFile_ = hasFile;
             repaint();
         }
     }
 
+    void mouseDown (const juce::MouseEvent& event) override
+    {
+        if (event.mods.isLeftButtonDown() && onOpenPopup_ != nullptr)
+            onOpenPopup_ (*this);
+    }
+
     void paint (juce::Graphics& g) override
     {
-        auto bounds = getLocalBounds().toFloat().reduced (2.0f);
+        auto bounds = getLocalBounds().toFloat().reduced (1.5f);
 
         g.setColour (juce::Colour (0xff070c0b));
-        g.fillRoundedRectangle (bounds, 6.0f);
+        g.fillRoundedRectangle (bounds, 5.0f);
 
-        g.setColour (juce::Colour (0xff2dd4bf).withAlpha (0.55f));
-        g.drawRoundedRectangle (bounds.reduced (0.5f), 6.0f, 1.2f);
+        g.setColour (juce::Colour (0xff2dd4bf)
+ .withAlpha (hasFile_ ? 0.55f : 0.28f));
+        g.drawRoundedRectangle (bounds.reduced (0.5f), 5.0f, 1.2f);
 
-        g.setColour (juce::Colour (0xff2dd4bf).withAlpha (0.55f));
-        g.setFont (juce::FontOptions (9.0f, juce::Font::bold));
-        g.drawText ("CURRENT AMP",
-                    bounds.reduced (14.0f).removeFromTop (16.0f),
-                    juce::Justification::centredLeft);
+        auto content = bounds.reduced (10.0f, 6.0f);
 
-        g.setColour (juce::Colour (0xffb8fff1));
-        g.setFont (juce::FontOptions (22.0f, juce::Font::bold));
-        const auto textArea = bounds.reduced (14.0f, 8.0f).withTrimmedTop (16.0f).toNearestInt();
-        g.drawFittedText (name_, textArea,
+        if (caption_.isNotEmpty())
+        {
+            g.setColour (juce::Colour (0xff2dd4bf).withAlpha (0.55f));
+            g.setFont (juce::FontOptions (9.0f, juce::Font::bold));
+            g.drawText (caption_, content.toNearestInt().removeFromTop (14),
+                        juce::Justification::centredLeft);
+        }
+
+        g.setColour (hasFile_ ? juce::Colour (0xffb8fff1)
+                              : juce::Colour (0xff3f6b64));
+        g.setFont (juce::FontOptions (
+            juce::jlimit (12.0f, 24.0f, content.getHeight() * 0.60f),
+            juce::Font::bold));
+        g.drawFittedText (text_, content.toNearestInt(),
                           juce::Justification::centred, 1, 0.72f);
     }
 
 private:
-    juce::String name_ { "No model loaded" };
+    juce::String caption_;
+    juce::String placeholder_;
+    juce::String text_;
+    bool hasFile_ = false;
+    std::function<void (juce::Component&)> onOpenPopup_;
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AmpModelDisplay)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FileScreen)
 };
 
 //==============================================================================
@@ -1515,7 +1558,8 @@ private:
 };
 
 //==============================================================================
-/// Drag-and-drop target + file chooser button for a .nam model.
+/// Pedal model picker: an LCD screen that opens the folder popup, a Load
+/// button for the system file chooser, previous/next arrows and drag-and-drop.
 class NamLoadBox : public juce::Component,
                    public juce::FileDragAndDropTarget
 {
@@ -1529,24 +1573,23 @@ public:
           getRootDirectory_ (std::move (getRootDirectory)),
           getCurrentFile_ (std::move (getCurrentFile))
     {
-        addAndMakeVisible (name_);
-        name_.setText ("No model loaded", juce::dontSendNotification);
-        name_.setJustificationType (juce::Justification::centred);
-        name_.setFont (juce::FontOptions (10.5f));
-        name_.setColour (juce::Label::textColourId, juce::Colour (kTextDim));
+        screen_ = std::make_unique<FileScreen> (juce::String(), "No model loaded");
+        screen_->setName ("ModelScreen");
+        addAndMakeVisible (*screen_);
+
+        addAndMakeVisible (loadButton_);
+        loadButton_.setButtonText ("LOAD");
+        loadButton_.setTooltip ("Choose a .nam file from disk");
+        loadButton_.onClick = [this]
+        {
+            if (onLoad_ != nullptr)
+                onLoad_();
+        };
 
         addAndMakeVisible (prevButton_);
         prevButton_.setButtonText ("<");
         prevButton_.setTooltip ("Previous .nam file in this folder");
         prevButton_.onClick = [this] { browse (-1); };
-
-        addAndMakeVisible (loadButton_);
-        loadButton_.setButtonText ("BROWSE .NAM");
-        loadButton_.onClick = [this]
-        {
-            if (onBrowse_ != nullptr)
-                onBrowse_();
-        };
 
         addAndMakeVisible (nextButton_);
         nextButton_.setButtonText (">");
@@ -1554,24 +1597,21 @@ public:
         nextButton_.onClick = [this] { browse (1); };
     }
 
-    void setOnBrowse (std::function<void()> callback)
+    void setOnOpenPopup (std::function<void (juce::Component&)> callback)
     {
-        onBrowse_ = std::move (callback);
+        screen_->setOnOpenPopup (std::move (callback));
+    }
+
+    void setOnLoad (std::function<void()> callback)
+    {
+        onLoad_ = std::move (callback);
     }
 
     bool loadFile (const juce::File& file) { return load (file); }
 
     void setDisplayedFileName (const juce::String& name)
     {
-        const auto display = name.isNotEmpty() ? name : juce::String ("No model loaded");
-
-        if (name_.getText() != display)
-        {
-            name_.setText (display, juce::dontSendNotification);
-            name_.setColour (juce::Label::textColourId,
-                             name.isNotEmpty() ? juce::Colour (kText)
-                                               : juce::Colour (kTextDim));
-        }
+        screen_->setFileName (name);
     }
 
     bool isInterestedInFileDrag (const juce::StringArray& files) override
@@ -1612,22 +1652,24 @@ public:
     {
         auto r = getLocalBounds().reduced (4);
         r.removeFromTop (12);
-        name_.setBounds (r.removeFromTop (16));
-        loadButton_.setBounds (r.removeFromTop (48).reduced (2));
-        r.removeFromTop (2);
 
-        auto arrows = r.removeFromTop (48);
-        prevButton_.setBounds (arrows.removeFromLeft (48));
-        nextButton_.setBounds (arrows.removeFromRight (48));
+        screen_->setBounds (r.removeFromTop (42));
+        r.removeFromTop (4);
+
+        loadButton_.setBounds (r.removeFromTop (34));
+        r.removeFromTop (4);
+
+        auto arrows = r;
+        auto left = arrows.removeFromLeft (arrows.getWidth() / 2);
+        prevButton_.setBounds (left.withTrimmedRight (3));
+        nextButton_.setBounds (arrows.withTrimmedLeft (3));
     }
 
 private:
     void browse (int delta)
     {
-        const auto current = currentFile_.existsAsFile()
-            ? currentFile_
-            : (getCurrentFile_ != nullptr ? getCurrentFile_() : juce::File());
-
+        const auto current = getCurrentFile_ != nullptr ? getCurrentFile_()
+                                                        : juce::File();
         const auto root = getRootDirectory_ != nullptr ? getRootDirectory_()
                                                        : juce::File();
         const auto directory = current.existsAsFile()
@@ -1653,7 +1695,6 @@ private:
     {
         if (loader_ != nullptr && loader_ (file))
         {
-            currentFile_ = file;
             setDisplayedFileName (file.getFileName());
             return true;
         }
@@ -1670,9 +1711,8 @@ private:
     std::function<bool (const juce::File&)> loader_;
     std::function<juce::File()> getRootDirectory_;
     std::function<juce::File()> getCurrentFile_;
-    std::function<void()> onBrowse_;
-    juce::File currentFile_;
-    juce::Label name_;
+    std::function<void()> onLoad_;
+    std::unique_ptr<FileScreen> screen_;
     juce::TextButton prevButton_, loadButton_, nextButton_;
     bool dragOver_ = false;
 
@@ -1680,27 +1720,30 @@ private:
 };
 
 //==============================================================================
-/// One of the four IR slots: load button, mix, pan and phase invert.
-class IrSlotRow : public juce::Component,
+/// One of the two IR pickers: an LCD screen that opens the folder popup, a
+/// Load button for the system file chooser, arrows and drag-and-drop.
+class IrPickRow : public juce::Component,
                   public juce::FileDragAndDropTarget,
                   private juce::Timer
 {
 public:
-    IrSlotRow (APVTS& state, int slot, NAMBerryProcessor& processor)
+    IrPickRow (int slot, NAMBerryProcessor& processor)
         : slot_ (slot), processor_ (processor)
     {
-        startTimer (500);
-        addAndMakeVisible (title_);
-        title_.setText ("IR " + juce::String (slot + 1), juce::dontSendNotification);
-        title_.setFont (juce::FontOptions (12.0f, juce::Font::bold));
-        title_.setColour (juce::Label::textColourId, juce::Colour (kText));
+        startTimer (250);
+
+        screen_ = std::make_unique<FileScreen> (
+            "IR " + juce::String (slot == 0 ? "A" : "B"), "No IR loaded");
+        screen_->setName ("IrScreen" + juce::String (slot));
+        addAndMakeVisible (*screen_);
 
         addAndMakeVisible (loadButton_);
-        loadButton_.setButtonText ("BROWSE");
+        loadButton_.setButtonText ("LOAD");
+        loadButton_.setTooltip ("Choose an IR file from disk");
         loadButton_.onClick = [this]
         {
-            if (onBrowse_ != nullptr)
-                onBrowse_();
+            if (onLoad_ != nullptr)
+                onLoad_();
         };
 
         addAndMakeVisible (prevButton_);
@@ -1713,47 +1756,20 @@ public:
         nextButton_.setTooltip ("Next IR in this folder");
         nextButton_.onClick = [this] { browse (1); };
 
-        addAndMakeVisible (fileName_);
-        fileName_.setText ("empty", juce::dontSendNotification);
-        fileName_.setFont (juce::FontOptions (11.0f));
-        fileName_.setColour (juce::Label::textColourId, juce::Colour (kTextDim));
-
-        if (auto* irLoader = processor.getIrLoader())
-            setDisplayedFileName (irLoader->getLoadedFileName (slot));
-
-        buildKnob (state, "irMix" + juce::String (slot), "Mix", mix_, mixLabel_);
-        buildKnob (state, "irPan" + juce::String (slot), "Pan", pan_, panLabel_);
-
-        addAndMakeVisible (phase_);
-        phase_.setButtonText ({});
-        addAndMakeVisible (phaseLabel_);
-        phaseLabel_.setText ("Phase", juce::dontSendNotification);
-        phaseLabel_.setJustificationType (juce::Justification::centred);
-        phaseLabel_.setFont (juce::FontOptions (12.0f));
-        phaseLabel_.setColour (juce::Label::textColourId, juce::Colour (kText));
-        phaseAttachment_ = std::make_unique<APVTS::ButtonAttachment> (
-            state, "irPhase" + juce::String (slot), phase_);
+        refreshDisplay();
     }
 
-    void setOnBrowse (std::function<void()> callback)
+    void setOnOpenPopup (std::function<void (juce::Component&)> callback)
     {
-        onBrowse_ = std::move (callback);
+        screen_->setOnOpenPopup (std::move (callback));
+    }
+
+    void setOnLoad (std::function<void()> callback)
+    {
+        onLoad_ = std::move (callback);
     }
 
     bool loadFile (const juce::File& file) { return load (file); }
-
-    void setDisplayedFileName (const juce::String& name)
-    {
-        const auto display = name.isNotEmpty() ? name : juce::String ("empty");
-
-        if (fileName_.getText() != display)
-        {
-            fileName_.setText (display, juce::dontSendNotification);
-            fileName_.setColour (juce::Label::textColourId,
-                                 name.isNotEmpty() ? juce::Colour (kText)
-                                                   : juce::Colour (kTextDim));
-        }
-    }
 
     bool isInterestedInFileDrag (const juce::StringArray& files) override
     {
@@ -1788,62 +1804,23 @@ public:
     {
         auto r = getLocalBounds().reduced (6);
 
-        auto top = r.removeFromTop (18);
-        title_.setBounds (top.removeFromLeft (50));
-        fileName_.setBounds (top);
+        auto controls = r.removeFromRight (116);
+        loadButton_.setBounds (controls.removeFromTop (34));
+        controls.removeFromTop (4);
 
-        auto left = r.removeFromLeft (108);
-        auto stack = left.withSizeKeepingCentre (102, 110);
-        loadButton_.setBounds (stack.removeFromTop (56));
-        stack.removeFromTop (6);
+        auto left = controls.removeFromLeft (controls.getWidth() / 2);
+        prevButton_.setBounds (left.withTrimmedRight (3));
+        nextButton_.setBounds (controls.withTrimmedLeft (3));
 
-        auto arrows = stack.removeFromTop (48);
-        prevButton_.setBounds (arrows.removeFromLeft (48));
-        arrows.removeFromLeft (6);
-        nextButton_.setBounds (arrows.removeFromLeft (48));
-
-        auto phaseCol = r.removeFromRight (60);
-        auto toggleArea = phaseCol.withTrimmedBottom (18);
-        phase_.setBounds (toggleArea.withSizeKeepingCentre (48, 48));
-        phaseLabel_.setBounds (phaseCol.removeFromBottom (16));
-
-        auto knobArea = r;
-        const int knobW = knobArea.getWidth() / 2;
-
-        auto mixArea = knobArea.removeFromLeft (knobW);
-        mixLabel_.setBounds (mixArea.removeFromBottom (16));
-        mix_.setBounds (mixArea);
-
-        panLabel_.setBounds (knobArea.removeFromBottom (16));
-        pan_.setBounds (knobArea);
+        screen_->setBounds (r);
     }
 
 private:
-    void buildKnob (APVTS& state, const juce::String& id,
-                    const juce::String& text, juce::Slider& slider,
-                    juce::Label& label)
-    {
-        label.setText (text, juce::dontSendNotification);
-        label.setJustificationType (juce::Justification::centred);
-        label.setFont (juce::FontOptions (12.0f, juce::Font::bold));
-        label.setColour (juce::Label::textColourId, juce::Colour (kText));
-        addAndMakeVisible (label);
-
-        slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-        slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 50, 18);
-        slider.setColour (juce::Slider::textBoxTextColourId, juce::Colour (kTextDim));
-        slider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
-        addAndMakeVisible (slider);
-        mixAttachments_.push_back (std::make_unique<APVTS::SliderAttachment> (state, id, slider));
-    }
-
     void browse (int delta)
     {
         auto* irLoader = processor_.getIrLoader();
-        const auto current = currentFile_.existsAsFile()
-            ? currentFile_
-            : (irLoader != nullptr ? irLoader->getLoadedFile (slot_)
-                                   : juce::File());
+        const auto current = irLoader != nullptr ? irLoader->getLoadedFile (slot_)
+                                                 : juce::File();
 
         const auto directory = current.existsAsFile()
             ? current.getParentDirectory()
@@ -1869,8 +1846,7 @@ private:
     {
         if (processor_.loadIr (slot_, file))
         {
-            currentFile_ = file;
-            setDisplayedFileName (file.getFileName());
+            refreshDisplay();
             return true;
         }
 
@@ -1882,64 +1858,341 @@ private:
         return false;
     }
 
-    void timerCallback() override
+    void refreshDisplay()
     {
         if (auto* irLoader = processor_.getIrLoader())
-            setDisplayedFileName (irLoader->getLoadedFileName (slot_));
+            screen_->setFileName (irLoader->getLoadedFileName (slot_));
     }
+
+    void timerCallback() override { refreshDisplay(); }
 
     int slot_;
     NAMBerryProcessor& processor_;
-    juce::File currentFile_;
-    juce::Label title_, fileName_, mixLabel_, panLabel_, phaseLabel_;
+    std::unique_ptr<FileScreen> screen_;
     juce::TextButton prevButton_, loadButton_, nextButton_;
-    juce::ToggleButton phase_;
-    juce::Slider mix_, pan_;
-    std::vector<std::unique_ptr<APVTS::SliderAttachment>> mixAttachments_;
-    std::unique_ptr<APVTS::ButtonAttachment> phaseAttachment_;
-    std::function<void()> onBrowse_;
+    std::function<void()> onLoad_;
     bool dragOver_ = false;
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (IrSlotRow)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (IrPickRow)
 };
 
 //==============================================================================
-/// 2x2 grid of IR slot cards, giving each slot much more room for its knobs.
-class IrSlotGrid : public juce::Component
+/// Centers a single control in a row while keeping the standard knob footprint.
+class CenteredRow : public juce::Component
 {
 public:
-    IrSlotGrid (APVTS& state, NAMBerryProcessor& processor,
-                std::function<void (IrSlotRow&)> openBrowser)
+    explicit CenteredRow (juce::Component* item) : item_ (item)
     {
-        for (int slot = 0; slot < 4; ++slot)
+        addAndMakeVisible (item_);
+    }
+
+    void resized() override
+    {
+        item_->setBounds (getLocalBounds().withSizeKeepingCentre (
+            ParamControl::cellWidth, ParamControl::cellHeight));
+    }
+
+private:
+    juce::Component* item_;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CenteredRow)
+};
+
+} // namespace
+
+//==============================================================================
+/// Full-editor overlay showing a deployable list of the files in a folder.
+/// Clicking a file loads it; clicking anywhere outside the panel closes it.
+class FilePopup : public juce::Component,
+                  private juce::ListBoxModel
+{
+public:
+    FilePopup ()
+    {
+        setName ("FilePopup");
+        setWantsKeyboardFocus (true);
+
+        addAndMakeVisible (list_);
+        list_.setModel (this);
+        list_.setRowHeight (30);
+        list_.setMultipleSelectionEnabled (false);
+        list_.setColour (juce::ListBox::backgroundColourId,
+                         juce::Colours::transparentBlack);
+        list_.setColour (juce::ListBox::textColourId, juce::Colour (kText));
+        list_.setColour (juce::ListBox::outlineColourId, juce::Colour (kPanelLine));
+        list_.setOutlineThickness (1);
+
+        setVisible (false);
+    }
+
+    void open (juce::Rectangle<int> anchor,
+               const juce::File& directory,
+               juce::StringArray extensions,
+               std::function<void (const juce::File&)> onFileChosen,
+               std::function<void (const juce::File&)> onDirectoryChanged)
+    {
+        anchor_ = anchor;
+        extensions_ = std::move (extensions);
+        onFileChosen_ = std::move (onFileChosen);
+        onDirectoryChanged_ = std::move (onDirectoryChanged);
+
+        current_ = directory.isDirectory()
+            ? directory
+            : juce::File::getSpecialLocation (juce::File::userHomeDirectory);
+
+        setVisible (true);
+        resized();
+        refresh();
+        toFront (true);
+        grabKeyboardFocus();
+    }
+
+    void close()
+    {
+        if (! isVisible())
+            return;
+
+        // Remember the folder the user was browsing as the next starting point.
+        if (current_.isDirectory() && onDirectoryChanged_ != nullptr)
+            onDirectoryChanged_ (current_);
+
+        setVisible (false);
+    }
+
+    bool isOpen() const { return isVisible(); }
+
+    void paint (juce::Graphics& g) override
+    {
+        if (! isVisible())
+            return;
+
+        g.fillAll (juce::Colours::black.withAlpha (0.22f));
+
+        auto panel = panelBounds_.toFloat();
+
+        g.setGradientFill (juce::ColourGradient (
+            juce::Colour (0xff29292f), panel.getX(), panel.getY(),
+            juce::Colour (0xff151517), panel.getX(), panel.getBottom(), false));
+        g.fillRoundedRectangle (panel, 10.0f);
+
+        g.setColour (juce::Colour (kAccent));
+        g.drawRoundedRectangle (panel, 10.0f, 1.5f);
+
+        auto header = panelBounds_.reduced (14, 10);
+        header.removeFromBottom (8);
+
+        g.setColour (juce::Colours::white);
+        g.setFont (juce::FontOptions (15.0f, juce::Font::bold));
+        g.drawFittedText (current_.getFileName().isNotEmpty()
+                              ? current_.getFileName()
+                              : current_.getFullPathName(),
+                          header.removeFromTop (20),
+                          juce::Justification::centredLeft, 1);
+
+        g.setColour (juce::Colour (kTextDim));
+        g.setFont (juce::FontOptions (9.5f));
+        g.drawFittedText (current_.getFullPathName(), header.removeFromTop (14),
+                          juce::Justification::centredLeft, 1);
+
+        if (entries_.empty())
         {
-            auto card = std::make_unique<IrSlotRow> (state, slot, processor);
-            auto* raw = card.get();
-            raw->setOnBrowse ([openBrowser, raw] { openBrowser (*raw); });
-            addAndMakeVisible (*card);
-            cards_.push_back (std::move (card));
+            g.setColour (juce::Colour (kTextDim));
+            g.setFont (juce::FontOptions (12.0f));
+            g.drawFittedText ("No matching files in this folder",
+                              list_.getBounds(), juce::Justification::centred, 2);
         }
     }
 
     void resized() override
     {
-        constexpr int gap = 8;
-        const int cardW = (getWidth() - gap) / 2;
-        const int cardH = (getHeight() - gap) / 2;
+        const int panelW = juce::jlimit (220, 380,
+                                         juce::jmax (220, getWidth() - 32));
+        const int panelH = juce::jlimit (170, 420,
+                                         juce::jmax (170, getHeight() - 32));
 
-        for (int i = 0; i < 4; ++i)
-            cards_[(size_t) i]->setBounds ((i % 2) * (cardW + gap),
-                                           (i / 2) * (cardH + gap),
-                                           cardW, cardH);
+        int x = juce::jlimit (8, juce::jmax (8, getWidth() - panelW - 8),
+                              anchor_.getX());
+        int y = anchor_.getBottom() + 6;
+
+        if (y + panelH > getHeight() - 8)
+            y = anchor_.getY() - panelH - 6;
+
+        y = juce::jlimit (8, juce::jmax (8, getHeight() - panelH - 8), y);
+
+        panelBounds_ = juce::Rectangle<int> (x, y, panelW, panelH);
+
+        auto r = panelBounds_.reduced (14, 10);
+        r.removeFromTop (34);
+        list_.setBounds (r.withTrimmedBottom (8));
+    }
+
+    bool keyPressed (const juce::KeyPress& key) override
+    {
+        if (key == juce::KeyPress::escapeKey)
+        {
+            close();
+            return true;
+        }
+
+        return false;
+    }
+
+    void mouseDown (const juce::MouseEvent& event) override
+    {
+        // Any touch outside the panel dismisses the menu.
+        if (! panelBounds_.contains (event.getPosition()))
+            close();
     }
 
 private:
-    std::vector<std::unique_ptr<IrSlotRow>> cards_;
+    struct Entry
+    {
+        juce::File file;
+        juce::String name;
+        bool isDirectory = false;
+    };
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (IrSlotGrid)
+    int getNumRows() override { return static_cast<int> (entries_.size()); }
+
+    void paintListBoxItem (int row, juce::Graphics& g, int width, int height,
+                           bool selected) override
+    {
+        if (row < 0 || row >= static_cast<int> (entries_.size()))
+            return;
+
+        const auto& entry = entries_[static_cast<size_t> (row)];
+        auto bounds = juce::Rectangle<int> (0, 0, width, height);
+
+        if (selected)
+            g.fillAll (juce::Colour (0xff2d2d35));
+        else if (row % 2 == 1)
+            g.fillAll (juce::Colour (0x12ffffff));
+
+        auto iconArea = bounds.removeFromLeft (30).reduced (7, 6);
+
+        if (entry.isDirectory)
+        {
+            g.setColour (juce::Colour (kAccent));
+            g.fillRoundedRectangle (iconArea.toFloat(), 2.0f);
+            g.setColour (juce::Colour (0xff0e7490));
+            g.fillRect (iconArea.getX(), iconArea.getY() - 2,
+                        iconArea.getWidth() / 2, 3);
+        }
+        else
+        {
+            g.setColour (juce::Colour (kTextDim));
+            g.drawRoundedRectangle (iconArea.toFloat().reduced (2.0f), 2.0f, 1.0f);
+            g.drawLine (iconArea.getX() + 4.0f,
+                        static_cast<float> (iconArea.getCentreY()),
+                        iconArea.getRight() - 4.0f,
+                        static_cast<float> (iconArea.getCentreY()), 1.0f);
+        }
+
+        g.setColour (entry.isDirectory ? juce::Colour (0xfff4f4f5)
+                                       : juce::Colour (kText));
+        g.setFont (juce::FontOptions (13.0f,
+                                      entry.isDirectory ? juce::Font::bold
+                                                        : juce::Font::plain));
+        g.drawFittedText (entry.name, bounds.reduced (6, 0),
+                          juce::Justification::centredLeft, 1);
+    }
+
+    void listBoxItemClicked (int row, const juce::MouseEvent&) override
+    {
+        if (row < 0 || row >= static_cast<int> (entries_.size()))
+            return;
+
+        const auto entry = entries_[static_cast<size_t> (row)];
+
+        if (entry.isDirectory)
+        {
+            navigateTo (entry.file);
+            return;
+        }
+
+        if (onFileChosen_ != nullptr)
+            onFileChosen_ (entry.file);
+
+        close();
+    }
+
+    void navigateTo (const juce::File& directory)
+    {
+        if (! directory.isDirectory() || directory == current_)
+            return;
+
+        current_ = directory;
+        refresh();
+        repaint();
+    }
+
+    void refresh()
+    {
+        entries_.clear();
+
+        if (auto parent = current_.getParentDirectory();
+            parent.isDirectory() && parent != current_)
+        {
+            entries_.push_back ({ parent, "..", true });
+        }
+
+        std::vector<Entry> directories;
+        std::vector<Entry> files;
+
+        for (auto entry : juce::RangedDirectoryIterator (
+                 current_, false, "*", juce::File::findFiles | juce::File::findDirectories))
+        {
+            const auto file = entry.getFile();
+
+            if (file.isHidden())
+                continue;
+
+            if (file.isDirectory())
+                directories.push_back ({ file, file.getFileName(), true });
+            else if (hasMatchingExtension (file))
+                files.push_back ({ file, file.getFileName(), false });
+        }
+
+        auto byName = [] (const Entry& a, const Entry& b)
+        {
+            return a.name.compareIgnoreCase (b.name) < 0;
+        };
+
+        std::sort (directories.begin(), directories.end(), byName);
+        std::sort (files.begin(), files.end(), byName);
+
+        entries_.insert (entries_.end(), directories.begin(), directories.end());
+        entries_.insert (entries_.end(), files.begin(), files.end());
+
+        list_.deselectAllRows();
+        list_.updateContent();
+    }
+
+    bool hasMatchingExtension (const juce::File& file) const
+    {
+        if (extensions_.isEmpty())
+            return true;
+
+        for (const auto& extension : extensions_)
+            if (file.hasFileExtension (extension))
+                return true;
+
+        return false;
+    }
+
+    juce::File current_;
+    juce::Rectangle<int> anchor_;
+    juce::Rectangle<int> panelBounds_;
+    juce::StringArray extensions_;
+    std::vector<Entry> entries_;
+
+    std::function<void (const juce::File&)> onFileChosen_;
+    std::function<void (const juce::File&)> onDirectoryChanged_;
+
+    juce::ListBox list_ { "files", nullptr };
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FilePopup)
 };
-
-} // namespace
 
 //==============================================================================
 NAMBerryEditor::NAMBerryEditor (NAMBerryProcessor& p)
@@ -1973,11 +2226,6 @@ NAMBerryEditor::NAMBerryEditor (NAMBerryProcessor& p)
 
     bottomKnobs_ = std::make_unique<BottomKnobs> (processor_.getValueTreeState());
     addAndMakeVisible (*bottomKnobs_);
-
-    browser_ = std::make_unique<DirectoryBrowser>();
-    browser_->setName ("DirectoryBrowser");
-    addChildComponent (browser_.get());
-    browser_->setVisible (false);
 
     setResizable (true, true);
     setResizeLimits (1000, 600, 4000, 1000);
@@ -2059,7 +2307,56 @@ void NAMBerryEditor::buildUi()
         return raw;
     };
 
-    auto makeNamBox = [this] (const juce::String& caption, bool pedal)
+    // Screen + Load button wiring for one kind of file (amp, pedal, IR).
+    struct PickerCallbacks
+    {
+        std::function<void (juce::Component&)> openPopup;
+        std::function<void()> openLoad;
+    };
+
+    auto makePicker = [this] (const juce::String& chooserTitle,
+                              juce::StringArray extensions,
+                              std::function<juce::File()> getFolder,
+                              std::function<void (const juce::File&)> setFolder,
+                              std::function<bool (const juce::File&)> load) -> PickerCallbacks
+    {
+        auto wildcard = [extensions]
+        {
+            juce::String pattern;
+
+            for (const auto& extension : extensions)
+                pattern << (pattern.isEmpty() ? "" : ";") << "*" << extension;
+
+            return pattern.isNotEmpty() ? pattern : juce::String ("*");
+        };
+
+        PickerCallbacks callbacks;
+
+        callbacks.openPopup = [this, extensions, getFolder, setFolder, load]
+                              (juce::Component& anchor)
+        {
+            openFilePopup (anchor, getFolder(), extensions,
+                           [load] (const juce::File& file) { load (file); },
+                           [setFolder] (const juce::File& directory)
+                           {
+                               setFolder (directory);
+                           });
+        };
+
+        callbacks.openLoad = [this, chooserTitle, wildcard, getFolder, setFolder, load]
+        {
+            openFileChooser (chooserTitle, getFolder(), wildcard(),
+                             [load, setFolder] (const juce::File& file)
+                             {
+                                 if (load (file))
+                                     setFolder (file.getParentDirectory());
+                             });
+        };
+
+        return callbacks;
+    };
+
+    auto makeNamBox = [this, &makePicker] (const juce::String& caption, bool pedal)
     {
         auto box = std::make_unique<NamLoadBox> (
             caption,
@@ -2084,14 +2381,30 @@ void NAMBerryEditor::buildUi()
         if (auto* loaderNow = pedal ? processor_.getNamPedal() : processor_.getNamModel())
             raw->setDisplayedFileName (loaderNow->getLoadedFileName());
 
-        raw->setOnBrowse ([this, raw, pedal]
-        {
-            openBrowser (pedal ? BrowserKind::Pedal : BrowserKind::Nam,
-                         [raw] (const juce::File& file)
+        const auto picker = makePicker (
+            pedal ? "Choose a NAM pedal model" : "Choose a NAM amp model",
+            juce::StringArray { ".nam" },
+            [this, pedal]
             {
-                raw->loadFile (file);
-            });
-        });
+                auto* loader = pedal ? processor_.getNamPedal()
+                                     : processor_.getNamModel();
+                const auto current = loader != nullptr ? loader->getLoadedFile()
+                                                       : juce::File();
+
+                return folderOf (current, pedal ? processor_.getPedalDirectory()
+                                                : processor_.getNamDirectory());
+            },
+            [this, pedal] (const juce::File& directory)
+            {
+                if (pedal)
+                    processor_.setPedalDirectory (directory);
+                else
+                    processor_.setNamDirectory (directory);
+            },
+            [raw] (const juce::File& file) { return raw->loadFile (file); });
+
+        raw->setOnOpenPopup (picker.openPopup);
+        raw->setOnLoad (picker.openLoad);
 
         nameUpdaters_.push_back ([this, raw, pedal]
         {
@@ -2290,19 +2603,37 @@ void NAMBerryEditor::buildUi()
             processor_.loadNamModel (files[index]);
         };
 
-        auto browse = std::make_unique<AmpBrowseButton> (
+        const auto ampPicker = makePicker (
+            "Choose a NAM amp model",
+            juce::StringArray { ".nam" },
             [this]
             {
-                openBrowser (BrowserKind::Nam, [this] (const juce::File& file)
-                {
-                    processor_.loadNamModel (file);
-                });
+                auto* loader = processor_.getNamModel();
+                const auto current = loader != nullptr ? loader->getLoadedFile()
+                                                       : juce::File();
+                return folderOf (current, processor_.getNamDirectory());
             },
+            [this] (const juce::File& directory)
+            {
+                processor_.setNamDirectory (directory);
+            },
+            [this] (const juce::File& file)
+            {
+                if (processor_.loadNamModel (file))
+                    return true;
+
+                showLoadFailure ("model", file);
+                return false;
+            });
+
+        auto browse = std::make_unique<AmpBrowseButton> (
+            [ampPicker] { ampPicker.openLoad(); },
             [stepAmp] { stepAmp (-1); },
             [stepAmp] { stepAmp (1); },
             [this] (const juce::File& file)
             {
-                processor_.loadNamModel (file);
+                if (! processor_.loadNamModel (file))
+                    showLoadFailure ("model", file);
             });
         auto* rawBrowse = browse.get();
         ownedControls_.push_back (std::move (browse));
@@ -2318,17 +2649,21 @@ void NAMBerryEditor::buildUi()
         amp->addItem (addAmpControl ("ampDepth", "Depth"));
         amp->addItem (addAmpControl ("ampOutput", "Output"));
 
-        auto display = std::make_unique<AmpModelDisplay>();
+        // The grille screen is the amp's file picker: tapping it lists the
+        // folder next to the loaded model.
+        auto display = std::make_unique<FileScreen> ("CURRENT AMP", "No model loaded");
+        display->setName ("AmpScreen");
         auto* rawDisplay = display.get();
+        rawDisplay->setOnOpenPopup (ampPicker.openPopup);
         ownedControls_.push_back (std::move (display));
 
         if (auto* loader = processor_.getNamModel())
-            rawDisplay->setName (loader->getLoadedFileName());
+            rawDisplay->setFileName (loader->getLoadedFileName());
 
         nameUpdaters_.push_back ([this, rawDisplay]
         {
             if (auto* loader = processor_.getNamModel())
-                rawDisplay->setName (loader->getLoadedFileName());
+                rawDisplay->setFileName (loader->getLoadedFileName());
         });
 
         amp->addRow (rawDisplay, 92);
@@ -2371,27 +2706,51 @@ void NAMBerryEditor::buildUi()
     }
 
     // 4. IR rack -------------------------------------------------------------
-    if (auto* ir = makePanel (3, "IR CAB", UnitStyle::RackUnit, 1, 820,
+    if (auto* ir = makePanel (3, "IR CAB", UnitStyle::RackUnit, 1, 600,
                               rackBody, rackAccent))
     {
         auto* bypass = makeControl ("irBypass", "Bypass", ParamControl::Kind::Toggle, true);
         bypass->setLabelFontSize (12.5f);
         ir->addRow (bypass, 64);
 
-        auto grid = std::make_unique<IrSlotGrid> (
-            state, processor_,
-            [this] (IrSlotRow& row)
-            {
-                openBrowser (BrowserKind::Ir, [this, &row] (const juce::File& file)
-                {
-                    row.loadFile (file);
-                });
-            });
-        auto* rawGrid = grid.get();
-        ownedControls_.push_back (std::move (grid));
-        ir->addRow (rawGrid, 330);
+        for (int slot = 0; slot < IrLoader::kNumSlots; ++slot)
+        {
+            auto row = std::make_unique<IrPickRow> (slot, processor_);
+            auto* rawRow = row.get();
 
-        ir->setPreferredHeight (450);
+            const auto picker = makePicker (
+                "Choose an IR",
+                juce::StringArray { ".wav", ".aif", ".aiff" },
+                [this, slot]
+                {
+                    auto* irLoader = processor_.getIrLoader();
+                    const auto current = irLoader != nullptr
+                        ? irLoader->getLoadedFile (slot)
+                        : juce::File();
+
+                    return folderOf (current, processor_.getIrDirectory());
+                },
+                [this] (const juce::File& directory)
+                {
+                    processor_.setIrDirectory (directory);
+                },
+                [rawRow] (const juce::File& file) { return rawRow->loadFile (file); });
+
+            rawRow->setOnOpenPopup (picker.openPopup);
+            rawRow->setOnLoad (picker.openLoad);
+
+            ownedControls_.push_back (std::move (row));
+            ir->addRow (rawRow, 84);
+        }
+
+        // The only knob on this rack: a crossfade between IR A and IR B.
+        auto blend = std::make_unique<CenteredRow> (
+            makeControl ("irBlend", "Blend  A - B"));
+        auto* rawBlend = blend.get();
+        ownedControls_.push_back (std::move (blend));
+        ir->addRow (rawBlend, 110);
+
+        ir->setPreferredHeight (400);
     }
 
     // 5. Post FX pedals ------------------------------------------------------
@@ -2544,47 +2903,48 @@ void NAMBerryEditor::layoutContent()
                       contentHeight + 2 * margin);
 }
 
-void NAMBerryEditor::openBrowser (BrowserKind kind,
-                                  std::function<void (const juce::File&)> onFileChosen)
+void NAMBerryEditor::openFilePopup (juce::Component& anchor,
+                                    const juce::File& directory,
+                                    juce::StringArray extensions,
+                                    std::function<void (const juce::File&)> onFileChosen,
+                                    std::function<void (const juce::File&)> onDirectoryChanged)
 {
-    if (browser_ == nullptr)
-        return;
-
-    const bool amp = kind == BrowserKind::Nam;
-    const bool pedal = kind == BrowserKind::Pedal;
-
-    const auto root = amp ? processor_.getNamDirectory()
-                      : pedal ? processor_.getPedalDirectory()
-                              : processor_.getIrDirectory();
-
-    juce::StringArray extensions;
-
-    if (amp || pedal)
-        extensions.add (".nam");
-    else
+    if (filePopup_ == nullptr)
     {
-        extensions.add (".wav");
-        extensions.add (".aif");
-        extensions.add (".aiff");
+        filePopup_ = std::make_unique<FilePopup>();
+        addAndMakeVisible (*filePopup_);
     }
 
-    browser_->open (amp ? "AMP BROWSER" : pedal ? "PEDAL BROWSER" : "IR BROWSER",
-                    extensions,
-                    root,
-                    [this, amp, pedal] (const juce::File& directory)
-                    {
-                        if (amp)
-                            processor_.setNamDirectory (directory);
-                        else if (pedal)
-                            processor_.setPedalDirectory (directory);
-                        else
-                            processor_.setIrDirectory (directory);
-                    },
-                    std::move (onFileChosen));
+    filePopup_->setBounds (getLocalBounds());
 
-    browser_->setBounds (getLocalBounds());
-    browser_->setVisible (true);
-    browser_->toFront (true);
+    if (filePopup_->isOpen())
+        filePopup_->close();
+
+    filePopup_->open (getLocalArea (&anchor, anchor.getLocalBounds()),
+                      directory,
+                      std::move (extensions),
+                      std::move (onFileChosen),
+                      std::move (onDirectoryChanged));
+
+    filePopup_->toFront (true);
+}
+
+void NAMBerryEditor::openFileChooser (const juce::String& title,
+                                      const juce::File& startDirectory,
+                                      const juce::String& wildcard,
+                                      std::function<void (const juce::File&)> onFileChosen)
+{
+    fileChooser_ = std::make_unique<juce::FileChooser> (title, startDirectory, wildcard);
+
+    fileChooser_->launchAsync (juce::FileBrowserComponent::openMode
+                                   | juce::FileBrowserComponent::canSelectFiles,
+                               [onFileChosen] (const juce::FileChooser& chooser)
+                               {
+                                   const auto file = chooser.getResult();
+
+                                   if (file.existsAsFile() && onFileChosen != nullptr)
+                                       onFileChosen (file);
+                               });
 }
 
 void NAMBerryEditor::showPresetMenu()
@@ -2729,8 +3089,8 @@ void NAMBerryEditor::resized()
     viewport_.setBounds (r.reduced (4, 2));
     layoutContent();
 
-    if (browser_ != nullptr)
-        browser_->setBounds (getLocalBounds());
+    if (filePopup_ != nullptr)
+        filePopup_->setBounds (getLocalBounds());
 }
 
 void NAMBerryEditor::paint (juce::Graphics& g)

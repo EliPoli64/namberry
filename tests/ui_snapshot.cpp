@@ -45,6 +45,37 @@ juce::TextButton* findButton (juce::Component& parent, const juce::String& text)
     return nullptr;
 }
 
+void leftClick (juce::Component& target, float x, float y)
+{
+    const auto now = juce::Time::getCurrentTime();
+
+    juce::MouseEvent event (juce::Desktop::getInstance().getMainMouseSource(),
+                            { x, y },
+                            juce::ModifierKeys::leftButtonModifier,
+                            0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                            &target, &target, now, { x, y }, now, 1, false);
+
+    target.mouseDown (event);
+}
+
+// Taps outside the popup panel, which is how the menu is dismissed on screen.
+void dismissPopup (juce::Component& editor)
+{
+    if (auto* popup = findChildByName (editor, "FilePopup"))
+        leftClick (*popup, 1.0f, 1.0f);
+}
+
+bool writePng (const juce::File& file, const juce::Image& image)
+{
+    juce::FileOutputStream stream (file);
+
+    if (! stream.openedOk())
+        return false;
+
+    juce::PNGImageFormat png;
+    return png.writeImageToStream (image, stream);
+}
+
 } // namespace
 
 int main (int argc, char** argv)
@@ -125,56 +156,53 @@ int main (int argc, char** argv)
         std::cout << "Wrote " << file.getFullPathName() << "\n";
     }
 
+    // Amp tab: tapping the grille screen lists the model folder.
     tabBar->setCurrentTabIndex (1, false);
     editor.resized();
 
-    if (auto* browse = findButton (editor, "BROWSE .NAM"))
+    if (auto* screen = findChildByName (editor, "AmpScreen"))
     {
-        if (browse->onClick != nullptr)
-            browse->onClick();
+        leftClick (*screen, 4.0f, 4.0f);
 
-        const auto image = editor.createComponentSnapshot (editor.getLocalBounds(), true, 1.0f);
-        const auto file = outputDir.getChildFile ("browser.png");
-
-        juce::FileOutputStream stream (file);
-        juce::PNGImageFormat png;
-
-        if (stream.openedOk() && png.writeImageToStream (image, stream))
-            std::cout << "Wrote " << file.getFullPathName() << "\n";
+        if (writePng (outputDir.getChildFile ("browser.png"),
+                      editor.createComponentSnapshot (editor.getLocalBounds(), true, 1.0f)))
+            std::cout << "Wrote " << outputDir.getChildFile ("browser.png").getFullPathName() << "\n";
         else
             std::cerr << "FAIL: could not write browser snapshot\n";
+
+        dismissPopup (editor);
     }
     else
     {
-        std::cerr << "FAIL: NAM browse button not found\n";
+        std::cerr << "FAIL: amp model screen not found\n";
     }
 
-    if (auto* browser = findChildByName (editor, "DirectoryBrowser"))
-        browser->setVisible (false);
+    if (findButton (editor, "LOAD") == nullptr)
+        std::cerr << "FAIL: amp LOAD button not found\n";
 
+    // IR tab: tapping the IR screen lists the IR folder.
     tabBar->setCurrentTabIndex (3, false);
     editor.resized();
 
-    if (auto* browse = findButton (editor, "BROWSE"))
+    if (auto* screen = findChildByName (editor, "IrScreen0"))
     {
-        if (browse->onClick != nullptr)
-            browse->onClick();
+        leftClick (*screen, 4.0f, 4.0f);
 
-        const auto image = editor.createComponentSnapshot (editor.getLocalBounds(), true, 1.0f);
-        const auto file = outputDir.getChildFile ("browser-ir.png");
-
-        juce::FileOutputStream stream (file);
-        juce::PNGImageFormat png;
-
-        if (stream.openedOk() && png.writeImageToStream (image, stream))
-            std::cout << "Wrote " << file.getFullPathName() << "\n";
+        if (writePng (outputDir.getChildFile ("browser-ir.png"),
+                      editor.createComponentSnapshot (editor.getLocalBounds(), true, 1.0f)))
+            std::cout << "Wrote " << outputDir.getChildFile ("browser-ir.png").getFullPathName() << "\n";
         else
             std::cerr << "FAIL: could not write IR browser snapshot\n";
+
+        dismissPopup (editor);
     }
     else
     {
-        std::cerr << "FAIL: IR browse button not found\n";
+        std::cerr << "FAIL: IR screen not found\n";
     }
+
+    if (findButton (editor, "LOAD") == nullptr)
+        std::cerr << "FAIL: IR LOAD button not found\n";
 
     std::cout << "PASS\n";
     return 0;

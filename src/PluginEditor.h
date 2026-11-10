@@ -9,7 +9,7 @@
 
 namespace namberry {
 
-class DirectoryBrowser;
+class FilePopup;
 
 class NAMBerryEditor : public juce::AudioProcessorEditor,
                        private juce::Timer,
@@ -23,8 +23,6 @@ public:
     void resized() override;
 
 private:
-    enum class BrowserKind { Nam, Pedal, Ir };
-
     void timerCallback() override;
     void changeListenerCallback (juce::ChangeBroadcaster* source) override;
     void mouseDown (const juce::MouseEvent& event) override;
@@ -32,8 +30,18 @@ private:
     void updateTabVisuals();
     void buildUi();
     void layoutContent();
-    void openBrowser (BrowserKind kind,
-                      std::function<void (const juce::File&)> onFileChosen);
+
+    // File picking: clicking a screen opens the folder popup, the Load button
+    // opens the system file chooser.
+    void openFilePopup (juce::Component& anchor,
+                        const juce::File& directory,
+                        juce::StringArray extensions,
+                        std::function<void (const juce::File&)> onFileChosen,
+                        std::function<void (const juce::File&)> onDirectoryChanged);
+    void openFileChooser (const juce::String& title,
+                          const juce::File& startDirectory,
+                          const juce::String& wildcard,
+                          std::function<void (const juce::File&)> onFileChosen);
 
     void showPresetMenu();
     void savePresetAs();
@@ -51,14 +59,15 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> reducedMotionAttachment_;
     juce::TextButton presetButton_;
     std::unique_ptr<juce::FileChooser> presetChooser_;
+    std::unique_ptr<juce::FileChooser> fileChooser_;
     juce::File lastPresetFile_;
 
     std::vector<std::unique_ptr<juce::Component>> ownedControls_;
     std::vector<std::function<void()>> nameUpdaters_;
     std::function<void()> tunerUpdater_;
-    std::unique_ptr<DirectoryBrowser> browser_;
     std::vector<std::vector<juce::Component*>> tabPanels_;
     std::vector<juce::Component*> allPanels_;
+    std::unique_ptr<FilePopup> filePopup_;
     int currentTabIndex_ = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NAMBerryEditor)

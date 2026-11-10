@@ -6,7 +6,7 @@
 
 ### Key Differentiators from NAM Universal
 - **Expanded FX Chain**: Includes a full suite of studio-quality effects (Compressor, Overdrive, dual multi-band EQs, Chorus/Phaser/Flanger, Room, Delay, Reverb) integrated directly into the plugin, rather than relying on external plugins for basic tone shaping.
-- **4-Slot IR Loader with Advanced Blending**: Goes beyond the dual-IR loader of NAM Universal to allow complex cabinet mixing with individual level, pan, and phase controls.
+- **2-IR Loader with one Blend knob**: the same dual-cabinet idea as NAM Universal's loader, reduced to a single crossfading control instead of per-slot level/pan/phase mixers.
 - **Enhanced Amp Control**: Dedicated controls for Gain, Presence, Depth, and Output Volume, providing a more tactile "amp-like" feel compared to the OOMPH/SPARKLE impedance interaction model.
 - **True Static Linking**: Compiled with static libraries for Linux, Windows, and macOS to ensure maximum compatibility and ease of distribution without runtime dependency issues.
 
@@ -32,7 +32,7 @@
 ```
 Input → Tuner (detect) → Impersonator (pickup shaper) → Pitch (capo/drop) → Noise Gate → Compressor → NAM Pedal/Preamp → Pre-Amp EQ →
 NAM Amp Loader (Gain, Bass, Mid, Treble, Presence, Depth, Output) →
-Post-Amp EQ (Multi-Band) → 4-Slot IR Loader (Blend/Pan/Phase) →
+Post-Amp EQ (Multi-Band) → IR Loader (IR 1 / IR 2 + Blend) →
 Post Effects (Chorus/Flanger/Phaser/Room/Delay/Reverb) → Master (+6 dB fixed trim) → Output
 ```
 
@@ -49,7 +49,7 @@ The editor should be organized into the following five sections, in this exact o
    - Pedal
    - Pre EQ
 2. Amp
-   - Model browse, arrows and a current-model LCD
+   - Tap-to-list model LCD (opens the folder popup), **LOAD** (system file browser) and arrows
    - Gain
    - Bass
    - Mid
@@ -61,7 +61,7 @@ The editor should be organized into the following five sections, in this exact o
    - Multi-band EQ in a 3-3-2 layout
    - High-pass and low-pass filters centered at the bottom
 4. IR
-   - 4 slots with blend, pan, and phase controls
+   - 2 IR rows (filename screen, **LOAD**, arrows), one Blend knob, section bypass
 5. Post Effects
    - Chorus
    - Flanger
@@ -90,7 +90,7 @@ A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and alwa
   - `NamPedalLoader` (second NAM model for pedal/preamp captures — not a waveshaper)
   - `MultiBandEQ` (at least 3 bands: Low, Mid, High, with shelving/peaking options)
   - `NamModelLoader` (wraps `NeuralAmpModelerCore` / `NeuralAudio`)
-  - `IrLoader` (4 slots, each with an `dsp::Convolution` instance)
+  - `IrLoader` (2 slots, each with an `dsp::Convolution` instance, blended by one crossfade)
   - `ModulationLfo` (shared sine/triangle LFO)
   - `ModulatedDelay` (chorus/flanger delay core with feedback)
   - `Phaser` (selectable 4/8/12-stage all-pass cascade)
@@ -116,13 +116,14 @@ A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and alwa
   4. **Critical**: Handle buffer sizes. Ensure the model’s max buffer size is set correctly, or process in chunks if the DAW block size exceeds the model’s capacity.
 - **Controls**: Gain (input drive), Presence (high-frequency emphasis), Depth (low-frequency resonance), Output (level).
 
-### 4.2 IR Loader (4 Slots)
-- **Goal**: Load up to 4 cabinet IRs and blend them seamlessly.
+### 4.2 IR Loader (2 IRs + Blend)
+- **Goal**: Load two cabinet IRs and crossfade between them with one knob.
 - **Implementation**:
-  - Use four instances of `juce::dsp::Convolution`.
-  - Each slot has its own file loader and a mix/level parameter (0–100%).
-  - **Blending**: Normalize each IR on load, then normalize the summed cabinet bus by the number of active slots. One active IR at 100 % is unity; two contribute 50 % each; three 33 % each; four 25 % each, so adding slots does not increase overall level. Mix knobs remain relative amounts within that normalized bus.
-  - **Smooth Switching**: When a user loads a new IR during playback, create the new `Convolution` object on a background thread and swap it in using a `ReferenceCountedObject` or a lock-free swap to prevent audio dropouts.
+  - Use two instances of `juce::dsp::Convolution`.
+  - Each row owns its filename screen (tap → folder popup), **LOAD** button and previous/next arrows. There are no per-slot mix, pan or phase controls; Blend is the only knob on the tab.
+  - **Blending**: the `irBlend` parameter (0–100 %) sets gains `1 − blend` and `blend`, which sum to unity, so the cabinet level stays constant across the range. With only one IR loaded that IR plays at unity; with none loaded the section passes the dry signal through.
+  - **Smooth Switching**: IR loading stays asynchronous — the new IR is prepared off the audio thread and swapped in, so playback never drops out.
+  - **State migration**: projects saved with the legacy four-slot model drop `irMix*`/`irPan*`/`irPhase*` and gain an `irBlend` derived from which slots were up (second slot alone → Blend 100 %, otherwise 0 %).
 
 ### 4.3 Multi-Band EQs (Pre and Post Amp)
 - **Goal**: Provide tone shaping before and after the NAM model.
@@ -206,7 +207,7 @@ A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and alwa
 ### 4.12 Preset save/load
 - **Goal**: Let users store and recall the complete rig without depending on the host’s project state.
 - **Implementation**:
-  - Presets use a `.namberrypreset` XML file with a `PARAMETERS` child containing the full `AudioProcessorValueTreeState` and a `FILES` child containing the current amp, pedal and four IR paths.
+  - Presets use a `.namberrypreset` XML file with a `PARAMETERS` child containing the full `AudioProcessorValueTreeState` and a `FILES` child containing the current amp, pedal and both IR paths.
   - Loading applies the parameter state first, then loads any referenced model/IR files that still exist.
   - Missing files do not prevent the parameter state from being applied; the UI reports that the preset was only partially restored.
   - The default preset folder is `NAMBerry/Presets` in the user application-data directory; the last-used folder is remembered in `NAMBerry.settings`.
@@ -265,7 +266,7 @@ Artifacts: `.vst3` (all), `.component` (AU, macOS), `.aaxplugin` (if SDK availab
 - [ ] Verify real-time performance on all three platforms.
 
 ### Phase 2: IR Loader & EQs (Weeks 3–4)
-- [x] Implement 4-slot `IrLoader` with `dsp::Convolution` and per-slot mix.
+- [x] Implement the 2-slot `IrLoader` with `dsp::Convolution` and a unity-summing Blend crossfade.
 - [x] Build `MultiBandEQ` class and instantiate two (pre and post).
 - [x] Integrate into signal chain.
 
@@ -286,10 +287,10 @@ Artifacts: `.vst3` (all), `.component` (AU, macOS), `.aaxplugin` (if SDK availab
 - [x] Bind all parameters to `AudioProcessorValueTreeState`.
 - [x] Implement preset save/load.
 - [x] Add file drag-and-drop for `.nam` and `.wav` IR files.
-- [x] Add in-app directory browsers with separate amp, pedal and IR roots.
+- [x] Add tap-away filename popups (tap a screen → folder list, touch elsewhere → close) with separate amp, pedal and IR starting folders, plus a **LOAD** button per loader.
 - [x] Add previous/next arrows to the amp, pedal and IR fields to step through matching files in the current directory.
-- [x] Remember the folder left in as the next root for each loader.
-- [x] Persist the selected amp model, pedal model and all four IR slot files.
+- [x] Remember the folder left in as the next starting folder for each loader (no `SET ROOT...` button).
+- [x] Persist the selected amp model, pedal model and both IR slot files.
 - [x] Clear the delay feedback tail when the delay is switched off.
 
 ### Phase 6: Build, Test, & Release (Weeks 11–12)
@@ -307,7 +308,7 @@ Artifacts: `.vst3` (all), `.component` (AU, macOS), `.aaxplugin` (if SDK availab
 | **Eigen alignment issues** in NAM Core causing crashes on certain compilers. | Apply `EIGEN_MAX_ALIGN_BYTES 0` and `EIGEN_DONT_VECTORIZE` macros as recommended, or use `NeuralAudio` which may handle this more gracefully. |
 | **Real-time safety** violations (memory allocation on audio thread). | Pre-allocate all buffers in `prepareToPlay`. Load NAM models and IRs on a background thread and swap them using atomic pointers. |
 | **Static linking complexity** for macOS (AU) and Windows (AAX). | Start with VST3 and Standalone (which have fewer restrictions). Gradually add AU/AAX once the core is stable. |
-| **IR phase cancellation** when blending multiple cabinets. | Normalize IRs to the same length and apply a phase-alignment check (e.g., cross-correlation) during load, or provide a phase invert toggle per slot. |
+| **IR phase cancellation** when blending multiple cabinets. | Only two IRs are ever blended, and the unity-summing crossfade is normalized on load; Blend at either end mutes one row outright, which is the escape hatch when two captures fight each other. |
 
 ---
 

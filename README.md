@@ -1,8 +1,8 @@
 # NAMberry
 
-NAMberry is an all-in-one NAM-based guitar amp and effects plugin. It combines a NAM amp capture, a second NAM pedal/preamp capture, four blendable IR slots, dynamics, dual multi-band EQs, modulation/room/delay/reverb, and a low-latency pitch stage for capo and drop tuning.
+NAMberry is an all-in-one NAM-based guitar amp and effects plugin. It combines a NAM amp capture, a second NAM pedal/preamp capture, two blendable IRs with a single Blend knob, dynamics, dual multi-band EQs, modulation/room/delay/reverb, and a low-latency pitch stage for capo and drop tuning.
 
-The goal is to stop treating an amp capture as a single plugin in a long external chain. Load two captures, four cabinets, and a complete studio-style effects chain in one stereo plugin, with fast model browsing and a hardware-inspired interface.
+The goal is to stop treating an amp capture as a single plugin in a long external chain. Load two captures, two cabinets, and a complete studio-style effects chain in one stereo plugin, with fast model browsing and a hardware-inspired interface.
 
 > The pedal is not a generic waveshaper. It is a **second NAM model**, loaded independently from the amp.
 
@@ -23,12 +23,12 @@ NAM captures sound excellent, but the surrounding workflow is usually fragmented
 NAMberry packages all of that into one plugin:
 
 - **Two NAM captures** — one amp, one pedal/preamp.
-- **Four IR slots** with per-slot mix, pan and phase, plus automatic level normalization across active slots.
+- **Two IRs and one Blend knob** — crossfade between two cabinets, or run just one, with a section bypass.
 - **Impersonator pickup shaper** — a bridge/neck EQ preamp immediately after the tuner.
 - **A complete chain** — tuner, pickup shaper, pitch stage, gate, compressor, pedal, pre-amp EQ, amp, post-amp EQ, IR, post effects, master.
 - **Room ambience** — a short algorithmic room/stereo widener with a single Size macro, separate from the reverb.
-- **Fast model management** — in-app amp/pedal/IR browsers, three separate persisted roots, previous/next arrows, and drag-and-drop.
-- **Persistent choices** — the selected amp, pedal and all four IR files are restored on the next session.
+- **Fast model management** — tap any filename screen to list its folder in place, a **LOAD** button for the system file browser, previous/next arrows, and drag-and-drop.
+- **Persistent choices** — the selected amp, pedal and both IR files are restored on the next session.
 - **Preset save/load** — store the complete parameter state together with the current amp, pedal and IR file paths.
 - **Studio-quality pitch** — a real-time Rubber Band engine handles capo and drop tuning when the optional runtime library is available, with a self-contained Stretch fallback. Low-latency and Quality modes are selectable.
 - **A usable tuner** — a horizontal strobe guide with cents deviation and an editable reference frequency (440, 432, etc.).
@@ -51,7 +51,7 @@ Input
   → Pre-Amp EQ
   → NAM Amp
   → Post-Amp EQ
-  → 4-Slot IR Loader
+  → IR Loader (2 IRs + Blend)
   → Post FX (Chorus / Flanger / Phaser / Room / Delay / Reverb)
   → Master Output
 ```
@@ -63,7 +63,7 @@ Input
 | **Pre FX** | Tuner, Impersonator, Pitch, Gate, Compressor, NAM Pedal, Pre-Amp EQ |
 | **Amp** | NAM amp model, Power, Gain, Bass, Mid, Treble, Presence, Depth, Output |
 | **Post EQ** | 3-band post-amp EQ (3-3-2 layout) with centered high-pass and low-pass filters |
-| **IR** | Four IR slots with mix, pan, phase, browse and arrows |
+| **IR** | Two IR rows (filename screen, **LOAD**, arrows) plus one **Blend** knob and section bypass |
 | **Post FX** | Chorus, Flanger, Phaser, Room (Size), Delay, Reverb |
 
 Each tab shows a hardware icon (pedal, amp, EQ, speaker, sparkle). **Right-click any tab** to bypass that whole section; the icon dims and shows a red LED while bypassed.
@@ -139,13 +139,13 @@ The reference affects the note/cents display only. The UI draws a horizontal str
 
 ### IR loader
 
-`IrLoader` uses four `juce::dsp::Convolution` instances:
+`IrLoader` holds exactly two `juce::dsp::Convolution` instances, blended by one crossfade:
 
-- per-slot mix,
-- per-slot stereo pan,
-- per-slot phase invert,
-- dry/wet blend,
-- bypass.
+- both IRs loaded: gains `1 − Blend` and `Blend`, which always sum to unity,
+- only one IR loaded: that IR plays at unity, whatever the knob says,
+- no IR loaded: the dry signal passes through untouched,
+- section bypass,
+- pre-allocated scratch buffers, so the audio thread never allocates.
 
 ### Dynamics and EQ
 
@@ -170,17 +170,20 @@ Switching the delay off clears its delay line, so old feedback cannot reappear w
 
 ### File management and persistence
 
-- Three separate roots: one for amps, one for pedals, and one for IRs.
-- In-app `DirectoryBrowser` supports folder traversal, `SET ROOT...`, `LOAD`, double-click, and extension filtering.
-- The browser saves the folder you leave it in as the next root for that loader.
+- Three separate starting folders: one for amps, one for pedals, and one for IRs.
+- Tapping a filename screen opens `FilePopup`, a folder list over the editor: `..` first, then folders, then matching files. Tap a folder to enter it, tap a file to load it.
+- Touch anywhere else on the UI — or press `Esc` — to dismiss the popup without loading anything.
+- Each loader also has a **LOAD** button that opens the asynchronous system file browser.
+- When the popup closes, the folder you were browsing becomes that loader's starting folder.
 - Previous/next arrows on the amp, pedal and IR fields step through matching files in the current file’s folder.
 - Drag-and-drop works for `.nam` and IR files.
-- Selected amp, pedal and all four IR paths are persisted and restored automatically.
+- Selected amp, pedal and both IR paths are persisted and restored automatically.
+- The older `DirectoryBrowser` component is still compiled but is no longer reachable from the UI, so there is no `SET ROOT...` button anymore.
 - Settings are stored in a per-user `PropertiesFile`:
   - Linux: `~/.config/NAMBerry/NAMBerry.settings`
   - macOS/Windows: under the standard user application-data directory, in `NAMBerry/NAMBerry.settings`.
 
-DAW project state stores all parameter values through `AudioProcessorValueTreeState`; the model/IR paths and roots live in the per-user settings file. Existing projects with the old 0–1 modulation ranges are migrated once to the new percentage values when loaded.
+DAW project state stores all parameter values through `AudioProcessorValueTreeState`; the model/IR paths and starting folders live in the per-user settings file. Existing projects with the old 0–1 modulation ranges are migrated once to the new percentage values when loaded, and projects from the four-slot IR era are converted to the two-IR Blend model once (the legacy `irMix`/`irPan`/`irPhase` parameters are dropped and `irBlend` is derived from which slots were up).
 
 ### UI
 
@@ -237,7 +240,7 @@ ui-spec.md              # earlier Qt/QML UI exploration (not the shipped UI)
 src/
   PluginProcessor.*     # signal chain, parameters, persistence/restore
   PluginEditor.*        # hardware-style editor
-  directory_browser.*   # in-app NAM / IR browser
+  directory_browser.*   # legacy folder browser (compiled, no longer in the UI)
   nam_model_loader.cpp
   impersonator.cpp      # pickup-shaping preamp
   pitch_shifter.cpp     # Rubber Band / Signalsmith streaming pitch engines
@@ -268,7 +271,7 @@ include/namberry/
 
 tests/
   offline_render.cpp    # DSP / detector / persistence tests
-  ui_snapshot.cpp       # renders the UI tabs and browsers to PNG
+  ui_snapshot.cpp       # renders the UI tabs and the file popups to PNG
 
 scripts/
   build-standalone.sh
@@ -399,32 +402,31 @@ The plugin is stereo in / stereo out. The NAM stages are mono internally and cop
 
 ### Loading models and IRs
 
-The amp has a **BROWSE** button and arrows on the left of the amp faceplate next to Power, plus a hardware-style **CURRENT AMP** display in the grille below the knobs. The pedal and IR loaders use their own browse controls and arrows.
+Every loader offers the same two ways to pick a file: tap its filename screen to list the folder right there, or press **LOAD** to open the system file browser.
 
-- **NAM amp**: Amp tab → **AMP MODEL / BROWSE** next to Power; the loaded name appears in the **CURRENT AMP** display.
-- **NAM pedal**: Pre FX → **PEDAL** → **BROWSE .NAM**.
-- **IR slots**: IR tab → **BROWSE** on the required slot.
+- **NAM amp**: Amp tab → tap the **CURRENT AMP** display in the grille, or **LOAD** beside Power.
+- **NAM pedal**: Pre FX → **PEDAL** → tap the pedal's filename screen, or **LOAD**.
+- **IR rows**: IR tab → tap the row's filename screen, or **LOAD**.
 
-The browser:
+The popup:
 
-1. Opens at the saved root for that loader.
-2. Shows folders first, then matching files.
-3. Double-click a folder to enter; `UP` goes to the parent; `ROOT` returns to the root.
-4. `SET ROOT...` chooses and persists a new root folder.
-5. Select a file and press `LOAD`, or double-click it.
-6. When the browser closes, the folder you left it in becomes that loader’s root.
+1. Opens at the folder of the loaded file, or at that loader's starting folder when nothing is loaded.
+2. Shows `..` first, then folders, then matching files.
+3. Tap a folder to enter it; tap a file to load it.
+4. Touch anywhere else on the UI — or press `Esc` — to dismiss it without loading.
+5. When it closes, the folder you were browsing becomes that loader's starting folder.
 
-The roots are completely separate:
+The three starting folders are completely separate:
 
-- Amp root for amp models.
-- Pedal root for pedal/preamp models.
-- IR root for all four IR slots.
+- Amp folder for amp models.
+- Pedal folder for pedal/preamp models.
+- IR folder for both IR rows.
 
-**Previous/next arrows** step through the matching files in the currently loaded file’s folder. The selection wraps at the ends. The amp, pedal and each IR slot remember their own selected path.
+**Previous/next arrows** step through the matching files in the currently loaded file’s folder. The selection wraps at the ends. The amp, pedal and each IR row remember their own selected path.
 
 You can also drag `.nam` and IR files directly onto the corresponding loader/field.
 
-The plugin restores the last selected amp, pedal and all four slots when it next starts, provided the files still exist.
+The plugin restores the last selected amp, pedal and both IRs when it next starts, provided the files still exist.
 
 ### Tuner
 
@@ -494,15 +496,15 @@ Both Pre-EQ and Post-EQ use three bands: low shelf, mid peak, high shelf with fr
 
 ### IR
 
-Four independent slots, each with:
+Two IR rows plus a single **Blend** knob:
 
-- loaded IR filename,
-- **BROWSE** and previous/next arrows,
-- mix,
-- pan,
-- phase invert.
+- each row shows its loaded filename, with a tap-to-list filename screen, **LOAD** and previous/next arrows,
+- **Blend** crossfades between them: 0 % is IR 1, 100 % is IR 2, and it is the only knob on the tab,
+- with only one IR loaded that IR plays at unity regardless of the knob,
+- with nothing loaded the section passes the dry signal through,
+- the IR section keeps its own bypass.
 
-The slots are summed with automatic level compensation. One active IR at 100 % is unity gain; two active IRs contribute 50 % each; three contribute 33 % each; four contribute 25 % each. This keeps the cabinet level consistent as slots are enabled. The default IR mix is 100 % wet; the IR section has its own bypass.
+The two IRs are gained so they always sum to unity, so the cabinet level stays constant across the whole Blend range.
 
 ### Post FX
 
@@ -524,7 +526,7 @@ The header toggle disables the panel hover-glow animation for users who prefer r
 
 Use the **PRESET** button in the header:
 
-- **Save Preset...** writes a `.namberrypreset` file containing every parameter value plus the current amp, pedal and four IR paths.
+- **Save Preset...** writes a `.namberrypreset` file containing every parameter value plus the current amp, pedal and both IR paths.
 - **Load Preset...** restores the parameters and loads any referenced model/IR files that still exist.
 - **Open Preset Folder** opens the default preset directory.
 
@@ -534,12 +536,12 @@ The default preset folder is `NAMBerry/Presets` under the user application-data 
 
 - DAW projects save all parameter values with the plugin.
 - The per-user settings file saves:
-  - amp root,
-  - pedal root,
-  - IR root,
+  - amp folder,
+  - pedal folder,
+  - IR folder,
   - last amp model path,
   - last pedal model path,
-  - last IR path for each of the four slots,
+  - last IR path for each of the two slots,
   - last preset directory.
 
 If a saved file has moved, the loader shows no model/empty until it is reloaded; the path remains in the settings for when it returns.
@@ -575,6 +577,7 @@ cmake --build build --target NAMBerryOfflineTest NAMBerryUiSnapshot
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --impersonator
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --tone-match
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --ir-level
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --ir-state
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --reference
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --persist
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --dirs
@@ -605,7 +608,8 @@ What they cover:
 - `--compressor`: verifies gain reduction, automatic makeup gain and bypass.
 - `--impersonator`: verifies both pickup-direction EQ curves, manual Level and bypass.
 - `--tone-match`: verifies Tone Match keeps the source brighter than a natural detune.
-- `--ir-level`: verifies equal output level with 1, 2, 3 and 4 loaded IRs at 100 %.
+- `--ir-level`: verifies unity level across the whole Blend range (0, 0.25, 0.5, 1) and untouched dry passthrough with no IR loaded.
+- `--ir-state`: verifies migration of legacy four-slot IR parameters to `irBlend`.
 - `--reference`: verifies 432/440 Hz reference behaviour.
 - `--persist`: restores selected amp, pedal and IR paths; expects local sample files and skips if they are missing.
 - `--dirs`: sets the amp, pedal and IR root directories.

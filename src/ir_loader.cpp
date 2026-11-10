@@ -6,9 +6,6 @@ namespace namberry {
 
 IrLoader::IrLoader()
 {
-    mix_.fill (0.0f);
-    pan_.fill (0.0f);
-    phaseInvert_.fill (false);
     loaded_.fill (false);
 }
 
@@ -16,6 +13,7 @@ void IrLoader::prepare (const juce::dsp::ProcessSpec& spec)
 {
     sampleRate_ = spec.sampleRate;
     maxBlockSize_ = static_cast<int>(spec.maximumBlockSize);
+    numChannels_ = static_cast<int>(spec.numChannels);
 
     for (int s = 0; s < kNumSlots; ++s)
     {
@@ -25,15 +23,21 @@ void IrLoader::prepare (const juce::dsp::ProcessSpec& spec)
         convSpec.numChannels = spec.numChannels;
         convolutions_[static_cast<size_t>(s)].prepare (convSpec);
 
-        wet_[s].setSize (static_cast<int>(spec.numChannels), maxBlockSize_);
-        wet_[s].clear();
+        wet_[static_cast<size_t>(s)].setSize (numChannels_, maxBlockSize_);
+        wet_[static_cast<size_t>(s)].clear();
     }
+
+    dry_.setSize (numChannels_, maxBlockSize_);
+    dry_.clear();
 }
 
 void IrLoader::reset()
 {
     for (auto& c : convolutions_)
         c.reset();
+
+    dry_.clear();
+
     for (auto& w : wet_)
         w.clear();
 }
@@ -45,7 +49,7 @@ bool IrLoader::loadIr (int slot, const juce::File& irFile)
 
     auto& conv = convolutions_[static_cast<size_t>(slot)];
 
-    // Stereo::no keeps things predictable for the 4-slot summing mixer.
+    // Stereo::no keeps the two-slot crossfade predictable.
     conv.loadImpulseResponse (irFile,
                               juce::dsp::Convolution::Stereo::no,
                               juce::dsp::Convolution::Trim::yes,
@@ -54,8 +58,12 @@ bool IrLoader::loadIr (int slot, const juce::File& irFile)
 
     loaded_[static_cast<size_t>(slot)] = true;
     irFiles_[static_cast<size_t>(slot)] = irFile;
-    mix_[static_cast<size_t>(slot)] = 1.0f;
     return true;
+}
+
+void IrLoader::setBlend (float blend)
+{
+    blend_ = juce::jlimit (0.0f, 1.0f, blend);
 }
 
 void IrLoader::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& /*midi*/)
@@ -68,103 +76,70 @@ void IrLoader::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&
     if (numChannels == 0 || numSamples == 0)
         return;
 
-    // If no slot is loaded/mixed in, pass the dry signal through unchanged.
-    // (Previously the buffer was always cleared, which muted the whole chain
-    // until an IR was loaded.)
-    bool anyActive = false;
-    int activeSlots = 0;
-    float maxMix = 0.0f;
-    for (int s = 0; s < kNumSlots; ++s)
-    {
-        const float m = mix_[static_cast<size_t>(s)];
-        if (loaded_[static_cast<size_t>(s)] && m > 0.0f)
-        {
-            anyActive = true;
-            ++activeSlots;
-            maxMix = juce::jmax (maxMix, m);
-        }
-    }
+    const bool loadedA = loaded_[0];
+    const bool loadedB = loaded_[1];
 
-    if (! anyActive)
+    // With no IR loaded the dry signal passes through unchanged.
+    if (! loadedA && ! loadedB)
         return;
 
-    // Keep the summed cabinet level consistent as more IRs are enabled. One
-    // active IR at 100 % is unity; two active IRs contribute 50 % each; four
-    // contribute 25 % each. This prevents the mix from getting louder simply
-    // because more cabinets were loaded.
-    const float slotNormalisation = 1.0f / static_cast<float> (activeSlots);
+    // Make sure the scratch buffers fit this block. Hosts may hand us more
+    // samples than the prepared maximum after a block-size change.
+    if (numSamples > dry_.getNumSamples() || numChannels != dry_.getNumChannels())
+    {
+        const int size = juce::jmax (numSamples, maxBlockSize_);
+        dry_.setSize (numChannels, size);
 
-    // Keep a dry copy because we rebuild the output from the slot mix.
-    juce::AudioBuffer<float> dry (numChannels, numSamples);
-    dry.makeCopyOf (buffer);
+        for (auto& w : wet_)
+            w.setSize (numChannels, size);
+    }
+
+    // Crossfade gains: both IRs loaded means (1 - blend) + blend = 1, so the
+    // cabinet level never changes with the blend position. A single loaded IR
+    // always plays at unity regardless of where the blend sits.
+    float gains[kNumSlots] {};
+    if (loadedA && loadedB)
+    {
+        gains[0] = 1.0f - blend_;
+        gains[1] = blend_;
+    }
+    else
+    {
+        gains[0] = loadedA ? 1.0f : 0.0f;
+        gains[1] = loadedB ? 1.0f : 0.0f;
+    }
+
+    // Keep a dry copy because the output is rebuilt from the IR bus.
+    for (int ch = 0; ch < numChannels; ++ch)
+        dry_.copyFrom (ch, 0, buffer, ch, 0, numSamples);
 
     buffer.clear();
 
     for (int s = 0; s < kNumSlots; ++s)
     {
-        const float mix = mix_[static_cast<size_t>(s)];
-        if (!loaded_[static_cast<size_t>(s)] || mix <= 0.0f)
+        const float gain = gains[s];
+        if (! loaded_[static_cast<size_t>(s)] || gain <= 0.0f)
             continue;
 
-        auto& wet = wet_[s];
-        if (wet.getNumChannels() != numChannels || wet.getNumSamples() < numSamples)
-        {
-            wet.setSize (numChannels, numSamples);
-        }
-        wet.makeCopyOf (dry);
+        auto& wet = wet_[static_cast<size_t>(s)];
 
-        juce::dsp::AudioBlock<float> block (wet);
+        for (int ch = 0; ch < numChannels; ++ch)
+            wet.copyFrom (ch, 0, dry_, ch, 0, numSamples);
+
+        // Build the block from exactly numSamples: the scratch buffers are
+        // sized for the prepared maximum, and feeding the tail to the
+        // convolution would advance its internal state.
+        juce::dsp::AudioBlock<float> block (wet.getArrayOfWritePointers(),
+                                            static_cast<size_t>(numChannels),
+                                            static_cast<size_t>(numSamples));
         juce::dsp::ProcessContextReplacing<float> ctx (block);
         convolutions_[static_cast<size_t>(s)].process (ctx);
 
-        // Simple stereo balance pan.
-        const float pan = pan_[static_cast<size_t>(s)];
-        const float leftGain  = juce::jlimit (0.0f, 1.0f, 0.5f - 0.5f * pan);
-        const float rightGain = juce::jlimit (0.0f, 1.0f, 0.5f + 0.5f * pan);
-        const float phase = phaseInvert_[static_cast<size_t>(s)] ? -1.0f : 1.0f;
-
         for (int ch = 0; ch < numChannels; ++ch)
-        {
-            const float chGain = (numChannels == 1) ? 1.0f
-                                : ((ch == 0) ? leftGain : rightGain);
-            buffer.addFrom (ch, 0, wet.getReadPointer (ch), numSamples,
-                            phase * mix * slotNormalisation * chGain);
-        }
-    }
-
-    // Blend the dry signal back in: full dry at mix 0, full wet at mix 1.
-    const float dryGain = juce::jlimit (0.0f, 1.0f, 1.0f - maxMix);
-    if (dryGain > 0.0f)
-    {
-        for (int ch = 0; ch < numChannels; ++ch)
-            buffer.addFrom (ch, 0, dry.getReadPointer (ch), numSamples, dryGain);
+            buffer.addFrom (ch, 0, wet.getReadPointer (ch), numSamples, gain);
     }
 }
 
-void IrLoader::setSlotMix (int slot, float mix)
-{
-    if (slot >= 0 && slot < kNumSlots) mix_[static_cast<size_t>(slot)] = juce::jlimit (0.0f, 1.0f, mix);
-}
-void IrLoader::setSlotPan (int slot, float pan)
-{
-    if (slot >= 0 && slot < kNumSlots) pan_[static_cast<size_t>(slot)] = juce::jlimit (-1.0f, 1.0f, pan);
-}
-void IrLoader::setSlotPhaseInvert (int slot, bool invert)
-{
-    if (slot >= 0 && slot < kNumSlots) phaseInvert_[static_cast<size_t>(slot)] = invert;
-}
-float IrLoader::getSlotMix (int slot) const
-{
-    return (slot >= 0 && slot < kNumSlots) ? mix_[static_cast<size_t>(slot)] : 0.0f;
-}
-float IrLoader::getSlotPan (int slot) const
-{
-    return (slot >= 0 && slot < kNumSlots) ? pan_[static_cast<size_t>(slot)] : 0.0f;
-}
-bool IrLoader::getSlotPhaseInvert (int slot) const
-{
-    return (slot >= 0 && slot < kNumSlots) ? phaseInvert_[static_cast<size_t>(slot)] : false;
-}
 bool IrLoader::isSlotLoaded (int slot) const
 {
     return (slot >= 0 && slot < kNumSlots) && loaded_[static_cast<size_t>(slot)];
