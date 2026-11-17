@@ -30,7 +30,7 @@
 ### 3.1 Signal Flow (Stereo Path)
 
 ```
-Input → Tuner (detect) → Impersonator (pickup shaper) → Pitch (capo/drop) → Noise Gate → Compressor → NAM Pedal/Preamp → Pre-Amp EQ →
+Input → Tuner (detect) → Impersonator (pickup shaper) → Pitch (capo/drop) → Noise Gate → Acoustic Sim → Compressor → NAM Pedal/Preamp → Pre-Amp EQ →
 NAM Amp Loader (Gain, Bass, Mid, Treble, Presence, Depth, Output) →
 Post-Amp EQ (Multi-Band) → IR Loader (IR 1 / IR 2 + Blend) →
 Post Effects (Chorus/Flanger/Phaser/Room/Delay/Reverb) → Master (+6 dB fixed trim) → Output
@@ -40,14 +40,14 @@ Post Effects (Chorus/Flanger/Phaser/Room/Delay/Reverb) → Master (+6 dB fixed t
 
 The editor should be organized into the following five sections, in this exact order:
 
-1. Pre Effects
-   - Tuner (detect; wide horizontal panel above Impersonator and Pitch)
+1. Pre Effects (the tuner stays in the editor header on every tab)
    - Impersonator (pickup shaper)
    - Pitch (capo/drop)
    - Gate
+   - Acoustic Sim
    - Compressor
    - Pedal
-   - Pre EQ
+   - Pre EQ (3 bands plus a Volume trim)
 2. Amp
    - Tap-to-list model LCD (opens the folder popup), **LOAD** (system file browser) and arrows
    - Gain
@@ -188,7 +188,7 @@ A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and alwa
   - **Reference frequency**: 400–480 Hz, default 440 Hz; note/cents calculations use this reference.
   - Detection only: the drop-tune shift is performed by the shared Pitch stage; the tuner has no audio path, offset, or bypass.
   - Runs before the pitch stage so it analyses the clean input.
-- **Controls**: Horizontal tuning guide (note + cents), reference frequency field (Hz). The tuner panel sits above the Impersonator and Pitch pedals in the Pre FX tab.
+- **Controls**: Horizontal tuning guide (note + cents), reference frequency field (Hz). The tuner has no panel in the tabs; it stays in the editor header on every tab.
 
 ### 4.11 Pitch stage (Digital Capo + Drop Tune)
 - **Goal**: Transpose the guitar by a selected number of semitones, covering both capo (up) and drop-tuning (down) use.
@@ -224,6 +224,17 @@ A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and alwa
   - The pedal starts bypassed; the bypass footswitch resets the filter state.
   - The effect is an EQ approximation, not a physical pickup/phase model.
 - **Controls**: B → N / N → B switch, Level, bypass footswitch.
+
+### 4.14 Acoustic Simulator
+- **Goal**: Emulate a Boss-style acoustic simulator (AC-2/AC-3): turn a magnetic-pickup electric guitar signal into an acoustic-guitar character.
+- **Placement**: Immediately after the gate and before the compressor, so the sim shapes the raw pickup before dynamics.
+- **Implementation**: Modal filter bank with four fixed IIR mode curves (Standard, Jumbo, Enhanced, Piezo) crossfaded with a smoothed weight vector, followed by three parallel sections whose mix gains are smoothed per sample so continuous automation stays click-free:
+  - **Body**: peaking filters at 95 Hz (Q 2.0, +5 dB), 205 Hz (Q 1.8, +4.5 dB), 430 Hz (Q 1.6, +3.5 dB) plus a −2.5 dB dip at 850 Hz for the electric-honk removal; the Body knob crossfades toward this curve.
+  - **Top**: +6 dB high shelf at 4.5 kHz plus a +2.5 dB peak at 8 kHz; the Top knob crossfades toward it.
+  - **Piezo**: +6 dB peak at 2.8 kHz (Q 1.4) plus a +3 dB high shelf at 4 kHz, with a mild `tanh` soft clipper on the 2–5 kHz band only (drive 1.5, unity-normalised) to mimic piezo-preamp harshness on hard strums; the Piezo knob crossfades toward it.
+  - A fixed 72 Hz high-pass conditions the input; Level is a manual ±12 dB trim with no automatic makeup.
+- **Auto-off of distortion/EQ/IR**: Engaging the pedal force-bypasses the NAM Pedal, NAM Amp, Pre-EQ, Post-EQ and IR Loader by flipping their bypass parameters (so the UI reflects it), and disengaging restores each stage the sim switched off — unless the user changed it while the sim was on. A loaded preset is treated as ground truth.
+- **Controls**: Mode (Standard/Jumbo/Enhanced/Piezo), Top, Body, Piezo, Level, bypass footswitch. The pedal starts bypassed.
 
 ---
 

@@ -25,7 +25,8 @@ NAMberry packages all of that into one plugin:
 - **Two NAM captures** — one amp, one pedal/preamp.
 - **Two IRs and one Blend knob** — crossfade between two cabinets, or run just one, with a section bypass.
 - **Impersonator pickup shaper** — a bridge/neck EQ preamp immediately after the tuner.
-- **A complete chain** — tuner, pickup shaper, pitch stage, gate, compressor, pedal, pre-amp EQ, amp, post-amp EQ, IR, post effects, master.
+- **Acoustic simulator** — a Boss-style AC-2/AC-3 mode pedal before the compressor that turns a magnetic pickup into an acoustic character; engaging it switches the distortion, EQ and IR stages off automatically.
+- **A complete chain** — tuner, pickup shaper, pitch stage, gate, acoustic sim, compressor, pedal, pre-amp EQ, amp, post-amp EQ, IR, post effects, master.
 - **Room ambience** — a short algorithmic room/stereo widener with a single Size macro, separate from the reverb.
 - **Fast model management** — tap any filename screen to list its folder in place, a **LOAD** button for the system file browser, previous/next arrows, and drag-and-drop.
 - **Persistent choices** — the selected amp, pedal and both IR files are restored on the next session.
@@ -46,6 +47,7 @@ Input
   → Impersonator (pickup shaper)
   → Pitch (capo / drop tune)
   → Noise Gate
+  → Acoustic Sim
   → Compressor
   → NAM Pedal / Preamp
   → Pre-Amp EQ
@@ -60,7 +62,7 @@ Input
 
 | Tab | Contents |
 |---|---|
-| **Pre FX** | Tuner, Impersonator, Pitch, Gate, Compressor, NAM Pedal, Pre-Amp EQ |
+| **Pre FX** | Impersonator, Pitch, Gate, Acoustic Sim, Compressor, NAM Pedal, Pre-Amp EQ (the tuner stays in the editor header) |
 | **Amp** | NAM amp model, Power, Gain, Bass, Mid, Treble, Presence, Depth, Output |
 | **Post EQ** | 3-band post-amp EQ (3-3-2 layout) with centered high-pass and low-pass filters |
 | **IR** | Two IR rows (filename screen, **LOAD**, arrows) plus one **Blend** knob and section bypass |
@@ -135,7 +137,7 @@ While pitch shifting is active, the dry path is delayed by the engine latency an
 - note name and cents deviation,
 - editable **reference frequency** (400–480 Hz, default 440 Hz).
 
-The reference affects the note/cents display only. The UI draws a horizontal strobe guide: moving bands and a cents needle turn green near zero, amber within ±10 cents, and red beyond that. The wide tuner panel sits above the Impersonator and Pitch pedals to save horizontal space.
+The reference affects the note/cents display only. The tuner lives permanently in the editor header, so it is visible on every tab: a horizontal strobe guide with moving bands and a cents needle that turn green near zero, amber within ±10 cents, and red beyond that.
 
 ### IR loader
 
@@ -152,6 +154,29 @@ The reference affects the note/cents display only. The UI draws a horizontal str
 - `NoiseGate` — linked peak detector, attack/release, bypass.
 - `Compressor` — attack, release, threshold, ratio, makeup, optional Tight low-band sidechain, and automatic makeup gain so compression remains audible without a level drop.
 - `MultiBandEQ` — low shelf, mid peak, high shelf; used for Pre-EQ and Post-EQ.
+
+### Acoustic simulator
+
+`AcousticSim` sits immediately before the compressor, after the gate, so it shapes the raw pickup before dynamics. It models a Boss-style acoustic simulator: four fixed modal-EQ curves approximate the body of different acoustic guitars, and Top/Body/Piezo knobs crossfade additive parallel sections, so continuous automation stays click-free.
+
+A fixed 72 Hz high-pass conditions the input, then the four mode chains run in parallel with a smoothed weight vector (a mode switch is a 20 ms crossfade, never a hard switch). Each knob crossfades toward its own EQ curve — at 0 the section contributes exactly nothing:
+
+- **Body** — peaking filters at 95 Hz (Q 2.0, +5 dB), 205 Hz (Q 1.8, +4.5 dB), 430 Hz (Q 1.6, +3.5 dB) plus a −2.5 dB dip at 850 Hz for the electric-honk removal.
+- **Top** — +6 dB high shelf at 4.5 kHz plus a +2.5 dB peak at 8 kHz.
+- **Piezo** — +6 dB peak at 2.8 kHz (Q 1.4) plus a +3 dB high shelf at 4 kHz, with a mild `tanh` soft clipper on the 2–5 kHz band only (drive 1.5, unity-normalised) so hard strums pick up piezo-preamp harshness without turning the whole signal into distortion.
+
+**Mode curves**
+
+| Mode | Character |
+|---|---|
+| Standard | balanced dreadnought: body around 220/450 Hz, mild honk dip at 900 Hz, +3 dB high shelf at 5 kHz |
+| Jumbo | warm and big-bottomed: +4 dB low shelf at 110 Hz, 190 Hz peak, softer top, 12 kHz low-pass |
+| Enhanced | bright and "recorded": presence peak at 1.5 kHz, +5 dB high shelf at 6 kHz, extra air at 8 kHz |
+| Piezo | thin, direct and quacky: scooped 500 Hz, +5 dB peak at 2.8 kHz, +5 dB high shelf at 4 kHz |
+
+**Level** is a manual ±12 dB trim with no automatic makeup. The pedal starts **bypassed**.
+
+Engaging the pedal also force-bypasses the **NAM Pedal, NAM Amp, Pre-EQ, Post-EQ and IR Loader** by flipping their bypass parameters, so the UI reflects the change. Disengaging restores each stage the sim switched off — unless the user changed it while the sim was on, which is left alone. A freshly loaded preset is treated as ground truth and clears this bookkeeping. There is no internal reverb; ambience comes from the Post FX Room/Reverb as usual.
 
 ### Post effects
 
@@ -243,6 +268,7 @@ src/
   directory_browser.*   # legacy folder browser (compiled, no longer in the UI)
   nam_model_loader.cpp
   impersonator.cpp      # pickup-shaping preamp
+  acoustic_sim.cpp      # Boss-style acoustic simulator (modal body model)
   pitch_shifter.cpp     # Rubber Band / Signalsmith streaming pitch engines
   digital_capo.cpp      # shared pitch stage
   drop_tuner.cpp
@@ -257,6 +283,7 @@ src/
 include/namberry/
   NamModelLoader.h
   Impersonator.h
+  AcousticSim.h
   PitchShifter.h
   DigitalCapo.h
   DropTuner.h
@@ -430,7 +457,7 @@ The plugin restores the last selected amp, pedal and both IRs when it next start
 
 ### Tuner
 
-The tuner is a wide horizontal panel above the Impersonator and Pitch pedals:
+The tuner is a permanent compact panel in the editor header, visible on every tab:
 
 - A horizontal strobe guide shows the cents error.
 - Green: within ±2 cents.
@@ -481,7 +508,7 @@ The pitch stage uses a real-time Rubber Band engine when `librubberband` is avai
 ### Pedal
 
 - Load the pedal/preamp `.nam` with **PEDAL MODEL**.
-- Gain, Bass, Mid, Treble, Output.
+- Bass, Mid and Treble (the EQ) sit on the top row; Gain and Volume on the bottom row.
 - Bypass footswitch.
 - The pedal is a second NAM model, not a waveshaper.
 
@@ -490,9 +517,24 @@ The pitch stage uses a real-time Rubber Band engine when `librubberband` is avai
 - **Gate**: threshold, attack, release, bypass.
 - **Compressor**: threshold, ratio, attack, release, makeup, Tight, bypass. Tight derives the detector from a low-passed sidechain. Automatic makeup gain is applied on top of the Makeup control, so lowering the threshold or raising the ratio produces obvious compression without simply lowering the level. Defaults are −24 dB threshold, 8:1 ratio, 5 ms attack and 120 ms release.
 
+### Acoustic sim
+
+The **ACOUSTIC** pedal sits between the gate and the compressor:
+
+| Control | Meaning |
+|---|---|
+| **Mode** | Standard / Jumbo / Enhanced / Piezo — four fixed body curves, crossfaded on switch |
+| **Top** | 0–100 % brilliance and air (default 50 %) |
+| **Body** | 0–100 % modal body resonance and honk removal (default 50 %) |
+| **Piezo** | 0–100 % piezo quack and 2–5 kHz saturation (default 30 %) |
+| **Level** | −12…+12 dB manual trim, default 0 dB |
+| **Footswitch** | Bypass; the pedal starts **bypassed** |
+
+Engaging the pedal automatically switches the NAM Pedal, NAM Amp, Pre-EQ, Post-EQ and IR Loader off; disengaging restores what it switched off, unless you changed a stage by hand while it was on.
+
 ### EQs
 
-Both Pre-EQ and Post-EQ use three bands: low shelf, mid peak, high shelf with frequency, gain and Q. The Post-EQ additionally has a 12 dB/octave high-pass and low-pass filter (defaults 20 Hz and 20 kHz).
+Both Pre-EQ and Post-EQ use three bands: low shelf, mid peak, high shelf with frequency, gain and Q. The Pre-EQ also has a **Volume** trim in its footer (−12…+12 dB, up to +12 dB of boost). The Post-EQ additionally has a 12 dB/octave high-pass and low-pass filter (defaults 20 Hz and 20 kHz).
 
 ### IR
 
@@ -575,6 +617,8 @@ cmake --build build --target NAMBerryOfflineTest NAMBerryUiSnapshot
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --preset
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --compressor
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --impersonator
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --acoustic-sim
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --acoustic-auto-off
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --tone-match
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --ir-level
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --ir-state
@@ -607,6 +651,8 @@ What they cover:
 - `--preset`: verifies preset save/load, including amp/IR file paths.
 - `--compressor`: verifies gain reduction, automatic makeup gain and bypass.
 - `--impersonator`: verifies both pickup-direction EQ curves, manual Level and bypass.
+- `--acoustic-sim`: verifies bypass pass-through, the Body/Top/Piezo knob curves, Level, every mode's output bounds and click-free mode/knob changes.
+- `--acoustic-auto-off`: verifies the sim force-bypasses the distortion, EQ and IR stages, restores them on disengagement while respecting manual changes, and treats a loaded preset as ground truth.
 - `--tone-match`: verifies Tone Match keeps the source brighter than a natural detune.
 - `--ir-level`: verifies unity level across the whole Blend range (0, 0.25, 0.5, 1) and untouched dry passthrough with no IR loaded.
 - `--ir-state`: verifies migration of legacy four-slot IR parameters to `irBlend`.
@@ -643,6 +689,7 @@ The snapshot tool is headless and does not need a DAW.
 - The **Standalone app** does not apply host-style plugin delay compensation; the active pitch latency is audible there. DAWs compensate it.
 - The pitch stage uses an optional runtime Rubber Band engine and a self-contained Stretch fallback. Missing Rubber Band affects quality, not correctness.
 - The **Impersonator** is an EQ approximation. It cannot reproduce the physical pick-attack geometry or the full phase relationship between pickup positions.
+- The **Acoustic Sim** is likewise a filter-bank approximation: it shapes an existing signal but cannot add true body radiance or the projection of a real acoustic guitar.
 - NAM model latency is not separately reported by the plugin; only the pitch-stage latency is reported.
 - The **Room** is a short algorithmic ambience (25–300 ms decay) with early reflections and an FDN tail; at small sizes it acts as a doubler/stereoizer, not a long reverb. Use the Reverb effect for a long tail.
 - The plugin is **stereo in / stereo out only**.

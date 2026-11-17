@@ -33,6 +33,8 @@ void MultiBandEQ::prepare (const juce::dsp::ProcessSpec& spec)
         updateCoefficients (b);
 
     updatePassFilters();
+
+    outputGain_.reset (sampleRate_, 0.02);
 }
 
 void MultiBandEQ::reset()
@@ -105,6 +107,12 @@ void MultiBandEQ::setLowPassFrequency (float frequencyHz)
     updatePassFilters();
 }
 
+void MultiBandEQ::setOutputGainDb (float gainDb)
+{
+    outputGain_.setTargetValue (juce::Decibels::decibelsToGain (
+        juce::jlimit (-24.0f, 24.0f, gainDb)));
+}
+
 void MultiBandEQ::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& /*midi*/)
 {
     if (bypass_ || buffer.getNumChannels() == 0 || buffer.getNumSamples() == 0)
@@ -156,6 +164,21 @@ void MultiBandEQ::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         float* data = buffer.getWritePointer (ch);
         for (int i = 0; i < numSamples; ++i)
             data[i] = filter->processSample (data[i]);
+    }
+
+    if (outputGain_.isSmoothing())
+    {
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const float gain = outputGain_.getNextValue();
+
+            for (int ch = 0; ch < numChannels; ++ch)
+                buffer.getWritePointer (ch)[i] *= gain;
+        }
+    }
+    else
+    {
+        buffer.applyGain (outputGain_.getTargetValue());
     }
 }
 

@@ -38,3 +38,7 @@ cmake --build "${BUILD_DIR}" --target "${TARGET}" -j"$(nproc)"
 APP="${BUILD_DIR}/NAMBerry_artefacts/${CONFIG}/Standalone/NAMberry"
 echo
 echo "Standalone built: ${APP}"
+
+# Keep a ready-to-run copy at the project root.
+cp -f "${APP}" "${ROOT}/NAMberry"
+echo "Copied to: ${ROOT}/NAMberry"

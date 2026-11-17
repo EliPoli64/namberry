@@ -52,6 +52,7 @@ private:
 
     juce::Viewport viewport_;
     juce::Component content_;
+    juce::Component* headerTuner_ = nullptr;
     juce::TabbedButtonBar tabBar_;
     std::unique_ptr<juce::Component> bottomKnobs_;
 

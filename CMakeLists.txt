@@ -52,6 +52,7 @@ target_sources(NAMBerry PRIVATE
     src/directory_browser.cpp
     src/nam_model_loader.cpp
     src/impersonator.cpp
+    src/acoustic_sim.cpp
     src/ir_loader.cpp
     src/multi_band_eq.cpp
     src/drop_tuner.cpp
@@ -131,6 +132,9 @@ target_link_libraries(NAMBerryOfflineTest
 target_compile_definitions(NAMBerryOfflineTest PRIVATE
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
+    # Lets the test pump the message loop (runDispatchLoopUntil) so the
+    # acoustic-sim auto-off's AsyncUpdater callback can be delivered.
+    JUCE_MODAL_LOOPS_PERMITTED=1
 )
 
 if(NAM_AVAILABLE)

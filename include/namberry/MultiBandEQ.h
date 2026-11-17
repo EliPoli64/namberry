@@ -26,6 +26,9 @@ public:
     void setHighPassFrequency (float frequencyHz);
     void setLowPassFrequency (float frequencyHz);
 
+    /// Output trim applied after the three bands (0 dB by default).
+    void setOutputGainDb (float gainDb);
+
     struct BandParams { float frequency; float gainDb; float q; };
     BandParams getBandParameters (int bandIdx) const;
 
@@ -41,6 +44,7 @@ private:
 
     float highPassFrequency_ = 20.0f;
     float lowPassFrequency_ = 20000.0f;
+    juce::SmoothedValue<float> outputGain_ { 1.0f };
 
     std::array<BandParams, 3> bandData_ {{
         { 200.0f,   0.0f, 1.0f },

@@ -3,6 +3,7 @@ build/
 build-*/
 cmake-build-*/
 NAMBerry_artefacts/
+/NAMberry
 *.vst3
 *.component
 *.aaxplugin
