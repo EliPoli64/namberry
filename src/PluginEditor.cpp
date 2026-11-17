@@ -473,7 +473,9 @@ public:
         auto r = getLocalBounds();
         label_.setBounds (r.removeFromTop (16));
 
-        editor_.setBounds (r.withSizeKeepingCentre (120, 42));
+        editor_.setBounds (r.withSizeKeepingCentre (
+            juce::jmin (120, r.getWidth()),
+            juce::jmin (42, r.getHeight())));
     }
 
 private:
@@ -505,7 +507,7 @@ private:
 };
 
 //==============================================================================
-/// Horizontal strobe tuning guide used in the wide Pre FX tuner panel.
+/// Compact strobe tuning guide that lives permanently in the editor header.
 class TunerStrip : public juce::Component
 {
 public:
@@ -535,24 +537,35 @@ public:
     void resized() override
     {
         auto r = getLocalBounds();
-        auto referenceArea = r.removeFromRight (126);
-        reference_->setBounds (referenceArea.withSizeKeepingCentre (120, 80));
+        auto referenceArea = r.removeFromRight (112);
+        reference_->setBounds (referenceArea.withSizeKeepingCentre (108, 46));
     }
 
     void paint (juce::Graphics& g) override
     {
-        auto r = getLocalBounds();
-        r.removeFromRight (126);
-        auto noteArea = r.removeFromLeft (58);
-        auto guide = r.reduced (4, 8);
+        auto bg = getLocalBounds().toFloat().reduced (1.0f);
+        g.setColour (juce::Colour (0xff141417));
+        g.fillRoundedRectangle (bg, 6.0f);
+        g.setColour (juce::Colour (kPanelLine));
+        g.drawRoundedRectangle (bg, 6.0f, 1.0f);
+
+        auto r = getLocalBounds().reduced (6, 2);
+        r.removeFromRight (108);
+        auto noteArea = r.removeFromLeft (62);
+        auto guide = r.reduced (2, 4);
 
         const auto tuning = tuningColour();
 
+        g.setColour (juce::Colour (kAccent).withAlpha (0.85f));
+        g.setFont (juce::FontOptions (8.0f, juce::Font::bold));
+        g.drawText ("TUNER", noteArea.removeFromTop (11),
+                    juce::Justification::centredLeft);
+
         g.setColour (tuning);
-        g.setFont (juce::FontOptions (24.0f, juce::Font::bold));
+        g.setFont (juce::FontOptions (20.0f, juce::Font::bold));
         g.drawFittedText (hasNote_ ? note_ : "---",
-                          noteArea.removeFromTop (34),
-                          juce::Justification::centred, 1);
+                          noteArea.removeFromTop (23),
+                          juce::Justification::centredLeft, 1);
 
         juce::String centsText = "---";
 
@@ -562,16 +575,17 @@ public:
                 : juce::String (targetCents_, 1) + " c";
 
         g.setColour (juce::Colour (kTextDim));
-        g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
-        g.drawFittedText (centsText, noteArea.removeFromTop (20),
-                          juce::Justification::centred, 1);
+        g.setFont (juce::FontOptions (9.5f, juce::Font::bold));
+        g.drawFittedText (centsText, noteArea.removeFromTop (14),
+                          juce::Justification::centredLeft, 1);
 
         g.setColour (juce::Colour (0xff121214));
         g.fillRoundedRectangle (guide.toFloat(), 5.0f);
         g.setColour (juce::Colour (kPanelLine));
         g.drawRoundedRectangle (guide.toFloat(), 5.0f, 1.0f);
 
-        auto inner = guide.reduced (7, 5);
+        auto inner = guide.reduced (7, 4);
+
         const float centreX = inner.getCentreX();
         const float halfWidth = inner.getWidth() * 0.44f;
         const float trackY = inner.getCentreY();
@@ -864,6 +878,105 @@ private:
 };
 
 //==============================================================================
+/// Four-position mode selector for the Acoustic Sim (Standard, Jumbo,
+/// Enhanced, Piezo), bound to an AudioParameterChoice.
+class AcousticModeSwitch : public juce::Component
+{
+public:
+    AcousticModeSwitch (APVTS& state, const juce::String& paramId)
+    {
+        if (auto* param = state.getParameter (paramId))
+        {
+            param_ = param;
+            attachment_ = std::make_unique<juce::ParameterAttachment> (
+                *param, [this] (float) { repaint(); });
+            attachment_->sendInitialUpdate();
+        }
+
+        setMouseCursor (juce::MouseCursor::PointingHandCursor);
+    }
+
+    void mouseDown (const juce::MouseEvent& event) override
+    {
+        const int index = optionAt (event.getPosition());
+
+        if (index >= 0 && attachment_ != nullptr)
+            attachment_->setValueAsCompleteGesture (static_cast<float> (index));
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto r = getLocalBounds().reduced (2);
+        auto title = r.removeFromTop (14);
+
+        g.setColour (juce::Colour (kAccent));
+        g.setFont (juce::FontOptions (8.5f, juce::Font::bold));
+        g.drawText ("MODE", title, juce::Justification::centred);
+
+        auto body = r.reduced (1);
+        g.setColour (juce::Colour (0xff121214));
+        g.fillRoundedRectangle (body.toFloat(), 5.0f);
+        g.setColour (juce::Colour (kPanelLine));
+        g.drawRoundedRectangle (body.toFloat(), 5.0f, 1.0f);
+
+        const int active = currentIndex();
+
+        for (int i = 0; i < numOptions; ++i)
+        {
+            auto area = body.removeFromTop (body.getHeight() / (numOptions - i));
+            const bool isActive = (i == active);
+
+            if (isActive)
+            {
+                g.setColour (juce::Colour (kAccent).withAlpha (0.17f));
+                g.fillRoundedRectangle (area.toFloat().reduced (2.0f, 1.0f), 4.0f);
+            }
+
+            g.setColour (isActive ? juce::Colour (kAccent) : juce::Colour (kTextDim));
+            g.setFont (juce::FontOptions (8.5f, juce::Font::bold));
+            g.drawText (options_[i], area, juce::Justification::centred);
+        }
+    }
+
+private:
+    static constexpr int numOptions = 4;
+    static constexpr const char* options_[numOptions] = {
+        "Standard", "Jumbo", "Enhanced", "Piezo"
+    };
+
+    /// Replicates the paint layout so clicks hit the option under the cursor.
+    int optionAt (juce::Point<int> position) const
+    {
+        auto r = getLocalBounds().reduced (2);
+        r.removeFromTop (14);
+        auto body = r.reduced (1);
+
+        for (int i = 0; i < numOptions; ++i)
+        {
+            auto area = body.removeFromTop (body.getHeight() / (numOptions - i));
+
+            if (area.contains (position))
+                return i;
+        }
+
+        return -1;
+    }
+
+    int currentIndex() const
+    {
+        if (param_ == nullptr)
+            return 0;
+
+        return juce::roundToInt (param_->convertFrom0to1 (param_->getValue()));
+    }
+
+    juce::RangedAudioParameter* param_ = nullptr;
+    std::unique_ptr<juce::ParameterAttachment> attachment_;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AcousticModeSwitch)
+};
+
+//==============================================================================
 /// Compact amp-model browse button that sits on the amp faceplate next to Power.
 class AmpBrowseButton : public juce::Component,
                         public juce::FileDragAndDropTarget
@@ -1149,6 +1262,35 @@ private:
 };
 
 //==============================================================================
+/// Footer row that pairs the bypass footswitch with one extra knob, for pedals
+/// that carry a dedicated output level.
+class FooterWithKnob : public juce::Component
+{
+public:
+    FooterWithKnob (juce::Component& footswitch, juce::Component& knob)
+        : footswitch_ (footswitch), knob_ (knob)
+    {
+        addAndMakeVisible (footswitch_);
+        addAndMakeVisible (knob_);
+    }
+
+    static constexpr int preferredWidth = ParamControl::cellWidth + 8 + 64;
+
+    void resized() override
+    {
+        auto r = getLocalBounds();
+        knob_.setBounds (r.removeFromRight (ParamControl::cellWidth));
+        footswitch_.setBounds (r.withSizeKeepingCentre (64, r.getHeight()));
+    }
+
+private:
+    juce::Component& footswitch_;
+    juce::Component& knob_;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FooterWithKnob)
+};
+
+//==============================================================================
 /// A stompbox, amp head or rack unit, with controls laid out inside it.
 class SectionPanel : public juce::Component,
                      private juce::Timer
@@ -1177,10 +1319,11 @@ public:
         addAndMakeVisible (row);
     }
 
-    void setFooter (juce::Component* footer, int height)
+    void setFooter (juce::Component* footer, int height, int width = 64)
     {
         footer_ = footer;
         footerHeight_ = height;
+        footerWidth_ = width;
         if (footer_ != nullptr)
             addAndMakeVisible (footer_);
     }
@@ -1247,7 +1390,7 @@ public:
             if (footer_ != nullptr)
             {
                 auto footerArea = r.removeFromBottom (footerHeight_);
-                footer_->setBounds (footerArea.withSizeKeepingCentre (64, footerHeight_));
+                footer_->setBounds (footerArea.withSizeKeepingCentre (footerWidth_, footerHeight_));
             }
 
             const int count = (int) items_.size();
@@ -1506,6 +1649,7 @@ private:
     std::vector<std::pair<juce::Component*, int>> rows_;
     juce::Component* footer_ = nullptr;
     int footerHeight_ = 0;
+    int footerWidth_ = 64;
     int preferredHeight_ = 0;
     int itemCellHeight_ = 0;
     bool rowsFirst_ = false;
@@ -1513,48 +1657,6 @@ private:
     bool hovered_ = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SectionPanel)
-};
-
-//==============================================================================
-/// Places the horizontal tuner above the impersonator and pitch pedals,
-/// removing the tuner's narrow vertical strip from the main row.
-class PreFxTopGroup : public juce::Component
-{
-public:
-    PreFxTopGroup (SectionPanel& tuner, SectionPanel& impersonator, SectionPanel& pitch)
-        : tuner_ (tuner), impersonator_ (impersonator), pitch_ (pitch)
-    {
-        addAndMakeVisible (tuner_);
-        addAndMakeVisible (impersonator_);
-        addAndMakeVisible (pitch_);
-    }
-
-    int preferredWidth() const { return pedalWidth * 2 + pedalGap; }
-    int preferredHeight() const { return tunerHeight + pedalGap + pedalHeight; }
-
-    void resized() override
-    {
-        const int width = getWidth();
-        tuner_.setBounds (0, 0, width, tunerHeight);
-
-        const int pedalY = tunerHeight + pedalGap;
-        const int height = juce::jmax (1, getHeight() - pedalY);
-
-        impersonator_.setBounds (0, pedalY, pedalWidth, height);
-        pitch_.setBounds (pedalWidth + pedalGap, pedalY, pedalWidth, height);
-    }
-
-private:
-    static constexpr int pedalWidth = 176;
-    static constexpr int pedalGap = 8;
-    static constexpr int tunerHeight = 130;
-    static constexpr int pedalHeight = 340;
-
-    SectionPanel& tuner_;
-    SectionPanel& impersonator_;
-    SectionPanel& pitch_;
-
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PreFxTopGroup)
 };
 
 //==============================================================================
@@ -2436,11 +2538,11 @@ void NAMBerryEditor::buildUi()
     updateTabVisuals();
 
     // Unit colours.
-    const juce::Colour tunerBody   (0xff0d5c58), tunerAccent   (0xff5eead4);
     const juce::Colour impersonatorBody (0xff4a2e2e), impersonatorAccent (0xfff59e0b);
     const juce::Colour capoBody    (0xff7a4a10), capoAccent    (0xfffbbf24);
     const juce::Colour gateBody    (0xff34343c), gateAccent    (0xffcbd5e1);
     const juce::Colour compBody    (0xff82380f), compAccent    (0xfffb923c);
+    const juce::Colour acousticBody (0xff45301c), acousticAccent (0xffe8c39e);
     const juce::Colour pedalBody   (0xff1f5f37), pedalAccent   (0xff4ade80);
     const juce::Colour eqBody      (0xff3f3f46), eqAccent      (0xffd4d4d8);
     const juce::Colour ampBody     (0xff141416), ampAccent     (0xffd4af37);
@@ -2453,35 +2555,31 @@ void NAMBerryEditor::buildUi()
     const juce::Colour reverbBody  (0xff1e3a5f), reverbAccent  (0xff93c5fd);
 
     // 1. Pre FX -------------------------------------------------------------
-    auto* tunerPanel = makePanel (0, "TUNER", UnitStyle::RackUnit, 1, 360,
-                                  tunerBody, tunerAccent, false);
-
-    if (tunerPanel != nullptr)
+    // The tuner sits permanently in the editor header, so the pedalboard keeps
+    // its full height for the pedals.
     {
-        auto strip = std::make_unique<TunerStrip> (state);
-        auto* rawStrip = strip.get();
-        ownedControls_.push_back (std::move (strip));
-        tunerPanel->addRow (rawStrip, 90);
-        tunerPanel->setPreferredHeight (130);
+        auto tuner = std::make_unique<TunerStrip> (state);
+        auto* rawTuner = tuner.get();
+        ownedControls_.push_back (std::move (tuner));
+        addAndMakeVisible (*rawTuner);
+        headerTuner_ = rawTuner;
 
         if (auto* t = processor_.getDropTuner())
-            rawStrip->setState (t->getCentsDeviation(),
+            rawTuner->setState (t->getCentsDeviation(),
                                 t->getDetectedNote(),
                                 t->getReferenceFrequency());
 
-        tunerUpdater_ = [this, rawStrip]
+        tunerUpdater_ = [this, rawTuner]
         {
-            if (auto* tuner = processor_.getDropTuner())
-                rawStrip->setState (tuner->getCentsDeviation(),
-                                    tuner->getDetectedNote(),
-                                    tuner->getReferenceFrequency());
+            if (auto* tunerPtr = processor_.getDropTuner())
+                rawTuner->setState (tunerPtr->getCentsDeviation(),
+                                    tunerPtr->getDetectedNote(),
+                                    tunerPtr->getReferenceFrequency());
         };
     }
 
-    auto* impersonatorPanel = makePanel (0, "IMPERSONATOR", UnitStyle::Pedal, 2, 0,
-                                         impersonatorBody, impersonatorAccent, false);
-
-    if (impersonatorPanel != nullptr)
+    if (auto* impersonatorPanel = makePanel (0, "IMPERSONATOR", UnitStyle::Pedal, 2, 0,
+                                             impersonatorBody, impersonatorAccent))
     {
         auto mode = std::make_unique<ModeSwitch> (state, "impersonatorToNeck");
         auto* rawMode = mode.get();
@@ -2490,31 +2588,16 @@ void NAMBerryEditor::buildUi()
         impersonatorPanel->addItem (makeControl ("impersonatorLevel", "Level"));
         impersonatorPanel->setFooter (
             makeFootswitch ("impersonatorBypass", impersonatorAccent), 82);
-        impersonatorPanel->setPreferredHeight (300);
     }
 
-    auto* pitchPanel = makePanel (0, "PITCH", UnitStyle::Pedal, 2, 0,
-                                  capoBody, capoAccent, false);
-
-    if (pitchPanel != nullptr)
+    if (auto* pitchPanel = makePanel (0, "PITCH", UnitStyle::Pedal, 2, 0,
+                                      capoBody, capoAccent))
     {
         pitchPanel->addItem (makeControl ("capoFret", "Semitones"));
         pitchPanel->addItem (makeControl ("capoTone", "Tone Match"));
         pitchPanel->addItem (makeControl ("capoMix", "Mix"));
         pitchPanel->addItem (makeControl ("capoQuality", "Quality", ParamControl::Kind::Toggle));
         pitchPanel->setFooter (makeFootswitch ("capoBypass", capoAccent), 82);
-        pitchPanel->setPreferredHeight (340);
-    }
-
-    if (tunerPanel != nullptr && impersonatorPanel != nullptr && pitchPanel != nullptr)
-    {
-        auto group = std::make_unique<PreFxTopGroup> (
-            *tunerPanel, *impersonatorPanel, *pitchPanel);
-        auto* rawGroup = group.get();
-        ownedControls_.push_back (std::move (group));
-        tabPanels_[0].push_back (rawGroup);
-        allPanels_.push_back (rawGroup);
-        content_.addAndMakeVisible (rawGroup);
     }
 
     if (auto* gate = makePanel (0, "GATE", UnitStyle::Pedal, 2, 0,
@@ -2524,6 +2607,21 @@ void NAMBerryEditor::buildUi()
         gate->addItem (makeControl ("gateAttack", "Attack"));
         gate->addItem (makeControl ("gateRelease", "Release"));
         gate->setFooter (makeFootswitch ("gateBypass", gateAccent), 82);
+    }
+
+    if (auto* acoustic = makePanel (0, "ACOUSTIC", UnitStyle::Pedal, 2, 0,
+                                    acousticBody, acousticAccent))
+    {
+        auto mode = std::make_unique<AcousticModeSwitch> (state, "acousticSimMode");
+        auto* rawMode = mode.get();
+        ownedControls_.push_back (std::move (mode));
+        acoustic->addItem (rawMode);
+        acoustic->addItem (makeControl ("acousticSimTop", "Top"));
+        acoustic->addItem (makeControl ("acousticSimBody", "Body"));
+        acoustic->addItem (makeControl ("acousticSimPiezo", "Piezo"));
+        acoustic->addItem (makeControl ("acousticSimLevel", "Level"));
+        acoustic->setFooter (makeFootswitch ("acousticSimBypass", acousticAccent), 82);
+        acoustic->setPreferredHeight (450);
     }
 
     if (auto* comp = makePanel (0, "COMP", UnitStyle::Pedal, 2, 0,
@@ -2541,11 +2639,12 @@ void NAMBerryEditor::buildUi()
     if (auto* pedal = makePanel (0, "PEDAL", UnitStyle::Pedal, 3, 0,
                                  pedalBody, pedalAccent))
     {
-        pedal->addItem (makeControl ("pedalGain", "Gain"));
+        // Top row: tone stack. Bottom row: gain and output level.
         pedal->addItem (makeControl ("pedalBass", "Bass"));
         pedal->addItem (makeControl ("pedalMid", "Mid"));
         pedal->addItem (makeControl ("pedalTreble", "Treble"));
-        pedal->addItem (makeControl ("pedalOutput", "Output"));
+        pedal->addItem (makeControl ("pedalGain", "Gain"));
+        pedal->addItem (makeControl ("pedalOutput", "Volume"));
         pedal->addRow (makeNamBox ("PEDAL MODEL", true), 140);
         pedal->setFooter (makeFootswitch ("pedalBypass", pedalAccent), 82);
     }
@@ -2561,7 +2660,13 @@ void NAMBerryEditor::buildUi()
             preEq->addItem (makeControl ("preEqGain" + i, juce::String (bandNames[band]) + " dB"));
             preEq->addItem (makeControl ("preEqQ" + i, juce::String (bandNames[band]) + " Q"));
         }
-        preEq->setFooter (makeFootswitch ("preEqBypass", eqAccent), 82);
+
+        auto volume = std::make_unique<FooterWithKnob> (
+            *makeFootswitch ("preEqBypass", eqAccent),
+            *makeControl ("preEqVolume", "Volume"));
+        auto* rawVolume = volume.get();
+        ownedControls_.push_back (std::move (volume));
+        preEq->setFooter (rawVolume, 82, FooterWithKnob::preferredWidth);
     }
 
     // 2. Amp ----------------------------------------------------------------
@@ -2862,11 +2967,6 @@ void NAMBerryEditor::layoutContent()
 
             wantedHeight = section->preferredHeight();
         }
-        else if (auto* group = dynamic_cast<PreFxTopGroup*> (panel))
-        {
-            width = group->preferredWidth();
-            wantedHeight = group->preferredHeight();
-        }
         else
         {
             continue;
@@ -3045,6 +3145,13 @@ void NAMBerryEditor::resized()
     reducedMotionButton_.setBounds (headerControls.removeFromRight (190).withSizeKeepingCentre (180, 48));
     presetButton_.setBounds (headerControls.removeFromRight (150).withSizeKeepingCentre (140, 44));
 
+    auto tunerArea = header.withTrimmedLeft (200).reduced (0, 3);
+    tunerArea = tunerArea.withSizeKeepingCentre (
+        juce::jmin (640, tunerArea.getWidth()), 54);
+
+    if (headerTuner_ != nullptr)
+        headerTuner_->setBounds (tunerArea);
+
     constexpr int bottomHeight = 112;
     constexpr int knobsWidth = 176;
     constexpr int knobsHeight = 108;
@@ -3117,12 +3224,6 @@ void NAMBerryEditor::paint (juce::Graphics& g)
     g.setFont (juce::FontOptions (22.0f, juce::Font::bold));
     g.drawText ("NAMBERRY", header.reduced (34, 0),
                 juce::Justification::centredLeft);
-
-    g.setColour (juce::Colour (kTextDim));
-    g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-    g.drawFittedText ("PRE FX   >   AMP   >   POST EQ   >   IR   >   POST FX",
-                      header.withTrimmedLeft (200).withTrimmedRight (390),
-                      juce::Justification::centred, 1);
 
     g.setColour (juce::Colour (kAccent).withAlpha (0.5f));
     g.fillRect (getLocalBounds().removeFromTop (60).removeFromBottom (2));

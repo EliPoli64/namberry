@@ -4,7 +4,9 @@
 #include <juce_data_structures/juce_data_structures.h>
 #include <juce_dsp/juce_dsp.h>
 
+#include <array>
 #include <atomic>
+#include <optional>
 #include "namberry/NamModelLoader.h"
 #include "namberry/IrLoader.h"
 #include "namberry/MultiBandEQ.h"
@@ -13,6 +15,7 @@
 #include "namberry/Compressor.h"
 #include "namberry/NoiseGate.h"
 #include "namberry/Impersonator.h"
+#include "namberry/AcousticSim.h"
 #include "namberry/PostEffects.h"
 
 namespace namberry {
@@ -91,6 +94,7 @@ private:
     std::unique_ptr<DropTuner> dropTuner_;
     std::unique_ptr<NoiseGate> noiseGate_;
     std::unique_ptr<Compressor> compressor_;
+    std::unique_ptr<AcousticSim> acousticSim_;
     std::unique_ptr<DigitalCapo> digitalCapo_;
     std::unique_ptr<Impersonator> impersonator_;
     std::unique_ptr<NamModelLoader> namModel_;
@@ -99,6 +103,16 @@ private:
     std::unique_ptr<MultiBandEQ> preAmpEQ_;
     std::unique_ptr<MultiBandEQ> postAmpEQ_;
     std::unique_ptr<PostEffects> postEffects_;
+
+    //==============================================================================
+    // Acoustic-sim auto-off bookkeeping. The edge detector runs on the audio
+    // thread; the actual parameter flips happen in handleAsyncUpdate() on the
+    // message thread.
+    void syncAcousticSimChainState();
+
+    std::atomic<bool> acousticSimEngaged_ { false };
+    bool acousticSimEqSynced_ = false;
+    std::array<std::optional<float>, 5> acousticSimSavedEq_;
 
     //==============================================================================
     juce::AudioProcessorValueTreeState apvts_;

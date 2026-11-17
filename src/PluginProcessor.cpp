@@ -78,6 +78,29 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         "compBypass", "Comp Bypass", false));
 
+    // ---- Acoustic Simulator (Boss-style electric-to-acoustic modeling) ----
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        "acousticSimBypass", "Acoustic Sim Bypass", true));
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        "acousticSimMode", "Acoustic Sim Mode",
+        juce::StringArray { "Standard", "Jumbo", "Enhanced", "Piezo" }, 0));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "acousticSimTop", "Acoustic Sim Top",
+        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 50.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("%")));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "acousticSimBody", "Acoustic Sim Body",
+        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 50.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("%")));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "acousticSimPiezo", "Acoustic Sim Piezo",
+        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 30.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("%")));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "acousticSimLevel", "Acoustic Sim Level",
+        juce::NormalisableRange<float>(-12.0f, 12.0f, 0.1f), 0.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("dB")));
+
     // ---- NAM Pedal / Preamp (separate .nam model) ----
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "pedalGain", "Pedal Gain",
@@ -100,6 +123,10 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     // ---- Pre-Amp EQ (3 bands) ----
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         "preEqBypass", "Pre EQ Bypass", false));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "preEqVolume", "Pre EQ Volume",
+        juce::NormalisableRange<float>(-12.0f, 12.0f, 0.1f), 0.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("dB")));
 
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "preEqFreq0", "Pre EQ Low Freq",
@@ -505,6 +532,7 @@ NAMBerryProcessor::NAMBerryProcessor()
     dropTuner_ = std::make_unique<DropTuner>();
     noiseGate_ = std::make_unique<NoiseGate>();
     compressor_ = std::make_unique<Compressor>();
+    acousticSim_ = std::make_unique<AcousticSim>();
     digitalCapo_ = std::make_unique<DigitalCapo>();
     impersonator_ = std::make_unique<Impersonator>();
     namModel_ = std::make_unique<NamModelLoader>();
@@ -528,6 +556,7 @@ void NAMBerryProcessor::prepareToPlay (double sampleRate, int maxSamplesPerBlock
     dropTuner_->prepare(spec);
     noiseGate_->prepare(spec);
     compressor_->prepare(spec);
+    acousticSim_->prepare(spec);
     digitalCapo_->setQualityMode (apvts_.getRawParameterValue("capoQuality")->load() > 0.5f
         ? PitchShifter::QualityMode::quality
         : PitchShifter::QualityMode::lowLatency);
@@ -564,8 +593,9 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
 
     //==============================================================================
     // Signal chain order (see spec.md §3.1):
-    // Input → Tuner (detect) → Pitch (capo/drop) → NoiseGate → Compressor →
-    // NAM Pedal → Pre-Amp EQ → NAM Amp → Post-Amp EQ → IR Loader → Post FX → Master
+    // Input → Tuner (detect) → Impersonator → Pitch (capo/drop) → NoiseGate →
+    // Acoustic Sim → Compressor → NAM Pedal → Pre-Amp EQ → NAM Amp →
+    // Post-Amp EQ → IR Loader → Post FX → Master
     //==============================================================================
 
     const bool preFxBypassed = apvts_.getRawParameterValue("preFxBypass")->load() > 0.5f;
@@ -627,6 +657,30 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         noiseGate_->processBlock(buffer, midiMessages);
     }
 
+    // 3.5 Acoustic Sim (Boss-style electric-to-acoustic modeling, before the
+    // compressor so the sim shapes the raw pickup before dynamics). Engaging
+    // the pedal also forces the distortion, EQ and IR stages off; that
+    // bookkeeping runs on the message thread via handleAsyncUpdate().
+    {
+        const bool engaged = apvts_.getRawParameterValue("acousticSimBypass")->load() <= 0.5f;
+
+        if (engaged != acousticSimEngaged_.load())
+        {
+            acousticSimEngaged_.store (engaged);
+            triggerAsyncUpdate();
+        }
+
+        acousticSim_->setBypass (! engaged || preFxBypassed);
+        acousticSim_->setMode (static_cast<AcousticSim::Mode> (
+            static_cast<int> (apvts_.getRawParameterValue("acousticSimMode")->load())));
+        acousticSim_->setTop (apvts_.getRawParameterValue("acousticSimTop")->load() * 0.01f);
+        acousticSim_->setBody (apvts_.getRawParameterValue("acousticSimBody")->load() * 0.01f);
+        acousticSim_->setPiezo (apvts_.getRawParameterValue("acousticSimPiezo")->load() * 0.01f);
+        acousticSim_->setOutputLevelDb (apvts_.getRawParameterValue("acousticSimLevel")->load());
+
+        acousticSim_->processBlock(buffer, midiMessages);
+    }
+
     // 4. Compressor
     {
         const bool compBypassed = apvts_.getRawParameterValue("compBypass")->load() > 0.5f;
@@ -677,6 +731,7 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
             apvts_.getRawParameterValue("preEqFreq2")->load(),
             apvts_.getRawParameterValue("preEqGain2")->load(),
             apvts_.getRawParameterValue("preEqQ2")->load());
+        preAmpEQ_->setOutputGainDb(apvts_.getRawParameterValue("preEqVolume")->load());
         preAmpEQ_->processBlock(buffer, midiMessages);
     }
 
@@ -784,8 +839,61 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
 }
 
 //==============================================================================
+// The acoustic sim force-bypasses the distortion, EQ and IR stages when it is
+// engaged. Stages the sim switched off are restored on disengagement unless
+// the user changed them while the sim was on; a loaded preset is ground
+// truth and clears this bookkeeping entirely.
+void NAMBerryProcessor::syncAcousticSimChainState()
+{
+    static constexpr std::array<const char*, 5> managedIds {
+        "pedalBypass", "ampBypass", "preEqBypass", "postEqBypass", "irBypass"
+    };
+
+    const bool engaged = apvts_.getRawParameterValue("acousticSimBypass")->load() <= 0.5f;
+
+    if (engaged == acousticSimEqSynced_)
+        return;
+
+    acousticSimEqSynced_ = engaged;
+
+    for (size_t i = 0; i < managedIds.size(); ++i)
+    {
+        auto* param = apvts_.getParameter (managedIds[i]);
+
+        if (param == nullptr)
+            continue;
+
+        if (engaged)
+        {
+            // Remember the stages that are currently on, then bypass them.
+            const float current = param->getValue();
+
+            if (current < 0.5f)
+            {
+                acousticSimSavedEq_[i] = current;
+                param->setValueNotifyingHost (1.0f);
+            }
+            else
+            {
+                acousticSimSavedEq_[i].reset();
+            }
+        }
+        else
+        {
+            // Restore only stages the sim switched off and the user left alone.
+            if (acousticSimSavedEq_[i].has_value() && param->getValue() > 0.999f)
+                param->setValueNotifyingHost (*acousticSimSavedEq_[i]);
+
+            acousticSimSavedEq_[i].reset();
+        }
+    }
+}
+
+//==============================================================================
 void NAMBerryProcessor::handleAsyncUpdate()
 {
+    syncAcousticSimChainState();
+
     const int latency = pendingLatencySamples_.load();
 
     if (latency != appliedLatencySamples_.load())
@@ -843,6 +951,16 @@ void NAMBerryProcessor::setStateInformation (const void* data, int sizeInBytes)
 
             migrateRoomBypassState (state);
             apvts_.replaceState (state);
+
+            // A freshly loaded preset is ground truth for the acoustic-sim
+            // auto-off bookkeeping: drop any saved states, mark the sync
+            // state as matching the loaded engage state and re-align the
+            // edge detector so the next footswitch press behaves normally.
+            acousticSimSavedEq_ = {};
+            const bool simEngaged =
+                apvts_.getRawParameterValue("acousticSimBypass")->load() <= 0.5f;
+            acousticSimEqSynced_ = simEngaged;
+            acousticSimEngaged_.store (simEngaged);
         }
     }
 }

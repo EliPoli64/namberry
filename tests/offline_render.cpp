@@ -1778,6 +1778,282 @@ int runImpersonatorTest()
     return passed ? 0 : 2;
 }
 
+int runAcousticSimTest()
+{
+    constexpr double sampleRate = 48000.0;
+    constexpr int blockSize = 512;
+    constexpr int blocks = 12;
+    constexpr float inputAmplitude = 0.2f;
+    constexpr float inputRms = inputAmplitude / 1.41421356f;
+
+    using Mode = namberry::AcousticSim::Mode;
+
+    // Renders a sine through the sim and returns the captured mono output.
+    // onBlock runs before every processBlock for mid-render changes.
+    auto renderCapture = [&] (double frequency, Mode mode,
+                              float top, float body, float piezo,
+                              bool bypassed, float levelDb = 0.0f,
+                              std::function<void (namberry::AcousticSim&)> onBlock = nullptr)
+        -> std::vector<float>
+    {
+        namberry::AcousticSim sim;
+        juce::dsp::ProcessSpec spec;
+        spec.sampleRate = sampleRate;
+        spec.maximumBlockSize = blockSize;
+        spec.numChannels = 2;
+        sim.setMode (mode);
+        sim.setTop (top);
+        sim.setBody (body);
+        sim.setPiezo (piezo);
+        sim.setOutputLevelDb (levelDb);
+        sim.prepare (spec);
+        sim.setBypass (bypassed);
+
+        juce::AudioBuffer<float> buffer (2, blockSize);
+        juce::MidiBuffer midi;
+        double phase = 0.0;
+        std::vector<float> captured;
+        captured.reserve (static_cast<size_t> (blocks * blockSize));
+
+        for (int block = 0; block < blocks; ++block)
+        {
+            if (onBlock != nullptr)
+                onBlock (sim);
+
+            for (int i = 0; i < blockSize; ++i)
+            {
+                const float s = inputAmplitude * static_cast<float> (std::sin (phase));
+                phase += 2.0 * juce::MathConstants<double>::pi * frequency / sampleRate;
+                buffer.setSample (0, i, s);
+                buffer.setSample (1, i, s);
+            }
+
+            sim.processBlock (buffer, midi);
+
+            for (int i = 0; i < blockSize; ++i)
+                captured.push_back (buffer.getSample (0, i));
+        }
+
+        return captured;
+    };
+
+    auto rmsOf = [] (const std::vector<float>& x) -> float
+    {
+        const int n = static_cast<int> (x.size());
+
+        if (n <= 0)
+            return 0.0f;
+
+        float sum = 0.0f;
+        for (int i = juce::jmax (0, n - blockSize); i < n; ++i)
+            sum += x[static_cast<size_t> (i)] * x[static_cast<size_t> (i)];
+
+        return std::sqrt (sum / static_cast<float> (juce::jmax (1, n - juce::jmax (0, n - blockSize))));
+    };
+
+    auto maxDelta = [] (const std::vector<float>& x) -> float
+    {
+        float worst = 0.0f;
+
+        for (size_t i = 1; i < x.size(); ++i)
+            worst = juce::jmax (worst, std::abs (x[i] - x[i - 1]));
+
+        return worst;
+    };
+
+    // --- Bypass must be a bit-exact pass-through ---
+    const auto bypassed = renderCapture (1000.0, Mode::standard, 0.5f, 0.5f, 0.3f, true);
+    const bool bypassOk = std::abs (rmsOf (bypassed) - inputRms) < inputRms * 0.02f;
+
+    // --- Each knob must add energy at its design frequency ---
+    const auto bodyOff = renderCapture (200.0, Mode::standard, 0.0f, 0.0f, 0.0f, false);
+    const auto bodyOn  = renderCapture (200.0, Mode::standard, 0.0f, 1.0f, 0.0f, false);
+    const auto topOff  = renderCapture (5000.0, Mode::standard, 0.0f, 0.0f, 0.0f, false);
+    const auto topOn   = renderCapture (5000.0, Mode::standard, 1.0f, 0.0f, 0.0f, false);
+    const auto piezoOff = renderCapture (2800.0, Mode::standard, 0.0f, 0.0f, 0.0f, false);
+    const auto piezoOn  = renderCapture (2800.0, Mode::standard, 0.0f, 0.0f, 1.0f, false);
+
+    const bool bodyOk  = rmsOf (bodyOn)  > rmsOf (bodyOff)  * 1.2f;
+    const bool topOk   = rmsOf (topOn)   > rmsOf (topOff)   * 1.2f;
+    const bool piezoOk = rmsOf (piezoOn) > rmsOf (piezoOff) * 1.2f;
+
+    // --- Level is a plain manual trim ---
+    const auto levelUnity = renderCapture (1000.0, Mode::standard, 0.5f, 0.5f, 0.3f, false, 0.0f);
+    const auto levelCut   = renderCapture (1000.0, Mode::standard, 0.5f, 0.5f, 0.3f, false, -6.0f);
+    const bool levelOk = std::abs (rmsOf (levelCut) / juce::jmax (1.0e-6f, rmsOf (levelUnity)) - 0.501f)
+                         < 0.03f;
+
+    // --- Every mode and knob extreme stays finite, audible and bounded ---
+    bool modesOk = true;
+    for (Mode mode : { Mode::standard, Mode::jumbo, Mode::enhanced, Mode::piezo })
+        for (float knob : { 0.0f, 1.0f })
+        {
+            const auto x = renderCapture (440.0, mode, knob, knob, knob, false);
+
+            if (x.empty() || ! std::isfinite (rmsOf (x))
+                || rmsOf (x) < 1.0e-5f
+                || rmsOf (x) > inputRms * 8.0f)
+                modesOk = false;
+        }
+
+    // --- Mode switches and knob automation must stay click-free ---
+    int changeCount = 0;
+    const auto modeSwitch = renderCapture (
+        220.0, Mode::standard, 0.5f, 0.5f, 0.3f, false, 0.0f,
+        [&changeCount] (namberry::AcousticSim& s)
+        {
+            if (++changeCount == 6)
+                s.setMode (Mode::piezo);
+        });
+
+    changeCount = 0;
+    const auto bodySweep = renderCapture (
+        220.0, Mode::standard, 0.5f, 0.0f, 0.3f, false, 0.0f,
+        [&changeCount] (namberry::AcousticSim& s)
+        {
+            if (++changeCount == 6)
+                s.setBody (1.0f);
+        });
+
+    const float steadyDelta = maxDelta (renderCapture (220.0, Mode::standard,
+                                                       0.5f, 0.5f, 0.3f, false));
+    const float switchDelta = maxDelta (modeSwitch);
+    const float sweepDelta  = maxDelta (bodySweep);
+
+    // A hard switch would jump by the difference of two filter outputs
+    // (order 0.1); a smoothed crossfade stays near the signal's own slew.
+    const bool continuityOk = switchDelta < 0.04f
+                           && sweepDelta < 0.04f
+                           && steadyDelta < 0.04f;
+
+    const bool passed = bypassOk && bodyOk && topOk && piezoOk
+                     && levelOk && modesOk && continuityOk;
+
+    std::cout << "acousticSim bypass=" << rmsOf (bypassed)
+              << " body=" << rmsOf (bodyOff) << "->" << rmsOf (bodyOn)
+              << " top=" << rmsOf (topOff) << "->" << rmsOf (topOn)
+              << " piezo=" << rmsOf (piezoOff) << "->" << rmsOf (piezoOn)
+              << " level=" << rmsOf (levelUnity) << "->" << rmsOf (levelCut)
+              << " modes=" << (modesOk ? "ok" : "bad")
+              << " delta steady/switch/sweep=" << steadyDelta << "/" << switchDelta
+              << "/" << sweepDelta
+              << " " << (passed ? "PASS" : "FAIL") << "\n";
+
+    return passed ? 0 : 2;
+}
+
+int runAcousticAutoOffTest()
+{
+    // The message manager must exist before the first triggerAsyncUpdate():
+    // JUCE silently drops async messages posted while it is still null (real
+    // hosts always create it before audio starts).
+    juce::MessageManager::getInstance();
+
+    namberry::NAMBerryProcessor processor;
+    processor.setPlayConfigDetails (2, 2, 48000.0, 512);
+    processor.prepareToPlay (48000.0, 512);
+
+    auto& params = processor.getValueTreeState();
+
+    auto setParam = [&params] (const char* id, float normalised)
+    {
+        if (auto* p = params.getParameter (id))
+            p->setValueNotifyingHost (normalised);
+    };
+
+    auto value = [&params] (const char* id) -> float
+    {
+        return params.getRawParameterValue (id)->load();
+    };
+
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+
+    // Processes a block (arming the audio-thread edge detector) and pumps the
+    // message loop so handleAsyncUpdate() can flip the parameters.
+    auto flush = [&]
+    {
+        buffer.clear();
+        processor.processBlock (buffer, midi);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+    };
+
+    // Rig: pedal, IR and both EQs on, the amp already bypassed, sim off.
+    setParam ("pedalBypass", 0.0f);
+    setParam ("ampBypass", 1.0f);
+    setParam ("preEqBypass", 0.0f);
+    setParam ("postEqBypass", 0.0f);
+    setParam ("irBypass", 0.0f);
+    setParam ("acousticSimBypass", 1.0f);
+
+    // Engaging force-bypasses every stage that was on...
+    setParam ("acousticSimBypass", 0.0f);
+    flush();
+
+    const bool engagedForced = value ("pedalBypass") > 0.5f
+                            && value ("ampBypass") > 0.5f   // already off: untouched
+                            && value ("preEqBypass") > 0.5f
+                            && value ("postEqBypass") > 0.5f
+                            && value ("irBypass") > 0.5f;
+
+    // ...the user re-enables the pre-EQ by hand while the sim is on...
+    setParam ("preEqBypass", 0.0f);
+
+    // ...then disengages: the sim restores what it switched off and leaves
+    // the user's manual change (and the already-bypassed amp) alone.
+    setParam ("acousticSimBypass", 1.0f);
+    flush();
+
+    const bool restored = value ("pedalBypass") < 0.5f
+                       && value ("ampBypass") > 0.5f
+                       && value ("preEqBypass") < 0.5f
+                       && value ("postEqBypass") < 0.5f
+                       && value ("irBypass") < 0.5f;
+
+    // A loaded preset is ground truth: an engaged sim in the preset must not
+    // re-run the auto-off against the saved bypass states.
+    {
+        auto state = params.copyState();
+
+        auto setValueIn = [&state] (const char* id, float v)
+        {
+            auto child = state.getChildWithProperty ("id", id);
+            if (child.isValid())
+                child.setProperty ("value", v, nullptr);
+        };
+
+        setValueIn ("acousticSimBypass", 0.0f);   // sim engaged in the preset
+        setValueIn ("ampBypass", 0.0f);           // amp on in the preset
+        setValueIn ("pedalBypass", 0.0f);
+        setValueIn ("irBypass", 0.0f);            // IR on in the preset
+
+        std::unique_ptr<juce::XmlElement> xml (state.createXml());
+        juce::MemoryBlock block;
+        juce::AudioProcessor::copyXmlToBinary (*xml, block);
+        processor.setStateInformation (block.getData(), static_cast<int> (block.getSize()));
+    }
+
+    const bool presetKeptAmp = value ("ampBypass") < 0.5f
+                            && value ("pedalBypass") < 0.5f
+                            && value ("irBypass") < 0.5f;
+
+    flush();
+
+    const bool presetStillKeptAmp = value ("ampBypass") < 0.5f
+                                 && value ("pedalBypass") < 0.5f
+                                 && value ("irBypass") < 0.5f;
+
+    const bool passed = engagedForced && restored && presetKeptAmp && presetStillKeptAmp;
+
+    std::cout << "acousticAutoOff engagedForced=" << engagedForced
+              << " restored=" << restored
+              << " presetKeptAmp=" << presetKeptAmp
+              << " presetStillKeptAmp=" << presetStillKeptAmp
+              << " " << (passed ? "PASS" : "FAIL") << "\n";
+
+    return passed ? 0 : 2;
+}
+
 int runToneMatchTest()
 {
     constexpr double sampleRate = 48000.0;
@@ -2121,6 +2397,12 @@ int main (int argc, char** argv)
 
     if (argc > 1 && juce::String (argv[1]) == "--impersonator")
         return runImpersonatorTest();
+
+    if (argc > 1 && juce::String (argv[1]) == "--acoustic-sim")
+        return runAcousticSimTest();
+
+    if (argc > 1 && juce::String (argv[1]) == "--acoustic-auto-off")
+        return runAcousticAutoOffTest();
 
     if (argc > 1 && juce::String (argv[1]) == "--tone-match")
         return runToneMatchTest();
