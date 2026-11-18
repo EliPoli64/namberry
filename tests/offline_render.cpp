@@ -9,6 +9,7 @@
 
 #include "PluginProcessor.h"
 
+#include "namberry/PostAmpEQ.h"
 #include "namberry/Room.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
@@ -2306,6 +2307,220 @@ int runPresetTest()
     return passed ? 0 : 2;
 }
 
+int runPostEqTest()
+{
+    constexpr double sampleRate = 48000.0;
+    constexpr float inputRms = 0.2f / 1.41421356f;
+
+    auto render = [] (double frequency, const namberry::PostAmpEQ::Settings& settings,
+                      bool bypassed = false) -> float
+    {
+        constexpr double sr = 48000.0;
+        constexpr int bs = 512;
+        constexpr int numBlocks = 16;
+        constexpr float amplitude = 0.2f;
+
+        namberry::PostAmpEQ eq (settings);
+
+        juce::dsp::ProcessSpec spec;
+        spec.sampleRate = sr;
+        spec.maximumBlockSize = (juce::uint32) bs;
+        spec.numChannels = 2;
+        eq.prepare (spec);
+        eq.setBypass (bypassed);
+
+        juce::AudioBuffer<float> buffer (2, bs);
+        juce::MidiBuffer midi;
+        double phase = 0.0;
+        float sum = 0.0f;
+        int counted = 0;
+
+        for (int block = 0; block < numBlocks; ++block)
+        {
+            for (int i = 0; i < bs; ++i)
+            {
+                const auto sample = amplitude * (float) std::sin (phase);
+                phase += 2.0 * juce::MathConstants<double>::pi * frequency / sr;
+                buffer.setSample (0, i, sample);
+                buffer.setSample (1, i, sample);
+            }
+
+            eq.processBlock (buffer, midi);
+
+            if (block >= numBlocks - 4)
+            {
+                for (int i = 0; i < bs; ++i)
+                {
+                    sum += buffer.getSample (0, i) * buffer.getSample (0, i);
+                    ++counted;
+                }
+            }
+        }
+
+        return std::sqrt (sum / (float) juce::jmax (1, counted));
+    };
+
+    auto gainDb = [] (float value, float reference)
+    {
+        return 20.0f * std::log10 (juce::jmax (1.0e-9f, value)
+                                   / juce::jmax (1.0e-9f, reference));
+    };
+
+    const namberry::PostAmpEQ::Settings flat;
+    auto boosted = flat;
+    boosted.bands[4].gainDb = 12.0f;
+    boosted.bands[4].q = 3.0f;
+
+    auto cut = flat;
+    cut.bands[4].gainDb = -12.0f;
+    cut.bands[4].q = 3.0f;
+
+    const auto flat1k = render (1000.0, flat);
+    const auto boosted1k = render (1000.0, boosted);
+    const auto cut1k = render (1000.0, cut);
+    const auto flat100 = render (100.0, flat);
+    const auto boosted100 = render (100.0, boosted);
+
+    const auto boostGain = gainDb (boosted1k, flat1k);
+    const auto cutGain = gainDb (cut1k, flat1k);
+    const auto distantGain = gainDb (boosted100, flat100);
+
+    auto highPassed = flat;
+    highPassed.highPassFrequency = 500.0f;
+    highPassed.highPassQ = 0.707f;
+
+    auto lowPassed = flat;
+    lowPassed.lowPassFrequency = 2000.0f;
+    lowPassed.lowPassQ = 0.707f;
+
+    const auto highPassRatio = render (100.0, highPassed) / juce::jmax (1.0e-9f, render (100.0, flat));
+    const auto lowPassRatio = render (10000.0, lowPassed) / juce::jmax (1.0e-9f, render (10000.0, flat));
+    const auto bypassed1k = render (1000.0, boosted, true);
+
+    const auto responseAt1k = namberry::PostAmpEQ::getResponseDb (boosted, sampleRate, 1000.0);
+    const auto responseAt100 = namberry::PostAmpEQ::getResponseDb (boosted, sampleRate, 100.0);
+
+    const bool boostOk = std::abs (boostGain - 12.0f) < 1.2f;
+    const bool cutOk = std::abs (cutGain + 12.0f) < 1.2f;
+    const bool isolationOk = std::abs (distantGain) < 1.0f;
+    const bool hpfOk = highPassRatio < 0.20f;
+    const bool lpfOk = lowPassRatio < 0.20f;
+    const bool bypassOk = std::abs (bypassed1k - inputRms) < inputRms * 0.002f;
+    const bool responseOk = std::abs (responseAt1k - 12.0f) < 1.0f
+                         && std::abs (responseAt100) < 1.0f;
+
+    const bool passed = boostOk && cutOk && isolationOk && hpfOk && lpfOk
+                     && bypassOk && responseOk;
+
+    std::cout << "postEq boost=" << boostGain << " dB"
+              << " cut=" << cutGain << " dB"
+              << " distant=" << distantGain << " dB"
+              << " hpfRatio=" << highPassRatio
+              << " lpfRatio=" << lowPassRatio
+              << " bypass=" << bypassed1k
+              << " response1k=" << responseAt1k
+              << " response100=" << responseAt100
+              << " " << (passed ? "PASS" : "FAIL") << "\n";
+
+    return passed ? 0 : 2;
+}
+
+int runPostEqStateMigrationTest()
+{
+    namberry::NAMBerryProcessor processor;
+    auto state = processor.getValueTreeState().copyState();
+    state.setProperty ("fxVersion", 4, nullptr);
+
+    auto isNewPostEqId = [] (const juce::String& id)
+    {
+        return id.startsWith ("postEqBand")
+            || id == "postEqHpfQ"
+            || id == "postEqLpfQ";
+    };
+
+    for (int i = state.getNumChildren(); --i >= 0;)
+        if (isNewPostEqId (state.getChild (i).getProperty ("id").toString()))
+            state.removeChild (i, nullptr);
+
+    auto addParameter = [&state] (const juce::String& id, float value)
+    {
+        juce::ValueTree parameter ("PARAM");
+        parameter.setProperty ("id", id, nullptr);
+        parameter.setProperty ("value", value, nullptr);
+        state.appendChild (parameter, nullptr);
+    };
+
+    addParameter ("postEqFreq0", 120.0f);
+    addParameter ("postEqGain0", 3.0f);
+    addParameter ("postEqQ0", 0.8f);
+    addParameter ("postEqFreq1", 900.0f);
+    addParameter ("postEqGain1", -2.0f);
+    addParameter ("postEqQ1", 1.4f);
+    addParameter ("postEqFreq2", 6500.0f);
+    addParameter ("postEqGain2", 5.0f);
+    addParameter ("postEqQ2", 0.9f);
+    addParameter ("postEqHpfFreq", 80.0f);
+    addParameter ("postEqLpfFreq", 12000.0f);
+
+    std::unique_ptr<juce::XmlElement> xml (state.createXml());
+    juce::MemoryBlock block;
+    juce::AudioProcessor::copyXmlToBinary (*xml, block);
+    processor.setStateInformation (block.getData(), static_cast<int> (block.getSize()));
+
+    auto& parameters = processor.getValueTreeState();
+    auto value = [&parameters] (const char* id)
+    {
+        auto* parameter = parameters.getRawParameterValue (id);
+        return parameter != nullptr ? parameter->load() : -9999.0f;
+    };
+
+    const bool lowShelfOk = std::abs (value ("postEqBand0Freq") - 120.0f) < 0.01f
+                         && std::abs (value ("postEqBand0Gain") - 3.0f) < 0.01f
+                         && std::abs (value ("postEqBand0Q") - 0.8f) < 0.01f;
+    const bool midOk = std::abs (value ("postEqBand1Freq") - 900.0f) < 0.01f
+                    && std::abs (value ("postEqBand1Gain") + 2.0f) < 0.01f
+                    && std::abs (value ("postEqBand1Q") - 1.4f) < 0.01f;
+    const bool highShelfOk = std::abs (value ("postEqBand7Freq") - 6500.0f) < 0.01f
+                          && std::abs (value ("postEqBand7Gain") - 5.0f) < 0.01f
+                          && std::abs (value ("postEqBand7Q") - 0.9f) < 0.01f;
+    const bool passFiltersOk = std::abs (value ("postEqHpfFreq") - 80.0f) < 0.01f
+                            && std::abs (value ("postEqLpfFreq") - 12000.0f) < 0.01f
+                            && std::abs (value ("postEqHpfQ") - 0.707f) < 0.01f
+                            && std::abs (value ("postEqLpfQ") - 0.707f) < 0.01f;
+    const bool defaultsOk = std::abs (value ("postEqBand3Freq") - 500.0f) < 0.01f
+                         && std::abs (value ("postEqBand3Gain")) < 0.01f;
+
+    auto legacyRemoved = [&processor]()
+    {
+        const auto current = processor.getValueTreeState().copyState();
+
+        for (int i = 0; i < current.getNumChildren(); ++i)
+        {
+            const auto id = current.getChild (i).getProperty ("id").toString();
+
+            if (id.startsWith ("postEqFreq")
+                || id.startsWith ("postEqGain")
+                || id == "postEqQ0" || id == "postEqQ1" || id == "postEqQ2")
+                return false;
+        }
+
+        return true;
+    };
+
+    const bool passed = lowShelfOk && midOk && highShelfOk && passFiltersOk
+                     && defaultsOk && legacyRemoved();
+
+    std::cout << "postEq migration lowShelf=" << (lowShelfOk ? "ok" : "bad")
+              << " mid=" << (midOk ? "ok" : "bad")
+              << " highShelf=" << (highShelfOk ? "ok" : "bad")
+              << " passFilters=" << (passFiltersOk ? "ok" : "bad")
+              << " defaults=" << (defaultsOk ? "ok" : "bad")
+              << " legacyRemoved=" << (legacyRemoved() ? "yes" : "no")
+              << " " << (passed ? "PASS" : "FAIL") << "\n";
+
+    return passed ? 0 : 2;
+}
+
 int runPersistenceTest()
 {
     const juce::File namRoot ("/home/elipoli/Downloads/amps/NAMs");
@@ -2412,6 +2627,12 @@ int main (int argc, char** argv)
 
     if (argc > 1 && juce::String (argv[1]) == "--ir-state")
         return runIrStateMigrationTest();
+
+    if (argc > 1 && juce::String (argv[1]) == "--post-eq")
+        return runPostEqTest();
+
+    if (argc > 1 && juce::String (argv[1]) == "--post-eq-state")
+        return runPostEqStateMigrationTest();
 
     if (argc > 1 && juce::String (argv[1]) == "--persist")
         return runPersistenceTest();

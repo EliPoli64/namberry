@@ -3,6 +3,8 @@
 
 #include <juce_audio_basics/juce_audio_basics.h>
 
+#include <cmath>
+
 namespace namberry {
 
 //==============================================================================
@@ -11,6 +13,13 @@ namespace namberry {
 static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
+
+    auto makeFrequencyRange = [] (float minimum, float maximum)
+    {
+        juce::NormalisableRange<float> range (minimum, maximum, 1.0f);
+        range.setSkewForCentre (std::sqrt (minimum * maximum));
+        return range;
+    };
 
     // ---- Tuner reference ----
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
@@ -158,48 +167,58 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
         "preEqQ2", "Pre EQ High Q",
         juce::NormalisableRange<float>(0.1f, 10.0f, 0.01f), 1.0f));
 
-    // ---- Post-Amp EQ (3 bands) ----
+    // ---- Post-Amp EQ (8-band graphical EQ) ----
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         "postEqBypass", "Post EQ Bypass", false));
 
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "postEqFreq0", "Post EQ Low Freq",
-        juce::NormalisableRange<float>(20.0f, 200.0f, 1.0f), 200.0f));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "postEqGain0", "Post EQ Low Gain",
-        juce::NormalisableRange<float>(-24.0f, 24.0f, 0.1f), 0.0f));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "postEqQ0", "Post EQ Low Q",
-        juce::NormalisableRange<float>(0.1f, 10.0f, 0.01f), 1.0f));
+    struct PostEqBandDefault { float frequency; float q; };
+    const PostEqBandDefault bandDefaults[] = {
+        {   63.0f, 0.707f },
+        {  125.0f, 1.0f },
+        {  250.0f, 1.0f },
+        {  500.0f, 1.0f },
+        { 1000.0f, 1.0f },
+        { 2000.0f, 1.0f },
+        { 4000.0f, 1.0f },
+        { 8000.0f, 0.707f }
+    };
 
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "postEqFreq1", "Post EQ Mid Freq",
-        juce::NormalisableRange<float>(200.0f, 4000.0f, 1.0f), 1000.0f));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "postEqGain1", "Post EQ Mid Gain",
-        juce::NormalisableRange<float>(-24.0f, 24.0f, 0.1f), 0.0f));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "postEqQ1", "Post EQ Mid Q",
-        juce::NormalisableRange<float>(0.1f, 10.0f, 0.01f), 1.0f));
+    for (int band = 0; band < 8; ++band)
+    {
+        const auto index = juce::String (band);
+        const auto displayNumber = juce::String (band + 1);
+        const auto& defaults = bandDefaults[band];
 
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "postEqFreq2", "Post EQ High Freq",
-        juce::NormalisableRange<float>(4000.0f, 20000.0f, 1.0f), 4000.0f));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "postEqGain2", "Post EQ High Gain",
-        juce::NormalisableRange<float>(-24.0f, 24.0f, 0.1f), 0.0f));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "postEqQ2", "Post EQ High Q",
-        juce::NormalisableRange<float>(0.1f, 10.0f, 0.01f), 1.0f));
+        params.push_back(std::make_unique<juce::AudioParameterFloat>(
+            "postEqBand" + index + "Freq",
+            "Post EQ Band " + displayNumber + " Freq",
+            makeFrequencyRange (20.0f, 20000.0f), defaults.frequency,
+            juce::AudioParameterFloatAttributes().withLabel ("Hz")));
+        params.push_back(std::make_unique<juce::AudioParameterFloat>(
+            "postEqBand" + index + "Gain",
+            "Post EQ Band " + displayNumber + " Gain",
+            juce::NormalisableRange<float>(-24.0f, 24.0f, 0.1f), 0.0f,
+            juce::AudioParameterFloatAttributes().withLabel ("dB")));
+        params.push_back(std::make_unique<juce::AudioParameterFloat>(
+            "postEqBand" + index + "Q",
+            "Post EQ Band " + displayNumber + " Q",
+            juce::NormalisableRange<float>(0.1f, 10.0f, 0.01f), defaults.q));
+    }
 
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "postEqHpfFreq", "Post EQ HPF",
-        juce::NormalisableRange<float>(20.0f, 1000.0f, 1.0f), 20.0f,
+        makeFrequencyRange (20.0f, 2000.0f), 20.0f,
         juce::AudioParameterFloatAttributes().withLabel ("Hz")));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "postEqHpfQ", "Post EQ HPF Q",
+        juce::NormalisableRange<float>(0.1f, 10.0f, 0.01f), 0.707f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "postEqLpfFreq", "Post EQ LPF",
-        juce::NormalisableRange<float>(2000.0f, 20000.0f, 10.0f), 20000.0f,
+        makeFrequencyRange (2000.0f, 20000.0f), 20000.0f,
         juce::AudioParameterFloatAttributes().withLabel ("Hz")));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "postEqLpfQ", "Post EQ LPF Q",
+        juce::NormalisableRange<float>(0.1f, 10.0f, 0.01f), 0.707f));
 
     // ---- NAM Amp controls ----
     params.push_back(std::make_unique<juce::AudioParameterBool>(
@@ -367,7 +386,8 @@ namespace {
 
 constexpr int kPostFxStateVersion = 3;
 constexpr int kIrStateVersion = 4;
-constexpr int kFxStateVersion = kIrStateVersion;
+constexpr int kPostEqStateVersion = 5;
+constexpr int kFxStateVersion = kPostEqStateVersion;
 
 juce::ValueTree findParameterState (const juce::ValueTree& state, const juce::String& id)
 {
@@ -504,6 +524,83 @@ void migrateIrBlendState (juce::ValueTree& state)
     state.setProperty ("fxVersion", kIrStateVersion, nullptr);
 }
 
+void migratePostEqEightBandState (juce::ValueTree& state)
+{
+    // Version 5 replaced the three-band post EQ with an eight-band graphical
+    // EQ. Add the new parameters with their defaults, then map the legacy low,
+    // mid and high bands onto the low shelf, first bell and high shelf.
+    const float defaultFrequencies[] = {
+        63.0f, 125.0f, 250.0f, 500.0f, 1000.0f, 2000.0f, 4000.0f, 8000.0f
+    };
+    const float defaultQs[] = {
+        0.707f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.707f
+    };
+
+    for (int band = 0; band < 8; ++band)
+    {
+        const auto index = juce::String (band);
+        addParameterIfMissing (state, "postEqBand" + index + "Freq",
+                               defaultFrequencies[band]);
+        addParameterIfMissing (state, "postEqBand" + index + "Gain", 0.0f);
+        addParameterIfMissing (state, "postEqBand" + index + "Q", defaultQs[band]);
+    }
+
+    addParameterIfMissing (state, "postEqHpfFreq", 20.0f);
+    addParameterIfMissing (state, "postEqHpfQ", 0.707f);
+    addParameterIfMissing (state, "postEqLpfFreq", 20000.0f);
+    addParameterIfMissing (state, "postEqLpfQ", 0.707f);
+
+    struct LegacyBandMap
+    {
+        const char* legacyIndex;
+        int newBand;
+    };
+
+    const LegacyBandMap legacyBands[] = {
+        { "0", 0 }, // low shelf
+        { "1", 1 }, // mid peak
+        { "2", 7 }  // high shelf
+    };
+
+    for (const auto& mapping : legacyBands)
+    {
+        const auto oldIndex = juce::String (mapping.legacyIndex);
+        const auto newIndex = juce::String (mapping.newBand);
+
+        const auto oldFreqId = "postEqFreq" + oldIndex;
+        const auto oldGainId = "postEqGain" + oldIndex;
+        const auto oldQId = "postEqQ" + oldIndex;
+
+        if (findParameterState (state, oldFreqId).isValid())
+            setParameterValue (state, "postEqBand" + newIndex + "Freq",
+                               parameterValue (state, oldFreqId,
+                                               defaultFrequencies[mapping.newBand]));
+
+        if (findParameterState (state, oldGainId).isValid())
+            setParameterValue (state, "postEqBand" + newIndex + "Gain",
+                               parameterValue (state, oldGainId, 0.0f));
+
+        if (findParameterState (state, oldQId).isValid())
+            setParameterValue (state, "postEqBand" + newIndex + "Q",
+                               parameterValue (state, oldQId, defaultQs[mapping.newBand]));
+    }
+
+    // Drop the obsolete children so a later save cannot keep mixing two
+    // representations of the same EQ.
+    for (const auto* prefix : { "postEqFreq", "postEqGain", "postEqQ" })
+    {
+        for (int band = 0; band < 3; ++band)
+        {
+            auto child = findParameterState (state, juce::String (prefix) + juce::String (band));
+
+            if (child.isValid())
+                state.removeChild (child, nullptr);
+        }
+    }
+
+    state.setProperty ("fxVersion", kPostEqStateVersion, nullptr);
+}
+
 } // namespace
 
 //==============================================================================
@@ -539,7 +636,7 @@ NAMBerryProcessor::NAMBerryProcessor()
     namPedal_ = std::make_unique<NamModelLoader>();
     irLoader_ = std::make_unique<IrLoader>();
     preAmpEQ_ = std::make_unique<MultiBandEQ>();
-    postAmpEQ_ = std::make_unique<MultiBandEQ>();
+    postAmpEQ_ = std::make_unique<PostAmpEQ>();
     postEffects_ = std::make_unique<PostEffects>();
 }
 
@@ -751,24 +848,27 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         namModel_->processBlock(buffer, midiMessages);
     }
 
-    // 8. Post-Amp EQ
+    // 8. Post-Amp EQ (8-band graphical EQ)
     {
         const bool postEqBypassed = apvts_.getRawParameterValue("postEqBypass")->load() > 0.5f;
         postAmpEQ_->setBypass(postEqBypassed);
-        postAmpEQ_->setBandParameters(0,
-            apvts_.getRawParameterValue("postEqFreq0")->load(),
-            apvts_.getRawParameterValue("postEqGain0")->load(),
-            apvts_.getRawParameterValue("postEqQ0")->load());
-        postAmpEQ_->setBandParameters(1,
-            apvts_.getRawParameterValue("postEqFreq1")->load(),
-            apvts_.getRawParameterValue("postEqGain1")->load(),
-            apvts_.getRawParameterValue("postEqQ1")->load());
-        postAmpEQ_->setBandParameters(2,
-            apvts_.getRawParameterValue("postEqFreq2")->load(),
-            apvts_.getRawParameterValue("postEqGain2")->load(),
-            apvts_.getRawParameterValue("postEqQ2")->load());
-        postAmpEQ_->setHighPassFrequency (apvts_.getRawParameterValue("postEqHpfFreq")->load());
-        postAmpEQ_->setLowPassFrequency (apvts_.getRawParameterValue("postEqLpfFreq")->load());
+
+        for (int band = 0; band < PostAmpEQ::kNumBands; ++band)
+        {
+            const auto index = juce::String (band);
+            postAmpEQ_->setBandParameters (
+                band,
+                apvts_.getRawParameterValue ("postEqBand" + index + "Freq")->load(),
+                apvts_.getRawParameterValue ("postEqBand" + index + "Gain")->load(),
+                apvts_.getRawParameterValue ("postEqBand" + index + "Q")->load());
+        }
+
+        postAmpEQ_->setHighPassParameters (
+            apvts_.getRawParameterValue("postEqHpfFreq")->load(),
+            apvts_.getRawParameterValue("postEqHpfQ")->load());
+        postAmpEQ_->setLowPassParameters (
+            apvts_.getRawParameterValue("postEqLpfFreq")->load(),
+            apvts_.getRawParameterValue("postEqLpfQ")->load());
         postAmpEQ_->processBlock(buffer, midiMessages);
     }
 
@@ -948,6 +1048,9 @@ void NAMBerryProcessor::setStateInformation (const void* data, int sizeInBytes)
 
             if (version < kIrStateVersion)
                 migrateIrBlendState (state);
+
+            if (version < kPostEqStateVersion)
+                migratePostEqEightBandState (state);
 
             migrateRoomBypassState (state);
             apvts_.replaceState (state);

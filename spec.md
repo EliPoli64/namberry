@@ -5,7 +5,7 @@
 **NAMBerry** is a universal audio plugin that builds upon the foundation of NAM Universal but introduces a more comprehensive and better-implemented signal chain. The goal is to provide guitarists and producers with an all-in-one "amp-in-a-box" solution that rivals dedicated hardware.
 
 ### Key Differentiators from NAM Universal
-- **Expanded FX Chain**: Includes a full suite of studio-quality effects (Compressor, Overdrive, dual multi-band EQs, Chorus/Phaser/Flanger, Room, Delay, Reverb) integrated directly into the plugin, rather than relying on external plugins for basic tone shaping.
+- **Expanded FX Chain**: Includes a full suite of studio-quality effects (Compressor, Overdrive, 3-band pre-EQ, 8-band graphical post-EQ, Chorus/Phaser/Flanger, Room, Delay, Reverb) integrated directly into the plugin, rather than relying on external plugins for basic tone shaping.
 - **2-IR Loader with one Blend knob**: the same dual-cabinet idea as NAM Universal's loader, reduced to a single crossfading control instead of per-slot level/pan/phase mixers.
 - **Enhanced Amp Control**: Dedicated controls for Gain, Presence, Depth, and Output Volume, providing a more tactile "amp-like" feel compared to the OOMPH/SPARKLE impedance interaction model.
 - **True Static Linking**: Compiled with static libraries for Linux, Windows, and macOS to ensure maximum compatibility and ease of distribution without runtime dependency issues.
@@ -32,7 +32,7 @@
 ```
 Input → Tuner (detect) → Impersonator (pickup shaper) → Pitch (capo/drop) → Noise Gate → Acoustic Sim → Compressor → NAM Pedal/Preamp → Pre-Amp EQ →
 NAM Amp Loader (Gain, Bass, Mid, Treble, Presence, Depth, Output) →
-Post-Amp EQ (Multi-Band) → IR Loader (IR 1 / IR 2 + Blend) →
+Post-Amp EQ (8-band graphical) → IR Loader (IR 1 / IR 2 + Blend) →
 Post Effects (Chorus/Flanger/Phaser/Room/Delay/Reverb) → Master (+6 dB fixed trim) → Output
 ```
 
@@ -58,8 +58,10 @@ The editor should be organized into the following five sections, in this exact o
    - Depth
    - Output
 3. Post Amp EQ
-   - Multi-band EQ in a 3-3-2 layout
-   - High-pass and low-pass filters centered at the bottom
+   - Full-width, full-height graphical 8-band EQ
+   - Draggable nodes for frequency and gain, mouse wheel for Q
+   - Adjustable high-pass and low-pass filters with draggable cutoff handles
+   - Flat and bypass controls
 4. IR
    - 2 IR rows (filename screen, **LOAD**, arrows), one Blend knob, section bypass
 5. Post Effects
@@ -88,7 +90,8 @@ A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and alwa
   - `NoiseGate`
   - `Compressor` (multi-band or single-band with sidechain)
   - `NamPedalLoader` (second NAM model for pedal/preamp captures — not a waveshaper)
-  - `MultiBandEQ` (at least 3 bands: Low, Mid, High, with shelving/peaking options)
+  - `MultiBandEQ` (3-band Low/Mid/High pre-amp EQ)
+  - `PostAmpEQ` (8-band graphical post-amp EQ plus high-pass/low-pass)
   - `NamModelLoader` (wraps `NeuralAmpModelerCore` / `NeuralAudio`)
   - `IrLoader` (2 slots, each with an `dsp::Convolution` instance, blended by one crossfade)
   - `ModulationLfo` (shared sine/triangle LFO)
@@ -125,13 +128,19 @@ A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and alwa
   - **Smooth Switching**: IR loading stays asynchronous — the new IR is prepared off the audio thread and swapped in, so playback never drops out.
   - **State migration**: projects saved with the legacy four-slot model drop `irMix*`/`irPan*`/`irPhase*` and gain an `irBlend` derived from which slots were up (second slot alone → Blend 100 %, otherwise 0 %).
 
-### 4.3 Multi-Band EQs (Pre and Post Amp)
+### 4.3 EQs (Pre and Post Amp)
 - **Goal**: Provide tone shaping before and after the NAM model.
-- **Implementation**: Build a `MultiBandEQ` class using JUCE’s `dsp::IIR` filters.
-  - **Bands**: At least 3 bands per EQ (Low Shelf, Peak (Mid), High Shelf).
-  - **Parameters**: Frequency (20 Hz–20 kHz), Gain (-24 dB to +24 dB), Q (0.1–10).
-  - The Post-EQ additionally has a 12 dB/octave high-pass and low-pass (defaults 20 Hz and 20 kHz).
-  - Instantiate two separate `MultiBandEQ` objects: one placed before the NAM loader, one after the IR loader.
+- **Pre-EQ**: `MultiBandEQ`, built from JUCE’s `dsp::IIR` filters.
+  - Three bands: low shelf, mid peak, high shelf.
+  - Frequency 20 Hz–20 kHz, gain −24…+24 dB, Q 0.1–10.
+  - A footer **Volume** trim adds −12…+12 dB after the bands.
+- **Post-EQ**: `PostAmpEQ`, also built from `dsp::IIR` biquads.
+  - Low shelf, six bell bands and a high shelf, with independent frequency, gain and Q.
+  - Band frequency 20 Hz–20 kHz, gain −24…+24 dB, Q 0.1–10.
+  - A 12 dB/octave high-pass (20 Hz–2 kHz) and low-pass (2–20 kHz), each with adjustable Q.
+  - The editor draws the summed response and lets the user drag nodes and filter handles. The same static response helper drives the graph, so the display matches the audio filters.
+  - Parameters: `postEqBand0Freq/Gain/Q` … `postEqBand7Freq/Gain/Q`, `postEqHpfFreq`, `postEqHpfQ`, `postEqLpfFreq`, `postEqLpfQ`, `postEqBypass`.
+  - State version 5 migrates the old three-band post-EQ: low → band 0, mid → band 1, high → band 7. The old HPF/LPF cutoff values carry over and their Q defaults to 0.707.
 
 ### 4.4 Compressor
 - **Goal**: Provide dynamics control, ideally with a "Tight" mode for palm mutes (as seen in NAM Universal’s Aggravator).
@@ -278,7 +287,7 @@ Artifacts: `.vst3` (all), `.component` (AU, macOS), `.aaxplugin` (if SDK availab
 
 ### Phase 2: IR Loader & EQs (Weeks 3–4)
 - [x] Implement the 2-slot `IrLoader` with `dsp::Convolution` and a unity-summing Blend crossfade.
-- [x] Build `MultiBandEQ` class and instantiate two (pre and post).
+- [x] Build the 3-band `MultiBandEQ` for the pre-amp and the 8-band `PostAmpEQ` for after the amp.
 - [x] Integrate into signal chain.
 
 ### Phase 3: Dynamics & Drive (Weeks 5–6)

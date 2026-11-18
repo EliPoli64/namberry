@@ -45,17 +45,46 @@ juce::TextButton* findButton (juce::Component& parent, const juce::String& text)
     return nullptr;
 }
 
-void leftClick (juce::Component& target, float x, float y)
+juce::MouseEvent makeMouseEvent (juce::Component& target,
+                                 juce::Point<float> position,
+                                 juce::ModifierKeys modifiers,
+                                 int numberOfClicks = 1)
 {
     const auto now = juce::Time::getCurrentTime();
 
-    juce::MouseEvent event (juce::Desktop::getInstance().getMainMouseSource(),
-                            { x, y },
-                            juce::ModifierKeys::leftButtonModifier,
-                            0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-                            &target, &target, now, { x, y }, now, 1, false);
+    return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(),
+                             position,
+                             modifiers,
+                             0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                             &target, &target, now, position, now, numberOfClicks, false);
+}
 
-    target.mouseDown (event);
+void leftClick (juce::Component& target, float x, float y)
+{
+    target.mouseDown (makeMouseEvent (target, { x, y },
+                                      juce::ModifierKeys::leftButtonModifier));
+}
+
+void dragLeft (juce::Component& target, juce::Point<float> from, juce::Point<float> to)
+{
+    target.mouseDown (makeMouseEvent (target, from, juce::ModifierKeys::leftButtonModifier));
+    target.mouseDrag (makeMouseEvent (target, to, juce::ModifierKeys::leftButtonModifier));
+    target.mouseUp (makeMouseEvent (target, to, juce::ModifierKeys()));
+}
+
+void wheelOver (juce::Component& target, juce::Point<float> position, float deltaY)
+{
+    juce::MouseWheelDetails wheel;
+    wheel.deltaY = deltaY;
+    target.mouseWheelMove (makeMouseEvent (target, position, juce::ModifierKeys(), 0), wheel);
+}
+
+void doubleClick (juce::Component& target, juce::Point<float> position)
+{
+    target.mouseDown (makeMouseEvent (target, position, juce::ModifierKeys::leftButtonModifier));
+    target.mouseUp (makeMouseEvent (target, position, juce::ModifierKeys()));
+    target.mouseDoubleClick (makeMouseEvent (target, position,
+                                             juce::ModifierKeys::leftButtonModifier, 2));
 }
 
 // Taps outside the popup panel, which is how the menu is dismissed on screen.
@@ -203,6 +232,84 @@ int main (int argc, char** argv)
 
     if (findButton (editor, "LOAD") == nullptr)
         std::cerr << "FAIL: IR LOAD button not found\n";
+
+    // Post EQ tab: drag band 1, change its Q with the wheel, then double-click
+    // it back to 0 dB. This exercises the graphical editor without a screen.
+    tabBar->setCurrentTabIndex (2, false);
+    editor.resized();
+
+    bool interactionOk = true;
+
+    if (auto* graph = findChildByName (editor, "PostEqGraph"))
+    {
+        const float width = (float) graph->getWidth();
+        const float height = (float) graph->getHeight();
+        const float plotX = 52.0f;
+        const float plotY = 46.0f;
+        const float plotWidth = width - 74.0f;
+        const float plotHeight = height - 94.0f;
+
+        auto xForFrequency = [plotX, plotWidth] (float frequency)
+        {
+            const auto normalised = std::log (frequency / 20.0f) / std::log (1000.0f);
+            return plotX + normalised * plotWidth;
+        };
+
+        auto yForGain = [plotY, plotHeight] (float gainDb)
+        {
+            return plotY + (24.0f - gainDb) / 48.0f * plotHeight;
+        };
+
+        auto value = [&processor] (const char* id)
+        {
+            auto* parameter = processor.getValueTreeState().getRawParameterValue (id);
+            return parameter != nullptr ? parameter->load() : -9999.0f;
+        };
+
+        dragLeft (*graph,
+                  { xForFrequency (63.0f), yForGain (0.0f) },
+                  { xForFrequency (1000.0f), yForGain (6.0f) });
+
+        const auto draggedFrequency = value ("postEqBand0Freq");
+        const auto draggedGain = value ("postEqBand0Gain");
+
+        if (std::abs (draggedFrequency - 1000.0f) > 2.0f
+            || std::abs (draggedGain - 6.0f) > 0.15f)
+        {
+            std::cerr << "FAIL: post EQ drag freq=" << draggedFrequency
+                      << " gain=" << draggedGain << "\n";
+            interactionOk = false;
+        }
+
+        const juce::Point<float> node { xForFrequency (draggedFrequency),
+                                        yForGain (draggedGain) };
+        wheelOver (*graph, node, 1.0f);
+        const auto wheelQ = value ("postEqBand0Q");
+
+        if (wheelQ <= 0.75f)
+        {
+            std::cerr << "FAIL: post EQ wheel did not change Q: " << wheelQ << "\n";
+            interactionOk = false;
+        }
+
+        doubleClick (*graph, node);
+        const auto resetGain = value ("postEqBand0Gain");
+
+        if (std::abs (resetGain) > 0.05f)
+        {
+            std::cerr << "FAIL: post EQ double-click did not reset gain: "
+                      << resetGain << "\n";
+            interactionOk = false;
+        }
+    }
+    else
+    {
+        std::cerr << "FAIL: post EQ graph not found\n";
+        interactionOk = false;
+    }
+
+    if (! interactionOk)
+        return 1;
 
     std::cout << "PASS\n";
     return 0;

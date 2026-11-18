@@ -1,5 +1,12 @@
 # NAMberry UI Implementation Plan
 
+> **Implementation note:** the shipped editor is JUCE, not Qt/QML. This document
+> is retained as the earlier UI exploration. The current Post EQ is a JUCE
+> component (`PostEqEditor`) that fills a rack panel with a live 8-band response
+> graph, draggable band nodes, draggable HPF/LPF handles, wheel-adjusted Q, a
+> Flat button and a bypass toggle. The QML component sketches below are
+> historical and are not part of the build.
+
 This document describes the visual language and interaction model for the **NAMberry** plugin editor: a grounded, playful, stompbox-inspired interface built around a clear signal flow. The editor must feel like a tiny pedalboard and amp stack, not a dense rack of controls.
 
 ## Design Direction
@@ -26,6 +33,15 @@ This document describes the visual language and interaction model for the **NAMb
 - Gain, Bass, Mid, Treble, Presence, Depth, and Output are laid out in a compact horizontal band.
 - The bypass switch sits as the amp’s footswitch below the control row.
 - The overall composition is intentionally similar to a hardware amp front panel: wide dark body, bright metal details, and white labeling that feels premium and tactile.
+
+### Post EQ pattern
+- A single full-width rack panel rather than a grid of knobs.
+- A dark inset screen shows the summed EQ response from 20 Hz to 20 kHz.
+- Eight colour-coded, numbered nodes sit on the curve. Dragging changes frequency and gain; the wheel changes Q.
+- HPF and LPF handles sit along the bottom of the graph and are dragged horizontally.
+- The top bar shows the selected band or filter values, with **Flat** and **Bypass** controls on the right.
+- The graph and readout update from host automation as well as mouse input.
+- The panel stretches with the window; the graph row absorbs leftover height.
 
 This is the current target design for the JUCE editor implementation.
 

@@ -1,6 +1,9 @@
 #include "PluginEditor.h"
 
+#include "namberry/PostAmpEQ.h"
+
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
 #include <utility>
@@ -1067,38 +1070,6 @@ private:
 };
 
 //==============================================================================
-/// Centers two controls in a row while keeping the standard knob footprint.
-class CenteredPairRow : public juce::Component
-{
-public:
-    CenteredPairRow (juce::Component* first, juce::Component* second)
-        : first_ (first), second_ (second)
-    {
-        addAndMakeVisible (first_);
-        addAndMakeVisible (second_);
-    }
-
-    void resized() override
-    {
-        const int controlWidth = ParamControl::cellWidth;
-        const int gap = 8;
-        const int totalWidth = controlWidth * 2 + gap;
-        const int height = juce::jmin (getHeight(), ParamControl::cellHeight);
-        const int x = (getWidth() - totalWidth) / 2;
-        const int y = (getHeight() - height) / 2;
-
-        first_->setBounds (x, y, controlWidth, height);
-        second_->setBounds (x + controlWidth + gap, y, controlWidth, height);
-    }
-
-private:
-    juce::Component* first_;
-    juce::Component* second_;
-
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CenteredPairRow)
-};
-
-//==============================================================================
 /// Hardware-style filename LCD. Clicking it opens the popup that lists the
 /// files in the folder, so the screen doubles as the file picker.
 class FileScreen : public juce::Component,
@@ -1291,6 +1262,915 @@ private:
 };
 
 //==============================================================================
+/// Full-width graphical editor for the eight-band post-amp EQ.
+class PostEqEditor : public juce::Component,
+                     private juce::Timer
+{
+public:
+    PostEqEditor (APVTS& state, std::function<double()> sampleRateProvider)
+        : state_ (state), sampleRateProvider_ (std::move (sampleRateProvider))
+    {
+        setName ("PostEqGraph");
+        setWantsKeyboardFocus (true);
+
+        for (int band = 0; band < (int) bandFreqIds_.size(); ++band)
+        {
+            const auto index = juce::String (band);
+            bandFreqIds_[(size_t) band] = "postEqBand" + index + "Freq";
+            bandGainIds_[(size_t) band] = "postEqBand" + index + "Gain";
+            bandQIds_[(size_t) band] = "postEqBand" + index + "Q";
+
+            bandFreqParams_[(size_t) band] = state_.getParameter (bandFreqIds_[(size_t) band]);
+            bandGainParams_[(size_t) band] = state_.getParameter (bandGainIds_[(size_t) band]);
+            bandQParams_[(size_t) band] = state_.getParameter (bandQIds_[(size_t) band]);
+        }
+
+        highPassFreqParam_ = state_.getParameter ("postEqHpfFreq");
+        highPassQParam_ = state_.getParameter ("postEqHpfQ");
+        lowPassFreqParam_ = state_.getParameter ("postEqLpfFreq");
+        lowPassQParam_ = state_.getParameter ("postEqLpfQ");
+
+        bypassButton_.setButtonText ("Bypass");
+        bypassButton_.setTooltip ("Bypass the post-amp EQ");
+        bypassButton_.setMouseCursor (juce::MouseCursor::PointingHandCursor);
+        bypassButton_.onStateChange = [this]
+        {
+            updateCache();
+            repaint();
+        };
+        addAndMakeVisible (bypassButton_);
+        bypassAttachment_ = std::make_unique<APVTS::ButtonAttachment> (
+            state_, "postEqBypass", bypassButton_);
+
+        flatButton_.setButtonText ("Flat");
+        flatButton_.setTooltip ("Flat the EQ gains, HPF and LPF");
+        flatButton_.setMouseCursor (juce::MouseCursor::PointingHandCursor);
+        flatButton_.onClick = [this] { flatten(); };
+        addAndMakeVisible (flatButton_);
+
+        cachedSettings_ = readSettings();
+        cachedBypassed_ = isBypassedInState();
+        startTimerHz (30);
+    }
+
+    ~PostEqEditor() override
+    {
+        endActiveGesture();
+        stopTimer();
+    }
+
+    void visibilityChanged() override
+    {
+        if (! isVisible())
+        {
+            endActiveGesture();
+            dragTarget_ = DragTarget::None;
+            activeBand_ = -1;
+        }
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (14, 8);
+        topArea_ = r.removeFromTop (30);
+        hintArea_ = r.removeFromBottom (22);
+        screenArea_ = r.toFloat();
+
+        auto plot = r;
+        plot.removeFromLeft (38);
+        plot.removeFromRight (8);
+        plot.removeFromTop (8);
+        plot.removeFromBottom (18);
+        plotArea_ = plot.toFloat();
+
+        auto controls = topArea_;
+        auto buttonArea = controls.removeFromRight (176);
+        flatButton_.setBounds (buttonArea.removeFromRight (56).reduced (2, 3));
+        bypassButton_.setBounds (buttonArea.removeFromRight (112).reduced (2, 3));
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        if (screenArea_.isEmpty() || plotArea_.isEmpty())
+            return;
+
+        // Selected-band / filter readout.
+        g.setColour (juce::Colour (kText));
+        g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+        g.drawFittedText (statusText(), topArea_.withTrimmedRight (180),
+                          juce::Justification::centredLeft, 1, 0.85f);
+
+        // Recessed screen.
+        g.setGradientFill (juce::ColourGradient (
+            juce::Colour (0xff0a1014), screenArea_.getX(), screenArea_.getY(),
+            juce::Colour (0xff050708), screenArea_.getX(), screenArea_.getBottom(), false));
+        g.fillRoundedRectangle (screenArea_, 6.0f);
+        g.setColour (juce::Colour (0xff1d3438));
+        g.drawRoundedRectangle (screenArea_, 6.0f, 1.2f);
+
+        drawGrid (g);
+        drawCutRegions (g);
+        drawCurve (g);
+        drawPassHandles (g);
+        drawNodes (g);
+
+        if (cachedBypassed_)
+        {
+            g.setColour (juce::Colours::black.withAlpha (0.42f));
+            g.fillRoundedRectangle (screenArea_, 6.0f);
+            g.setColour (juce::Colour (kTextDim));
+            g.setFont (juce::FontOptions (18.0f, juce::Font::bold));
+            g.drawText ("BYPASSED", screenArea_, juce::Justification::centred);
+        }
+
+        g.setColour (juce::Colour (kTextDim).withAlpha (0.82f));
+        g.setFont (juce::FontOptions (9.5f, juce::Font::bold));
+        g.drawFittedText ("DRAG: FREQ / GAIN    WHEEL: Q    DOUBLE-CLICK: RESET    RIGHT-CLICK: MENU",
+                          hintArea_, juce::Justification::centredLeft, 1, 0.85f);
+    }
+
+    void mouseDown (const juce::MouseEvent& event) override
+    {
+        if (! plotArea_.contains (event.position))
+            return;
+
+        const int band = bandAt (event.position);
+        const auto pass = passAt (event.position);
+
+        if (event.mods.isPopupMenu())
+        {
+            if (band >= 0)
+            {
+                selectedBand_ = band;
+                selectedPass_ = Pass::None;
+            }
+            else if (pass != Pass::None)
+            {
+                selectedBand_ = -1;
+                selectedPass_ = pass;
+            }
+
+            repaint();
+            showContextMenu (band, pass);
+            return;
+        }
+
+        if (! event.mods.isLeftButtonDown())
+            return;
+
+        if (band >= 0)
+        {
+            selectedBand_ = band;
+            selectedPass_ = Pass::None;
+            hoverBand_ = band;
+            hoverPass_ = Pass::None;
+            activeBand_ = band;
+            dragTarget_ = DragTarget::Band;
+
+            beginGesture (bandFreqParams_[(size_t) band]);
+            beginGesture (bandGainParams_[(size_t) band]);
+            repaint();
+            return;
+        }
+
+        if (pass != Pass::None)
+        {
+            selectedBand_ = -1;
+            selectedPass_ = pass;
+            hoverBand_ = -1;
+            hoverPass_ = pass;
+            dragTarget_ = pass == Pass::HighPass ? DragTarget::HighPass
+                                                 : DragTarget::LowPass;
+
+            beginGesture (pass == Pass::HighPass ? highPassFreqParam_ : lowPassFreqParam_);
+            repaint();
+            return;
+        }
+
+        selectedBand_ = -1;
+        selectedPass_ = Pass::None;
+        dragTarget_ = DragTarget::None;
+        repaint();
+    }
+
+    void mouseDrag (const juce::MouseEvent& event) override
+    {
+        if (dragTarget_ == DragTarget::Band && activeBand_ >= 0)
+        {
+            const auto index = (size_t) activeBand_;
+            setParameterValue (bandFreqParams_[index],
+                               xToFrequency (event.position.x));
+            setParameterValue (bandGainParams_[index],
+                               yToGain (event.position.y));
+            updateCache();
+            return;
+        }
+
+        if (dragTarget_ == DragTarget::HighPass || dragTarget_ == DragTarget::LowPass)
+        {
+            float frequency = xToFrequency (event.position.x);
+
+            if (dragTarget_ == DragTarget::HighPass)
+                frequency = juce::jlimit (20.0f, 2000.0f, frequency);
+            else
+                frequency = juce::jlimit (2000.0f, 20000.0f, frequency);
+
+            setParameterValue (dragTarget_ == DragTarget::HighPass
+                                   ? highPassFreqParam_
+                                   : lowPassFreqParam_,
+                               frequency);
+            updateCache();
+        }
+    }
+
+    void mouseUp (const juce::MouseEvent&) override
+    {
+        endActiveGesture();
+        dragTarget_ = DragTarget::None;
+        activeBand_ = -1;
+    }
+
+    void mouseMove (const juce::MouseEvent& event) override
+    {
+        if (dragTarget_ != DragTarget::None)
+            return;
+
+        const int band = bandAt (event.position);
+        const auto pass = passAt (event.position);
+
+        if (band != hoverBand_ || pass != hoverPass_)
+        {
+            hoverBand_ = band;
+            hoverPass_ = pass;
+            repaint();
+        }
+
+        setMouseCursor (band >= 0 || pass != Pass::None
+                            ? juce::MouseCursor::PointingHandCursor
+                            : juce::MouseCursor::NormalCursor);
+    }
+
+    void mouseExit (const juce::MouseEvent&) override
+    {
+        if (hoverBand_ != -1 || hoverPass_ != Pass::None)
+        {
+            hoverBand_ = -1;
+            hoverPass_ = Pass::None;
+            repaint();
+        }
+
+        setMouseCursor (juce::MouseCursor::NormalCursor);
+    }
+
+    void mouseDoubleClick (const juce::MouseEvent& event) override
+    {
+        const int band = bandAt (event.position);
+
+        if (band >= 0)
+        {
+            beginGesture (bandGainParams_[(size_t) band]);
+            setParameterValue (bandGainParams_[(size_t) band], 0.0f);
+            endGesture (bandGainParams_[(size_t) band]);
+            updateCache();
+            return;
+        }
+
+        const auto pass = passAt (event.position);
+
+        if (pass != Pass::None)
+        {
+            auto* param = pass == Pass::HighPass ? highPassFreqParam_ : lowPassFreqParam_;
+            beginGesture (param);
+            setParameterValue (param, pass == Pass::HighPass ? 20.0f : 20000.0f);
+            endGesture (param);
+            updateCache();
+        }
+    }
+
+    void mouseWheelMove (const juce::MouseEvent& event,
+                         const juce::MouseWheelDetails& wheel) override
+    {
+        const float direction = wheel.deltaY > 0.0f ? 1.0f : -1.0f;
+        const float step = event.mods.isShiftDown() ? 0.45f : 1.8f;
+        const float factor = std::pow (1.15f, direction * step);
+
+        const int band = bandAt (event.position);
+        const auto pass = passAt (event.position);
+
+        if (band >= 0)
+        {
+            auto* param = bandQParams_[(size_t) band];
+            const auto current = rawValue (bandQIds_[(size_t) band], 1.0f);
+
+            beginGesture (param);
+            setParameterValue (param, current * factor);
+            endGesture (param);
+            updateCache();
+            return;
+        }
+
+        if (pass != Pass::None)
+        {
+            auto* param = pass == Pass::HighPass ? highPassQParam_ : lowPassQParam_;
+            const auto current = pass == Pass::HighPass
+                ? rawValue ("postEqHpfQ", 0.707f)
+                : rawValue ("postEqLpfQ", 0.707f);
+
+            beginGesture (param);
+            setParameterValue (param, current * factor);
+            endGesture (param);
+            updateCache();
+        }
+    }
+
+private:
+    enum class DragTarget { None, Band, HighPass, LowPass };
+    enum class Pass { None, HighPass, LowPass };
+
+    static constexpr int numBands = (int) PostAmpEQ::kNumBands;
+
+    //==========================================================================
+    PostAmpEQ::Settings readSettings() const
+    {
+        PostAmpEQ::Settings settings;
+
+        for (int band = 0; band < numBands; ++band)
+        {
+            const auto index = (size_t) band;
+            settings.bands[index] = {
+                rawValue (bandFreqIds_[index], settings.bands[index].frequency),
+                rawValue (bandGainIds_[index], 0.0f),
+                rawValue (bandQIds_[index], settings.bands[index].q)
+            };
+        }
+
+        settings.highPassFrequency = rawValue ("postEqHpfFreq", 20.0f);
+        settings.highPassQ = rawValue ("postEqHpfQ", 0.707f);
+        settings.lowPassFrequency = rawValue ("postEqLpfFreq", 20000.0f);
+        settings.lowPassQ = rawValue ("postEqLpfQ", 0.707f);
+        return settings;
+    }
+
+    float rawValue (const juce::String& id, float fallback) const
+    {
+        if (auto* value = state_.getRawParameterValue (id))
+            return value->load();
+
+        return fallback;
+    }
+
+    bool isBypassedInState() const
+    {
+        return rawValue ("postEqBypass", 0.0f) > 0.5f;
+    }
+
+    static bool settingsEqual (const PostAmpEQ::Settings& a,
+                               const PostAmpEQ::Settings& b)
+    {
+        for (size_t i = 0; i < a.bands.size(); ++i)
+        {
+            if (! juce::approximatelyEqual (a.bands[i].frequency, b.bands[i].frequency)
+                || ! juce::approximatelyEqual (a.bands[i].gainDb, b.bands[i].gainDb)
+                || ! juce::approximatelyEqual (a.bands[i].q, b.bands[i].q))
+                return false;
+        }
+
+        return juce::approximatelyEqual (a.highPassFrequency, b.highPassFrequency)
+            && juce::approximatelyEqual (a.highPassQ, b.highPassQ)
+            && juce::approximatelyEqual (a.lowPassFrequency, b.lowPassFrequency)
+            && juce::approximatelyEqual (a.lowPassQ, b.lowPassQ);
+    }
+
+    void updateCache()
+    {
+        cachedSettings_ = readSettings();
+        cachedBypassed_ = isBypassedInState();
+        repaint();
+    }
+
+    void timerCallback() override
+    {
+        const auto settings = readSettings();
+        const bool bypassed = isBypassedInState();
+
+        if (! settingsEqual (settings, cachedSettings_) || bypassed != cachedBypassed_)
+        {
+            cachedSettings_ = settings;
+            cachedBypassed_ = bypassed;
+            repaint();
+        }
+    }
+
+    static void setParameterValue (juce::RangedAudioParameter* parameter, float value)
+    {
+        if (parameter == nullptr)
+            return;
+
+        const auto& range = parameter->getNormalisableRange();
+        const auto legal = range.snapToLegalValue (
+            juce::jlimit (range.start, range.end, value));
+        parameter->setValueNotifyingHost (parameter->convertTo0to1 (legal));
+    }
+
+    static void beginGesture (juce::RangedAudioParameter* parameter)
+    {
+        if (parameter != nullptr)
+            parameter->beginChangeGesture();
+    }
+
+    static void endGesture (juce::RangedAudioParameter* parameter)
+    {
+        if (parameter != nullptr)
+            parameter->endChangeGesture();
+    }
+
+    void endActiveGesture()
+    {
+        if (dragTarget_ == DragTarget::Band && activeBand_ >= 0)
+        {
+            const auto index = (size_t) activeBand_;
+            endGesture (bandFreqParams_[index]);
+            endGesture (bandGainParams_[index]);
+        }
+        else if (dragTarget_ == DragTarget::HighPass)
+        {
+            endGesture (highPassFreqParam_);
+        }
+        else if (dragTarget_ == DragTarget::LowPass)
+        {
+            endGesture (lowPassFreqParam_);
+        }
+    }
+
+    //==========================================================================
+    double sampleRate() const
+    {
+        const auto rate = sampleRateProvider_ != nullptr ? sampleRateProvider_() : 0.0;
+        return rate > 0.0 ? rate : 48000.0;
+    }
+
+    float frequencyToX (float frequency) const
+    {
+        const auto clamped = juce::jlimit (20.0f, 20000.0f, frequency);
+        const auto normalized = std::log (clamped / 20.0f) / std::log (1000.0f);
+        return plotArea_.getX() + normalized * plotArea_.getWidth();
+    }
+
+    float xToFrequency (float x) const
+    {
+        const auto normalized = juce::jlimit (
+            0.0f, 1.0f, (x - plotArea_.getX()) / juce::jmax (1.0f, plotArea_.getWidth()));
+        return 20.0f * std::pow (1000.0f, normalized);
+    }
+
+    float gainToY (float gainDb) const
+    {
+        const auto normalized = (juce::jlimit (-24.0f, 24.0f, gainDb) + 24.0f) / 48.0f;
+        return plotArea_.getBottom() - normalized * plotArea_.getHeight();
+    }
+
+    float yToGain (float y) const
+    {
+        const auto normalized = juce::jlimit (
+            0.0f, 1.0f, (plotArea_.getBottom() - y) / juce::jmax (1.0f, plotArea_.getHeight()));
+        return normalized * 48.0f - 24.0f;
+    }
+
+    juce::Point<float> bandNodeCentre (int band) const
+    {
+        const auto& value = cachedSettings_.bands[(size_t) band];
+        const auto x = juce::jlimit (plotArea_.getX() + 9.0f,
+                                     plotArea_.getRight() - 9.0f,
+                                     frequencyToX (value.frequency));
+        return { x, gainToY (value.gainDb) };
+    }
+
+    int bandAt (juce::Point<float> position) const
+    {
+        if (! plotArea_.expanded (14.0f).contains (position))
+            return -1;
+
+        for (int band = numBands - 1; band >= 0; --band)
+            if (bandNodeCentre (band).getDistanceFrom (position) <= 14.0f)
+                return band;
+
+        return -1;
+    }
+
+    juce::Rectangle<float> passHandleBounds (Pass pass) const
+    {
+        const auto frequency = pass == Pass::HighPass
+            ? cachedSettings_.highPassFrequency
+            : cachedSettings_.lowPassFrequency;
+        const auto x = juce::jlimit (plotArea_.getX() + 15.0f,
+                                     plotArea_.getRight() - 15.0f,
+                                     frequencyToX (frequency));
+        return { x - 15.0f, plotArea_.getBottom() - 17.0f, 30.0f, 15.0f };
+    }
+
+    Pass passAt (juce::Point<float> position) const
+    {
+        if (passHandleBounds (Pass::HighPass).expanded (4.0f).contains (position))
+            return Pass::HighPass;
+
+        if (passHandleBounds (Pass::LowPass).expanded (4.0f).contains (position))
+            return Pass::LowPass;
+
+        return Pass::None;
+    }
+
+    //==========================================================================
+    void drawGrid (juce::Graphics& g)
+    {
+        static const float minorFrequencies[] = {
+            20.0f, 30.0f, 50.0f, 70.0f, 100.0f, 200.0f, 300.0f, 500.0f,
+            700.0f, 1000.0f, 2000.0f, 3000.0f, 5000.0f, 7000.0f, 10000.0f, 20000.0f
+        };
+        static const float labelFrequencies[] = {
+            20.0f, 50.0f, 100.0f, 200.0f, 500.0f, 1000.0f,
+            2000.0f, 5000.0f, 10000.0f, 20000.0f
+        };
+
+        for (float frequency : minorFrequencies)
+        {
+            const auto x = frequencyToX (frequency);
+            const bool edge = frequency <= 20.0f || frequency >= 20000.0f;
+            g.setColour (juce::Colours::white.withAlpha (edge ? 0.10f : 0.055f));
+            g.drawVerticalLine ((int) std::round (x), plotArea_.getY(), plotArea_.getBottom());
+        }
+
+        for (float frequency : labelFrequencies)
+        {
+            const auto x = frequencyToX (frequency);
+            auto label = juce::Rectangle<float> (x - 22.0f, plotArea_.getBottom() + 2.0f,
+                                                 44.0f, 14.0f);
+            g.setColour (juce::Colour (kTextDim).withAlpha (0.8f));
+            g.setFont (juce::FontOptions (8.5f));
+            g.drawText (frequencyLabel (frequency), label,
+                        juce::Justification::centred);
+        }
+
+        for (int db = -24; db <= 24; db += 6)
+        {
+            const auto y = gainToY ((float) db);
+            const bool zero = db == 0;
+
+            g.setColour (zero ? juce::Colour (kAccent).withAlpha (0.22f)
+                              : juce::Colours::white.withAlpha (0.055f));
+            g.drawHorizontalLine ((int) std::round (y), plotArea_.getX(), plotArea_.getRight());
+
+            if (db % 12 == 0 || zero)
+            {
+                const auto label = db > 0 ? "+" + juce::String (db)
+                                          : juce::String (db);
+                g.setColour (juce::Colour (kTextDim).withAlpha (0.8f));
+                g.setFont (juce::FontOptions (8.5f));
+                g.drawText (label,
+                            juce::Rectangle<float> (screenArea_.getX() + 5.0f, y - 7.0f,
+                                                    30.0f, 14.0f),
+                            juce::Justification::centredRight);
+            }
+        }
+    }
+
+    void drawCutRegions (juce::Graphics& g)
+    {
+        const auto highPassX = frequencyToX (cachedSettings_.highPassFrequency);
+        const auto lowPassX = frequencyToX (cachedSettings_.lowPassFrequency);
+
+        g.setColour (juce::Colour (0xff60a5fa).withAlpha (cachedBypassed_ ? 0.025f : 0.055f));
+        g.fillRect (juce::Rectangle<float> (plotArea_.getX(), plotArea_.getY(),
+                                            highPassX - plotArea_.getX(),
+                                            plotArea_.getHeight()));
+        g.fillRect (juce::Rectangle<float> (lowPassX, plotArea_.getY(),
+                                            plotArea_.getRight() - lowPassX,
+                                            plotArea_.getHeight()));
+    }
+
+    void drawCurve (juce::Graphics& g)
+    {
+        const int columns = juce::jlimit (2, 1600, (int) std::round (plotArea_.getWidth()));
+
+        std::vector<double> frequencies ((size_t) columns);
+        std::vector<float> response ((size_t) columns);
+
+        for (int column = 0; column < columns; ++column)
+            frequencies[(size_t) column] = xToFrequency (
+                plotArea_.getX() + (float) column + 0.5f);
+
+        PostAmpEQ::getResponseDb (cachedSettings_, sampleRate(),
+                                  frequencies.data(), response.data(), columns);
+
+        juce::Path curve;
+        bool started = false;
+
+        for (int column = 0; column < columns; ++column)
+        {
+            const auto x = plotArea_.getX() + (float) column;
+            const auto y = juce::jlimit (plotArea_.getY(), plotArea_.getBottom(),
+                                        gainToY (response[(size_t) column]));
+
+            if (! started)
+            {
+                curve.startNewSubPath (x, y);
+                started = true;
+            }
+            else
+            {
+                curve.lineTo (x, y);
+            }
+        }
+
+        if (! started)
+            return;
+
+        juce::Path fill (curve);
+        fill.lineTo (plotArea_.getRight(), plotArea_.getBottom());
+        fill.lineTo (plotArea_.getX(), plotArea_.getBottom());
+        fill.closeSubPath();
+
+        const auto accent = juce::Colour (kAccent);
+        const auto alpha = cachedBypassed_ ? 0.05f : 0.20f;
+        g.setGradientFill (juce::ColourGradient (
+            accent.withAlpha (alpha), plotArea_.getX(), plotArea_.getY(),
+            accent.withAlpha (0.015f), plotArea_.getX(), plotArea_.getBottom(), false));
+        g.fillPath (fill);
+
+        g.setColour (accent.withAlpha (cachedBypassed_ ? 0.30f : 0.95f));
+        g.strokePath (curve, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved,
+                                                   juce::PathStrokeType::rounded));
+    }
+
+    void drawPassHandles (juce::Graphics& g)
+    {
+        drawPassHandle (g, Pass::HighPass);
+        drawPassHandle (g, Pass::LowPass);
+    }
+
+    void drawPassHandle (juce::Graphics& g, Pass pass)
+    {
+        const bool isHighPass = pass == Pass::HighPass;
+        const auto frequency = isHighPass
+            ? cachedSettings_.highPassFrequency
+            : cachedSettings_.lowPassFrequency;
+        const auto x = frequencyToX (frequency);
+        const auto selected = selectedPass_ == pass;
+
+        g.setColour (juce::Colour (0xff93c5fd).withAlpha (
+            cachedBypassed_ ? 0.18f : (selected ? 0.75f : 0.40f)));
+        g.drawVerticalLine ((int) std::round (x), plotArea_.getY(), plotArea_.getBottom());
+
+        auto handle = passHandleBounds (pass);
+        g.setColour (juce::Colour (selected ? 0xffbfdbfe : 0xff1e3a5f));
+        g.fillRoundedRectangle (handle, 4.0f);
+        g.setColour (juce::Colour (0xff93c5fd).withAlpha (selected ? 0.95f : 0.55f));
+        g.drawRoundedRectangle (handle, 4.0f, 1.0f);
+
+        g.setColour (selected ? juce::Colour (0xff06121f) : juce::Colour (0xffdbeafe));
+        g.setFont (juce::FontOptions (8.5f, juce::Font::bold));
+        g.drawText (isHighPass ? "HPF" : "LPF", handle, juce::Justification::centred);
+    }
+
+    void drawNodes (juce::Graphics& g)
+    {
+        static const juce::uint32 colours[] = {
+            0xff22d3ee, 0xff34d399, 0xffa3e635, 0xfffbbf24,
+            0xfffb923c, 0xfff472b6, 0xffc084fc, 0xff60a5fa
+        };
+
+        for (int band = 0; band < numBands; ++band)
+        {
+            const auto centre = bandNodeCentre (band);
+            const bool selected = selectedBand_ == band;
+            const bool hovered = hoverBand_ == band;
+            const auto colour = juce::Colour (colours[band]);
+            const float radius = selected ? 11.5f : (hovered ? 10.5f : 9.0f);
+
+            if (selected || hovered)
+            {
+                g.setColour (colour.withAlpha (selected ? 0.18f : 0.11f));
+                g.fillEllipse (juce::Rectangle<float> (radius * 3.0f, radius * 3.0f)
+                                   .withCentre (centre));
+            }
+
+            g.setColour (juce::Colours::black.withAlpha (0.35f));
+            g.fillEllipse (juce::Rectangle<float> (radius * 2.0f, radius * 2.0f)
+                               .withCentre (centre).translated (0.0f, 1.5f));
+
+            g.setColour (cachedBypassed_ ? colour.withAlpha (0.35f) : colour);
+            g.fillEllipse (juce::Rectangle<float> (radius * 2.0f, radius * 2.0f)
+                               .withCentre (centre));
+
+            g.setColour (selected ? juce::Colours::white.withAlpha (0.92f)
+                                  : juce::Colours::black.withAlpha (0.45f));
+            g.drawEllipse (juce::Rectangle<float> (radius * 2.0f, radius * 2.0f)
+                               .withCentre (centre), selected ? 2.0f : 1.0f);
+
+            g.setColour (juce::Colour (0xff111113));
+            g.setFont (juce::FontOptions (9.0f, juce::Font::bold));
+            g.drawText (juce::String (band + 1),
+                        juce::Rectangle<float> (radius * 2.0f, radius * 2.0f)
+                            .withCentre (centre),
+                        juce::Justification::centred);
+        }
+    }
+
+    //==========================================================================
+    juce::String frequencyLabel (float frequency) const
+    {
+        if (frequency >= 1000.0f)
+            return juce::String (frequency / 1000.0f, 0) + "k";
+
+        return juce::String (juce::roundToInt (frequency));
+    }
+
+    static juce::String formatFrequency (float frequency)
+    {
+        if (frequency >= 1000.0f)
+        {
+            const auto value = frequency / 1000.0f;
+            return juce::String (value, value >= 10.0f ? 1 : 2) + " kHz";
+        }
+
+        return juce::String (juce::roundToInt (frequency)) + " Hz";
+    }
+
+    static juce::String formatGain (float gainDb)
+    {
+        return (gainDb >= 0.0f ? "+" : "") + juce::String (gainDb, 1) + " dB";
+    }
+
+    static juce::String formatQ (float q)
+    {
+        return juce::String (q, 2);
+    }
+
+    juce::String statusText() const
+    {
+        if (selectedPass_ == Pass::HighPass)
+            return "HPF  ·  " + formatFrequency (cachedSettings_.highPassFrequency)
+                   + "  ·  Q " + formatQ (cachedSettings_.highPassQ);
+
+        if (selectedPass_ == Pass::LowPass)
+            return "LPF  ·  " + formatFrequency (cachedSettings_.lowPassFrequency)
+                   + "  ·  Q " + formatQ (cachedSettings_.lowPassQ);
+
+        if (selectedBand_ >= 0)
+        {
+            const auto& band = cachedSettings_.bands[(size_t) selectedBand_];
+            const auto type = selectedBand_ == 0 ? "LOW SHELF"
+                            : selectedBand_ == numBands - 1 ? "HIGH SHELF"
+                            : "BELL";
+
+            return "BAND " + juce::String (selectedBand_ + 1) + "  " + type
+                   + "  ·  " + formatFrequency (band.frequency)
+                   + "  ·  " + formatGain (band.gainDb)
+                   + "  ·  Q " + formatQ (band.q);
+        }
+
+        return "8-BAND GRAPHIC EQ  ·  drag a node to shape the response";
+    }
+
+    void showContextMenu (int band, Pass pass)
+    {
+        juce::PopupMenu menu;
+
+        if (band >= 0)
+            menu.addItem (1, "Reset band " + juce::String (band + 1));
+        else if (pass != Pass::None)
+            menu.addItem (1, pass == Pass::HighPass ? "Reset high-pass" : "Reset low-pass");
+
+        menu.addItem (2, "Reset all bands");
+        menu.addItem (3, "Flat EQ");
+
+        juce::Component::SafePointer<PostEqEditor> safeThis (this);
+
+        menu.showMenuAsync (juce::PopupMenu::Options()
+                                .withTargetComponent (this)
+                                .withMousePosition(),
+                            [safeThis, band, pass] (int result)
+                            {
+                                if (safeThis == nullptr)
+                                    return;
+
+                                if (result == 1)
+                                {
+                                    if (band >= 0)
+                                        safeThis->resetBand (band);
+                                    else if (pass != Pass::None)
+                                        safeThis->resetPass (pass);
+                                }
+                                else if (result == 2)
+                                {
+                                    safeThis->resetAllBands();
+                                }
+                                else if (result == 3)
+                                {
+                                    safeThis->flatten();
+                                }
+                            });
+    }
+
+    void resetBand (int band)
+    {
+        const PostAmpEQ::Settings defaults;
+        const auto index = (size_t) band;
+
+        beginGesture (bandFreqParams_[index]);
+        beginGesture (bandGainParams_[index]);
+        beginGesture (bandQParams_[index]);
+        setParameterValue (bandFreqParams_[index], defaults.bands[index].frequency);
+        setParameterValue (bandGainParams_[index], defaults.bands[index].gainDb);
+        setParameterValue (bandQParams_[index], defaults.bands[index].q);
+        endGesture (bandQParams_[index]);
+        endGesture (bandGainParams_[index]);
+        endGesture (bandFreqParams_[index]);
+        updateCache();
+    }
+
+    void resetPass (Pass pass)
+    {
+        auto* frequency = pass == Pass::HighPass ? highPassFreqParam_ : lowPassFreqParam_;
+        auto* q = pass == Pass::HighPass ? highPassQParam_ : lowPassQParam_;
+
+        beginGesture (frequency);
+        beginGesture (q);
+        setParameterValue (frequency, pass == Pass::HighPass ? 20.0f : 20000.0f);
+        setParameterValue (q, 0.707f);
+        endGesture (q);
+        endGesture (frequency);
+        updateCache();
+    }
+
+    void resetAllBands()
+    {
+        const PostAmpEQ::Settings defaults;
+
+        for (int band = 0; band < numBands; ++band)
+        {
+            const auto index = (size_t) band;
+            setParameterValue (bandFreqParams_[index], defaults.bands[index].frequency);
+            setParameterValue (bandGainParams_[index], defaults.bands[index].gainDb);
+            setParameterValue (bandQParams_[index], defaults.bands[index].q);
+        }
+
+        setParameterValue (highPassFreqParam_, defaults.highPassFrequency);
+        setParameterValue (highPassQParam_, defaults.highPassQ);
+        setParameterValue (lowPassFreqParam_, defaults.lowPassFrequency);
+        setParameterValue (lowPassQParam_, defaults.lowPassQ);
+        updateCache();
+    }
+
+    void flatten()
+    {
+        for (int band = 0; band < numBands; ++band)
+            setParameterValue (bandGainParams_[(size_t) band], 0.0f);
+
+        setParameterValue (highPassFreqParam_, 20.0f);
+        setParameterValue (lowPassFreqParam_, 20000.0f);
+        updateCache();
+    }
+
+    //==========================================================================
+    APVTS& state_;
+    std::function<double()> sampleRateProvider_;
+
+    std::array<juce::String, PostAmpEQ::kNumBands> bandFreqIds_;
+    std::array<juce::String, PostAmpEQ::kNumBands> bandGainIds_;
+    std::array<juce::String, PostAmpEQ::kNumBands> bandQIds_;
+
+    std::array<juce::RangedAudioParameter*, PostAmpEQ::kNumBands> bandFreqParams_ {};
+    std::array<juce::RangedAudioParameter*, PostAmpEQ::kNumBands> bandGainParams_ {};
+    std::array<juce::RangedAudioParameter*, PostAmpEQ::kNumBands> bandQParams_ {};
+
+    juce::RangedAudioParameter* highPassFreqParam_ = nullptr;
+    juce::RangedAudioParameter* highPassQParam_ = nullptr;
+    juce::RangedAudioParameter* lowPassFreqParam_ = nullptr;
+    juce::RangedAudioParameter* lowPassQParam_ = nullptr;
+
+    juce::ToggleButton bypassButton_;
+    juce::TextButton flatButton_;
+    std::unique_ptr<APVTS::ButtonAttachment> bypassAttachment_;
+
+    juce::Rectangle<int> topArea_;
+    juce::Rectangle<int> hintArea_;
+    juce::Rectangle<float> screenArea_;
+    juce::Rectangle<float> plotArea_;
+
+    PostAmpEQ::Settings cachedSettings_;
+    bool cachedBypassed_ = false;
+
+    int selectedBand_ = 0;
+    Pass selectedPass_ = Pass::None;
+    int hoverBand_ = -1;
+    Pass hoverPass_ = Pass::None;
+    int activeBand_ = -1;
+    DragTarget dragTarget_ = DragTarget::None;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PostEqEditor)
+};
+
+//==============================================================================
 /// A stompbox, amp head or rack unit, with controls laid out inside it.
 class SectionPanel : public juce::Component,
                      private juce::Timer
@@ -1315,7 +2195,15 @@ public:
 
     void addRow (juce::Component* row, int height)
     {
-        rows_.push_back ({ row, height });
+        rows_.push_back ({ row, height, false });
+        addAndMakeVisible (row);
+    }
+
+    /// Adds a row that absorbs leftover vertical space. The supplied height is
+    /// the minimum; extra space is divided between all flexible rows.
+    void addFlexibleRow (juce::Component* row, int minimumHeight)
+    {
+        rows_.push_back ({ row, minimumHeight, true });
         addAndMakeVisible (row);
     }
 
@@ -1330,6 +2218,9 @@ public:
 
     void setPreferredHeight (int height) { preferredHeight_ = height; }
     int preferredHeight() const { return preferredHeight_; }
+
+    void setStretchesToWidth (bool shouldStretch) { stretchesToWidth_ = shouldStretch; }
+    bool stretchesToWidth() const { return stretchesToWidth_; }
 
     void setItemCellHeight (int height) { itemCellHeight_ = height; }
 
@@ -1419,12 +2310,21 @@ public:
 
             auto layoutRows = [&] (int startY)
             {
+                const auto heights = rowHeightsFor (juce::jmax (0, r.getBottom() - startY));
                 int y = startY;
+                size_t index = 0;
+
                 for (auto& row : rows_)
                 {
-                    row.first->setBounds (r.getX(), y, r.getWidth(), row.second);
-                    y += row.second + 6;
+                    const int height = index < heights.size()
+                        ? heights[index]
+                        : row.height;
+
+                    row.component->setBounds (r.getX(), y, r.getWidth(), height);
+                    y += height + 6;
+                    ++index;
                 }
+
                 return y;
             };
 
@@ -1464,6 +2364,9 @@ public:
                 }
 
             int y = r.getY() + itemRows * cellH + 8;
+            const auto heights = rowHeightsFor (juce::jmax (0, r.getBottom() - y));
+            size_t rowIndex = 0;
+
             for (auto& row : rows_)
             {
                 int rowX = r.getX() + 22;
@@ -1475,13 +2378,59 @@ public:
                     rowX = r.getX() + (r.getWidth() - rowW) / 2;
                 }
 
-                row.first->setBounds (rowX, y, rowW, row.second);
-                y += row.second + 6;
+                const int height = rowIndex < heights.size()
+                    ? heights[rowIndex]
+                    : row.height;
+
+                row.component->setBounds (rowX, y, rowW, height);
+                y += height + 6;
+                ++rowIndex;
             }
         }
     }
 
 private:
+    struct RowSpec
+    {
+        juce::Component* component;
+        int height;
+        bool flexible;
+    };
+
+    std::vector<int> rowHeightsFor (int availableHeight) const
+    {
+        std::vector<int> heights;
+        heights.reserve (rows_.size());
+
+        int needed = 0;
+        int flexibleRows = 0;
+
+        for (const auto& row : rows_)
+        {
+            heights.push_back (row.height);
+            needed += row.height + 6;
+
+            if (row.flexible)
+                ++flexibleRows;
+        }
+
+        if (flexibleRows > 0)
+        {
+            const int extra = juce::jmax (0, availableHeight - needed) / flexibleRows;
+            size_t index = 0;
+
+            for (const auto& row : rows_)
+            {
+                if (row.flexible)
+                    heights[index] += extra;
+
+                ++index;
+            }
+        }
+
+        return heights;
+    }
+
     int titleHeight() const
     {
         switch (style_)
@@ -1646,13 +2595,14 @@ private:
     juce::Colour accentColour_;
     std::function<bool()> reducedMotion_;
     std::vector<juce::Component*> items_;
-    std::vector<std::pair<juce::Component*, int>> rows_;
+    std::vector<RowSpec> rows_;
     juce::Component* footer_ = nullptr;
     int footerHeight_ = 0;
     int footerWidth_ = 64;
     int preferredHeight_ = 0;
     int itemCellHeight_ = 0;
     bool rowsFirst_ = false;
+    bool stretchesToWidth_ = false;
     float highlight_ = 0.0f;
     bool hovered_ = false;
 
@@ -2775,39 +3725,17 @@ void NAMBerryEditor::buildUi()
     }
 
     // 3. Post EQ rack --------------------------------------------------------
-    if (auto* postEq = makePanel (2, "POST AMP EQ", UnitStyle::RackUnit, 3, 820,
+    if (auto* postEq = makePanel (2, "POST AMP EQ", UnitStyle::RackUnit, 1, 0,
                                   rackBody, rackAccent))
     {
-        const char* bandNames[] = { "Low", "Mid", "High" };
-        for (int band = 0; band < 3; ++band)
-        {
-            const auto i = juce::String (band);
+        auto eq = std::make_unique<PostEqEditor> (
+            state, [this] { return processor_.getSampleRate(); });
+        auto* rawEq = eq.get();
+        ownedControls_.push_back (std::move (eq));
 
-            auto addBandControl = [&] (const juce::String& id, const juce::String& text)
-            {
-                auto* control = makeControl (id, text);
-                control->setLabelFontSize (12.5f);
-                postEq->addItem (control);
-            };
-
-            addBandControl ("postEqFreq" + i, juce::String (bandNames[band]) + " Hz");
-            addBandControl ("postEqGain" + i, juce::String (bandNames[band]) + " dB");
-            addBandControl ("postEqQ" + i, juce::String (bandNames[band]) + " Q");
-        }
-
-        auto passRow = std::make_unique<CenteredPairRow> (
-            makeControl ("postEqHpfFreq", "HPF"),
-            makeControl ("postEqLpfFreq", "LPF"));
-        auto* rawPassRow = passRow.get();
-        ownedControls_.push_back (std::move (passRow));
-        postEq->addRow (rawPassRow, 84);
-
-        auto* bypass = makeControl ("postEqBypass", "Bypass", ParamControl::Kind::Toggle, true);
-        bypass->setLabelFontSize (13.0f);
-        postEq->addRow (bypass, 48);
-
-        postEq->setItemCellHeight (84);
-        postEq->setPreferredHeight (500);
+        postEq->addFlexibleRow (rawEq, 280);
+        postEq->setStretchesToWidth (true);
+        postEq->setPreferredHeight (0);
     }
 
     // 4. IR rack -------------------------------------------------------------
@@ -2961,8 +3889,8 @@ void NAMBerryEditor::layoutContent()
         {
             width = section->preferredWidth();
 
-            // The amp head stretches to the full window width.
-            if (section->isAmpHead())
+            // The amp head and the graphical EQ stretch to the full window width.
+            if (section->isAmpHead() || section->stretchesToWidth())
                 width = juce::jmax (width, viewportWidth - 2 * margin);
 
             wantedHeight = section->preferredHeight();

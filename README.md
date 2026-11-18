@@ -1,6 +1,6 @@
 # NAMberry
 
-NAMberry is an all-in-one NAM-based guitar amp and effects plugin. It combines a NAM amp capture, a second NAM pedal/preamp capture, two blendable IRs with a single Blend knob, dynamics, dual multi-band EQs, modulation/room/delay/reverb, and a low-latency pitch stage for capo and drop tuning.
+NAMberry is an all-in-one NAM-based guitar amp and effects plugin. It combines a NAM amp capture, a second NAM pedal/preamp capture, two blendable IRs with a single Blend knob, dynamics, a 3-band pre-EQ plus an 8-band graphical post-EQ, modulation/room/delay/reverb, and a low-latency pitch stage for capo and drop tuning.
 
 The goal is to stop treating an amp capture as a single plugin in a long external chain. Load two captures, two cabinets, and a complete studio-style effects chain in one stereo plugin, with fast model browsing and a hardware-inspired interface.
 
@@ -64,7 +64,7 @@ Input
 |---|---|
 | **Pre FX** | Impersonator, Pitch, Gate, Acoustic Sim, Compressor, NAM Pedal, Pre-Amp EQ (the tuner stays in the editor header) |
 | **Amp** | NAM amp model, Power, Gain, Bass, Mid, Treble, Presence, Depth, Output |
-| **Post EQ** | 3-band post-amp EQ (3-3-2 layout) with centered high-pass and low-pass filters |
+| **Post EQ** | Full-width 8-band graphical EQ with draggable nodes, adjustable Q and high-pass/low-pass filters |
 | **IR** | Two IR rows (filename screen, **LOAD**, arrows) plus one **Blend** knob and section bypass |
 | **Post FX** | Chorus, Flanger, Phaser, Room (Size), Delay, Reverb |
 
@@ -153,7 +153,8 @@ The reference affects the note/cents display only. The tuner lives permanently i
 
 - `NoiseGate` — linked peak detector, attack/release, bypass.
 - `Compressor` — attack, release, threshold, ratio, makeup, optional Tight low-band sidechain, and automatic makeup gain so compression remains audible without a level drop.
-- `MultiBandEQ` — low shelf, mid peak, high shelf; used for Pre-EQ and Post-EQ.
+- `MultiBandEQ` — low shelf, mid peak, high shelf; used for the Pre-EQ.
+- `PostAmpEQ` — eight-band graphical EQ (low shelf, six bells, high shelf) plus 12 dB/octave high-pass and low-pass filters, used after the amp.
 
 ### Acoustic simulator
 
@@ -275,6 +276,7 @@ src/
   modulation_effects.cpp
   ir_loader.cpp
   multi_band_eq.cpp
+  post_amp_eq.cpp
   compressor.cpp
   noise_gate.cpp
   room.cpp
@@ -290,6 +292,7 @@ include/namberry/
   ModulationEffects.h
   IrLoader.h
   MultiBandEQ.h
+  PostAmpEQ.h
   Compressor.h
   NoiseGate.h
   Room.h
@@ -534,7 +537,11 @@ Engaging the pedal automatically switches the NAM Pedal, NAM Amp, Pre-EQ, Post-E
 
 ### EQs
 
-Both Pre-EQ and Post-EQ use three bands: low shelf, mid peak, high shelf with frequency, gain and Q. The Pre-EQ also has a **Volume** trim in its footer (−12…+12 dB, up to +12 dB of boost). The Post-EQ additionally has a 12 dB/octave high-pass and low-pass filter (defaults 20 Hz and 20 kHz).
+The Pre-EQ has three bands: low shelf, mid peak, high shelf with frequency, gain and Q, plus a **Volume** trim in its footer (−12…+12 dB, up to +12 dB of boost).
+
+The Post-EQ is a full-width **8-band graphical EQ**: low shelf, six bell bands and a high shelf. Drag a node horizontally to change frequency and vertically to change gain; use the mouse wheel for Q. Double-click a node to reset its gain, or right-click for reset options. The **Flat** button zeroes all gains and resets the filters. The Post-EQ also has a 12 dB/octave high-pass and low-pass filter (defaults 20 Hz and 20 kHz), with draggable cutoff handles on the graph and adjustable Q.
+
+Older presets migrate automatically: the previous low/mid/high post-EQ bands become the new low shelf, first bell and high shelf, and the old high-pass/low-pass cutoff frequencies are retained.
 
 ### IR
 
@@ -622,6 +629,8 @@ cmake --build build --target NAMBerryOfflineTest NAMBerryUiSnapshot
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --tone-match
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --ir-level
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --ir-state
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --post-eq
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --post-eq-state
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --reference
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --persist
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --dirs
@@ -656,6 +665,8 @@ What they cover:
 - `--tone-match`: verifies Tone Match keeps the source brighter than a natural detune.
 - `--ir-level`: verifies unity level across the whole Blend range (0, 0.25, 0.5, 1) and untouched dry passthrough with no IR loaded.
 - `--ir-state`: verifies migration of legacy four-slot IR parameters to `irBlend`.
+- `--post-eq`: verifies the 8-band boost/cut, HPF/LPF attenuation, bypass pass-through and the shared response calculation.
+- `--post-eq-state`: verifies version-5 migration of the old three-band post-EQ into the 8-band layout.
 - `--reference`: verifies 432/440 Hz reference behaviour.
 - `--persist`: restores selected amp, pedal and IR paths; expects local sample files and skips if they are missing.
 - `--dirs`: sets the amp, pedal and IR root directories.
@@ -666,6 +677,9 @@ What they cover:
 ```bash
 ./build/NAMBerryUiSnapshot_artefacts/Release/NAMBerryUiSnapshot /tmp/namberry-ui
 ```
+
+The snapshot run also drives a Post EQ drag, wheel-Q change and double-click
+reset, and fails if the parameters do not follow.
 
 Writes:
 

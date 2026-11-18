@@ -10,6 +10,7 @@
 #include "namberry/NamModelLoader.h"
 #include "namberry/IrLoader.h"
 #include "namberry/MultiBandEQ.h"
+#include "namberry/PostAmpEQ.h"
 #include "namberry/DropTuner.h"
 #include "namberry/DigitalCapo.h"
 #include "namberry/Compressor.h"
@@ -101,7 +102,7 @@ private:
     std::unique_ptr<NamModelLoader> namPedal_;
     std::unique_ptr<IrLoader> irLoader_;
     std::unique_ptr<MultiBandEQ> preAmpEQ_;
-    std::unique_ptr<MultiBandEQ> postAmpEQ_;
+    std::unique_ptr<PostAmpEQ> postAmpEQ_;
     std::unique_ptr<PostEffects> postEffects_;
 
     //==============================================================================
