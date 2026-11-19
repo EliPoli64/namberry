@@ -13,7 +13,7 @@ NAMBerry is a **C++20 / JUCE 8.0.6 audio plugin** for guitar:
 - two NAM neural captures: pedal/preamp and amp
 - two IRs crossfaded by one Blend control
 - pitch/capo stage, tuner, gate, acoustic sim, compressor, pre/post EQ,
-  modulation, room, delay, reverb
+  modulation, stereo imager, delay, reverb
 - hardware-inspired JUCE editor, not a web UI and not Qt/QML
 
 The shipped UI is native JUCE. `ui-spec.md` is a historical Qt/QML exploration;
@@ -70,7 +70,7 @@ src/
   post_amp_eq.cpp           eight-band Post-EQ
   ir_loader.cpp
   modulation_effects.cpp
-  room.cpp
+  stereo_imager.cpp
   post_effects.cpp
   directory_browser.cpp     legacy, compiled but not reachable from UI
   main.cpp                  standalone entry point
@@ -182,7 +182,7 @@ TEST=./build-standalone/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTes
 "$TEST" --reverb-dry
 "$TEST" --delay-feedback
 "$TEST" --delay-reset
-"$TEST" --room
+"$TEST" --image
 "$TEST" --modulation
 "$TEST" --fx-state
 "$TEST" --preset
@@ -264,7 +264,7 @@ Input
   -> NAM Amp
   -> Post-Amp EQ
   -> IR Loader (2 IRs + Blend)
-  -> Post FX (Chorus / Flanger / Phaser / Room / Delay / Reverb)
+  -> Post FX (Chorus / Flanger / Phaser / Image / Delay / Reverb)
   -> Master Output
 ```
 
