@@ -45,6 +45,22 @@ juce::TextButton* findButton (juce::Component& parent, const juce::String& text)
     return nullptr;
 }
 
+juce::Viewport* findViewport (juce::Component& parent)
+{
+    for (int i = 0; i < parent.getNumChildComponents(); ++i)
+    {
+        auto* child = parent.getChildComponent (i);
+
+        if (auto* viewport = dynamic_cast<juce::Viewport*> (child))
+            return viewport;
+
+        if (auto* found = findViewport (*child))
+            return found;
+    }
+
+    return nullptr;
+}
+
 juce::MouseEvent makeMouseEvent (juce::Component& target,
                                  juce::Point<float> position,
                                  juce::ModifierKeys modifiers,
@@ -164,6 +180,51 @@ int main (int argc, char** argv)
         // so a resize is enough and the tool stays message-loop free.
         tabBar->setCurrentTabIndex (tab, false);
         editor.resized();
+
+        auto* viewport = findViewport (editor);
+        auto* content = viewport != nullptr ? viewport->getViewedComponent() : nullptr;
+
+        if (viewport == nullptr || content == nullptr)
+        {
+            std::cerr << "FAIL: tab content viewport not found\n";
+            return 1;
+        }
+
+        if (content->getWidth() > viewport->getWidth()
+            || content->getHeight() > viewport->getHeight())
+        {
+            std::cerr << "FAIL: " << names[tab] << " overflows the default viewport "
+                      << content->getWidth() << "x" << content->getHeight()
+                      << " vs " << viewport->getWidth() << "x"
+                      << viewport->getHeight() << "\n";
+            return 1;
+        }
+
+        if (tab == 1)
+        {
+            auto* screen = findChildByName (editor, "AmpScreen");
+            auto* panel = screen != nullptr ? screen->getParentComponent() : nullptr;
+
+            if (panel == nullptr)
+            {
+                std::cerr << "FAIL: amp model screen not found\n";
+                return 1;
+            }
+
+            const auto cabinet = panel->getLocalBounds().toFloat().reduced (3.0f);
+            const auto grille = cabinet.reduced (12.0f)
+                                    .withTrimmedTop (160.0f)
+                                    .withTrimmedBottom (14.0f);
+            const int expectedCentre = juce::roundToInt (grille.getCentreY());
+            const int actualCentre = screen->getBounds().getCentreY();
+
+            if (std::abs (actualCentre - expectedCentre) > 2)
+            {
+                std::cerr << "FAIL: amp model screen not centred on grille "
+                          << actualCentre << " vs " << expectedCentre << "\n";
+                return 1;
+            }
+        }
 
         const auto image = editor.createComponentSnapshot (editor.getLocalBounds(), true, 1.0f);
         const auto file = outputDir.getChildFile (juce::String (names[tab]) + ".png");

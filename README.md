@@ -223,6 +223,8 @@ The editor is JUCE-native and hardware-inspired:
 - the Reduced Motion preference disables the hover-glow animation,
 - a numeric reference field for the tuner.
 
+At the default 1280×640 editor size, all pedals on every tab fit without horizontal scrolling; narrower windows still use the scrollable viewport.
+
 `ui-spec.md` records an earlier Qt 6/QML exploration, but the shipped implementation uses JUCE native components. Qt Quick was not available in the build environment, and embedding a second event loop in a plugin was not practical.
 
 ---

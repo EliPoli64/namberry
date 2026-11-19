@@ -1019,7 +1019,8 @@ public:
         label_.setBounds (r.removeFromTop (16));
         button_.setBounds (r.removeFromTop (44).withSizeKeepingCentre (68, 38));
 
-        auto arrows = r.removeFromTop (24).reduced (2, 1);
+        // Inset the step buttons so they sit clearly inside the faceplate.
+        auto arrows = r.removeFromTop (24).reduced (6, 1);
         prevButton_.setBounds (arrows.removeFromLeft (33));
         nextButton_.setBounds (arrows.removeFromRight (33));
     }
@@ -2711,6 +2712,9 @@ public:
             const int gridRows = (count + columns_ - 1) / std::max (1, columns_);
             const int gridWidth = columns_ * ParamControl::cellWidth;
             const int gx = r.getX() + juce::jmax (0, (r.getWidth() - gridWidth) / 2);
+            const int cellHeight = itemCellHeight_ > 0
+                ? itemCellHeight_
+                : ParamControl::cellHeight;
 
             auto layoutItems = [&] (int startY)
             {
@@ -2723,12 +2727,12 @@ public:
 
                         items_[(size_t) index]->setBounds (
                             gx + col * ParamControl::cellWidth,
-                            startY + row * ParamControl::cellHeight,
+                            startY + row * cellHeight,
                             ParamControl::cellWidth,
-                            ParamControl::cellHeight);
+                            cellHeight);
                     }
 
-                return startY + gridRows * ParamControl::cellHeight + 6;
+                return startY + gridRows * cellHeight + 6;
             };
 
             auto layoutRows = [&] (int startY)
@@ -2788,6 +2792,21 @@ public:
 
             int y = r.getY() + itemRows * cellH + 8;
             const auto heights = rowHeightsFor (juce::jmax (0, r.getBottom() - y));
+
+            // The amp display sits on the grille cloth, so centre it against the
+            // same painted region instead of pinning it under the faceplate.
+            if (style_ == UnitStyle::AmpHead && !rows_.empty())
+            {
+                const auto cabinet = getLocalBounds().toFloat().reduced (3.0f);
+                const auto grille = cabinet.reduced (12.0f)
+                                        .withTrimmedTop (160.0f)
+                                        .withTrimmedBottom (14.0f);
+                const int rowHeight = heights.empty() ? rows_[0].height : heights[0];
+                const int centredY = juce::roundToInt (grille.getCentreY())
+                                     - rowHeight / 2;
+                y = juce::jmax (y, centredY);
+            }
+
             size_t rowIndex = 0;
 
             for (auto& row : rows_)
@@ -3951,7 +3970,7 @@ void NAMBerryEditor::buildUi()
         };
     }
 
-    if (auto* impersonatorPanel = makePanel (0, "IMPERSONATOR", UnitStyle::Pedal, 2, 0,
+    if (auto* impersonatorPanel = makePanel (0, "IMPERSONATOR", UnitStyle::Pedal, 1, 120,
                                              impersonatorBody, impersonatorAccent))
     {
         auto mode = std::make_unique<ModeSwitch> (state, "impersonatorToNeck");
@@ -3963,7 +3982,7 @@ void NAMBerryEditor::buildUi()
             makeFootswitch ("impersonatorBypass", impersonatorAccent), 82);
     }
 
-    if (auto* pitchPanel = makePanel (0, "PITCH", UnitStyle::Pedal, 2, 0,
+    if (auto* pitchPanel = makePanel (0, "PITCH", UnitStyle::Pedal, 2, 164,
                                       capoBody, capoAccent))
     {
         pitchPanel->addItem (makeControl ("capoFret", "Semitones"));
@@ -3973,7 +3992,7 @@ void NAMBerryEditor::buildUi()
         pitchPanel->setFooter (makeFootswitch ("capoBypass", capoAccent), 82);
     }
 
-    if (auto* gate = makePanel (0, "GATE", UnitStyle::Pedal, 2, 0,
+    if (auto* gate = makePanel (0, "GATE", UnitStyle::Pedal, 1, 120,
                                 gateBody, gateAccent))
     {
         gate->addItem (makeControl ("gateThreshold", "Threshold"));
@@ -3982,7 +4001,7 @@ void NAMBerryEditor::buildUi()
         gate->setFooter (makeFootswitch ("gateBypass", gateAccent), 82);
     }
 
-    if (auto* acoustic = makePanel (0, "ACOUSTIC", UnitStyle::Pedal, 2, 0,
+    if (auto* acoustic = makePanel (0, "ACOUSTIC", UnitStyle::Pedal, 2, 164,
                                     acousticBody, acousticAccent))
     {
         auto mode = std::make_unique<AcousticModeSwitch> (state, "acousticSimMode");
@@ -3997,7 +4016,7 @@ void NAMBerryEditor::buildUi()
         acoustic->setPreferredHeight (450);
     }
 
-    if (auto* comp = makePanel (0, "COMP", UnitStyle::Pedal, 2, 0,
+    if (auto* comp = makePanel (0, "COMP", UnitStyle::Pedal, 2, 164,
                                 compBody, compAccent))
     {
         comp->addItem (makeControl ("compThreshold", "Threshold"));
@@ -4009,10 +4028,12 @@ void NAMBerryEditor::buildUi()
         comp->setFooter (makeFootswitch ("compBypass", compAccent), 82);
     }
 
-    if (auto* pedal = makePanel (0, "PEDAL", UnitStyle::Pedal, 3, 0,
+    if (auto* pedal = makePanel (0, "PEDAL", UnitStyle::Pedal, 3, 238,
                                  pedalBody, pedalAccent))
     {
-        // Top row: tone stack. Bottom row: gain and output level.
+        // Top row: tone stack. Bottom row: gain and output level. Compact cells
+        // leave room for the model box at the default editor height.
+        pedal->setItemCellHeight (80);
         pedal->addItem (makeControl ("pedalBass", "Bass"));
         pedal->addItem (makeControl ("pedalMid", "Mid"));
         pedal->addItem (makeControl ("pedalTreble", "Treble"));
@@ -4022,7 +4043,7 @@ void NAMBerryEditor::buildUi()
         pedal->setFooter (makeFootswitch ("pedalBypass", pedalAccent), 82);
     }
 
-    if (auto* preEq = makePanel (0, "PRE-EQ", UnitStyle::Pedal, 3, 0,
+    if (auto* preEq = makePanel (0, "PRE-EQ", UnitStyle::Pedal, 3, 238,
                                  eqBody, eqAccent))
     {
         const char* bandNames[] = { "Low", "Mid", "High" };
