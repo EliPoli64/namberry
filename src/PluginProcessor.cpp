@@ -171,23 +171,14 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         "postEqBypass", "Post EQ Bypass", false));
 
-    struct PostEqBandDefault { float frequency; float q; };
-    const PostEqBandDefault bandDefaults[] = {
-        {   63.0f, 0.707f },
-        {  125.0f, 1.0f },
-        {  250.0f, 1.0f },
-        {  500.0f, 1.0f },
-        { 1000.0f, 1.0f },
-        { 2000.0f, 1.0f },
-        { 4000.0f, 1.0f },
-        { 8000.0f, 0.707f }
-    };
+    const juce::StringArray postEqTypes { "Low Pass", "High Pass", "Band" };
+    const PostAmpEQ::Settings postEqDefaults;
 
-    for (int band = 0; band < 8; ++band)
+    for (int band = 0; band < PostAmpEQ::kNumBands; ++band)
     {
         const auto index = juce::String (band);
         const auto displayNumber = juce::String (band + 1);
-        const auto& defaults = bandDefaults[band];
+        const auto& defaults = postEqDefaults.bands[static_cast<size_t> (band)];
 
         params.push_back(std::make_unique<juce::AudioParameterFloat>(
             "postEqBand" + index + "Freq",
@@ -203,6 +194,10 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
             "postEqBand" + index + "Q",
             "Post EQ Band " + displayNumber + " Q",
             juce::NormalisableRange<float>(0.1f, 10.0f, 0.01f), defaults.q));
+        params.push_back(std::make_unique<juce::AudioParameterChoice>(
+            "postEqBand" + index + "Type",
+            "Post EQ Band " + displayNumber + " Type",
+            postEqTypes, PostAmpEQ::bandTypeToInt (defaults.type)));
     }
 
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
@@ -328,13 +323,13 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
         juce::NormalisableRange<float>(0.0f, 50.0f, 1.0f), 50.0f,
         juce::AudioParameterFloatAttributes().withLabel ("%")));
 
-    // ---- Room ambience (short algorithmic room; not a long reverb) ----
+    // ---- Stereo imager (mid/side width; no ambience tail) ----
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "roomSize", "Room Size",
-        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 45.0f,
+        "imageWidth", "Image Width",
+        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 50.0f,
         juce::AudioParameterFloatAttributes().withLabel ("%")));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "roomBlend", "Room Blend",
+        "imageMix", "Image Mix",
         juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 0.0f,
         juce::AudioParameterFloatAttributes().withLabel ("%")));
 
@@ -386,8 +381,8 @@ namespace {
 
 constexpr int kPostFxStateVersion = 3;
 constexpr int kIrStateVersion = 4;
-constexpr int kPostEqStateVersion = 5;
-constexpr int kFxStateVersion = kPostEqStateVersion;
+constexpr int kPostEqStateVersion = 6;
+constexpr int kFxStateVersion = 7;
 
 juce::ValueTree findParameterState (const juce::ValueTree& state, const juce::String& id)
 {
@@ -420,15 +415,30 @@ void addParameterIfMissing (juce::ValueTree& state, const juce::String& id, floa
     state.appendChild (parameter, nullptr);
 }
 
-void migrateRoomBypassState (juce::ValueTree& state)
+void migrateStereoImagerState (juce::ValueTree& state)
 {
+    // Version 7 replaced the short FDN room with a mid/side stereo imager.
+    // Knob positions carry over; the old ambience sound intentionally does
+    // not. A saved room bypass means the imager starts fully dry.
     const auto roomBypass = findParameterState (state, "roomBypass");
+    const bool wasBypassed = roomBypass.isValid()
+        && static_cast<float> (roomBypass.getProperty ("value", 1.0f)) > 0.5f;
 
-    if (roomBypass.isValid()
-        && static_cast<float> (roomBypass.getProperty ("value", 1.0f)) > 0.5f)
+    addParameterIfMissing (state, "imageWidth",
+                           parameterValue (state, "roomSize", 50.0f));
+    addParameterIfMissing (state, "imageMix",
+                           wasBypassed ? 0.0f
+                                       : parameterValue (state, "roomBlend", 0.0f));
+
+    for (const auto* id : { "roomSize", "roomBlend", "roomBypass" })
     {
-        setParameterValue (state, "roomBlend", 0.0f);
+        auto child = findParameterState (state, id);
+
+        if (child.isValid())
+            state.removeChild (child, nullptr);
     }
+
+    state.setProperty ("fxVersion", kFxStateVersion, nullptr);
 }
 
 void migrateFxCamelCaseState (juce::ValueTree& state)
@@ -598,6 +608,25 @@ void migratePostEqEightBandState (juce::ValueTree& state)
         }
     }
 
+    state.setProperty ("fxVersion", 5, nullptr);
+}
+
+void migratePostEqBandTypeState (juce::ValueTree& state)
+{
+    // Version 6 gave each band its own curve type. Existing projects keep the
+    // curve they had: band 0 was a low shelf, band 7 a high shelf, and the
+    // middle bands were peaks.
+    const PostAmpEQ::Settings defaults;
+
+    for (int band = 0; band < PostAmpEQ::kNumBands; ++band)
+    {
+        const auto index = juce::String (band);
+        const auto type = defaults.bands[static_cast<size_t> (band)].type;
+
+        addParameterIfMissing (state, "postEqBand" + index + "Type",
+                               static_cast<float> (PostAmpEQ::bandTypeToInt (type)));
+    }
+
     state.setProperty ("fxVersion", kPostEqStateVersion, nullptr);
 }
 
@@ -624,6 +653,63 @@ NAMBerryProcessor::NAMBerryProcessor()
 
     settingsFile.getParentDirectory().createDirectory();
     settings_ = std::make_unique<juce::PropertiesFile> (settingsFile, options);
+
+    postEqParams_.bypass = apvts_.getRawParameterValue ("postEqBypass");
+
+    for (int band = 0; band < PostAmpEQ::kNumBands; ++band)
+    {
+        const auto index = juce::String (band);
+        const auto slot = static_cast<size_t> (band);
+
+        postEqParams_.frequency[slot] = apvts_.getRawParameterValue (
+            "postEqBand" + index + "Freq");
+        postEqParams_.gain[slot] = apvts_.getRawParameterValue (
+            "postEqBand" + index + "Gain");
+        postEqParams_.q[slot] = apvts_.getRawParameterValue (
+            "postEqBand" + index + "Q");
+        postEqParams_.type[slot] = apvts_.getRawParameterValue (
+            "postEqBand" + index + "Type");
+    }
+
+    postEqParams_.highPassFrequency = apvts_.getRawParameterValue ("postEqHpfFreq");
+    postEqParams_.highPassQ = apvts_.getRawParameterValue ("postEqHpfQ");
+    postEqParams_.lowPassFrequency = apvts_.getRawParameterValue ("postEqLpfFreq");
+    postEqParams_.lowPassQ = apvts_.getRawParameterValue ("postEqLpfQ");
+
+    auto cacheFx = [this] (const char* id)
+    {
+        return apvts_.getRawParameterValue (id);
+    };
+
+    postFxParams_.bypass = cacheFx ("postFxBypass");
+    postFxParams_.chorusBypass = cacheFx ("chorusBypass");
+    postFxParams_.chorusMix = cacheFx ("chorusMix");
+    postFxParams_.chorusRate = cacheFx ("chorusRate");
+    postFxParams_.chorusDepth = cacheFx ("chorusDepth");
+    postFxParams_.chorusFeedback = cacheFx ("chorusFeedback");
+    postFxParams_.chorusDelay = cacheFx ("chorusDelay");
+    postFxParams_.flangerBypass = cacheFx ("flangerBypass");
+    postFxParams_.flangerMix = cacheFx ("flangerMix");
+    postFxParams_.flangerRate = cacheFx ("flangerRate");
+    postFxParams_.flangerDepth = cacheFx ("flangerDepth");
+    postFxParams_.flangerManual = cacheFx ("flangerManual");
+    postFxParams_.flangerFeedback = cacheFx ("flangerFeedback");
+    postFxParams_.phaserBypass = cacheFx ("phaserBypass");
+    postFxParams_.phaserMix = cacheFx ("phaserMix");
+    postFxParams_.phaserRate = cacheFx ("phaserRate");
+    postFxParams_.phaserDepth = cacheFx ("phaserDepth");
+    postFxParams_.phaserFeedback = cacheFx ("phaserFeedback");
+    postFxParams_.phaserStages = cacheFx ("phaserStages");
+    postFxParams_.imageWidth = cacheFx ("imageWidth");
+    postFxParams_.imageMix = cacheFx ("imageMix");
+    postFxParams_.delayBypass = cacheFx ("delayBypass");
+    postFxParams_.delayMix = cacheFx ("delayMix");
+    postFxParams_.delayTimeMs = cacheFx ("delayTimeMs");
+    postFxParams_.delayFeedback = cacheFx ("delayFeedback");
+    postFxParams_.reverbBypass = cacheFx ("reverbBypass");
+    postFxParams_.reverbMix = cacheFx ("reverbMix");
+    postFxParams_.reverbDecay = cacheFx ("reverbDecay");
+    postFxParams_.reverbWidth = cacheFx ("reverbWidth");
 
     // Instantiate all DSP modules
     dropTuner_ = std::make_unique<DropTuner>();
@@ -850,25 +936,35 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
 
     // 8. Post-Amp EQ (8-band graphical EQ)
     {
-        const bool postEqBypassed = apvts_.getRawParameterValue("postEqBypass")->load() > 0.5f;
-        postAmpEQ_->setBypass(postEqBypassed);
+        if (postEqParams_.bypass != nullptr)
+            postAmpEQ_->setBypass (postEqParams_.bypass->load() > 0.5f);
 
         for (int band = 0; band < PostAmpEQ::kNumBands; ++band)
         {
-            const auto index = juce::String (band);
+            const auto slot = static_cast<size_t> (band);
+            auto* frequency = postEqParams_.frequency[slot];
+            auto* gain = postEqParams_.gain[slot];
+            auto* q = postEqParams_.q[slot];
+            auto* type = postEqParams_.type[slot];
+
+            if (frequency == nullptr || gain == nullptr || q == nullptr || type == nullptr)
+                continue;
+
             postAmpEQ_->setBandParameters (
-                band,
-                apvts_.getRawParameterValue ("postEqBand" + index + "Freq")->load(),
-                apvts_.getRawParameterValue ("postEqBand" + index + "Gain")->load(),
-                apvts_.getRawParameterValue ("postEqBand" + index + "Q")->load());
+                band, frequency->load(), gain->load(), q->load(),
+                PostAmpEQ::bandTypeFromInt (static_cast<int> (type->load())));
         }
 
-        postAmpEQ_->setHighPassParameters (
-            apvts_.getRawParameterValue("postEqHpfFreq")->load(),
-            apvts_.getRawParameterValue("postEqHpfQ")->load());
-        postAmpEQ_->setLowPassParameters (
-            apvts_.getRawParameterValue("postEqLpfFreq")->load(),
-            apvts_.getRawParameterValue("postEqLpfQ")->load());
+        if (postEqParams_.highPassFrequency != nullptr && postEqParams_.highPassQ != nullptr)
+            postAmpEQ_->setHighPassParameters (
+                postEqParams_.highPassFrequency->load(),
+                postEqParams_.highPassQ->load());
+
+        if (postEqParams_.lowPassFrequency != nullptr && postEqParams_.lowPassQ != nullptr)
+            postAmpEQ_->setLowPassParameters (
+                postEqParams_.lowPassFrequency->load(),
+                postEqParams_.lowPassQ->load());
+
         postAmpEQ_->processBlock(buffer, midiMessages);
     }
 
@@ -882,49 +978,53 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
 
     // 10. Post effects
     {
-        const bool postFxBypassed = apvts_.getRawParameterValue("postFxBypass")->load() > 0.5f;
+        const auto& fx = postFxParams_;
+        const auto value = [] (const std::atomic<float>* parameter)
+        {
+            return parameter != nullptr ? parameter->load() : 0.0f;
+        };
 
-        postEffects_->setBypass (postFxBypassed
-            || (apvts_.getRawParameterValue("chorusBypass")->load() > 0.5f
-                && apvts_.getRawParameterValue("flangerBypass")->load() > 0.5f
-                && apvts_.getRawParameterValue("phaserBypass")->load() > 0.5f
-                && apvts_.getRawParameterValue("roomBlend")->load() <= 0.001f
-                && apvts_.getRawParameterValue("delayBypass")->load() > 0.5f
-                && apvts_.getRawParameterValue("reverbBypass")->load() > 0.5f));
+        postEffects_->setBypass (value (fx.bypass) > 0.5f
+            || (value (fx.chorusBypass) > 0.5f
+                && value (fx.flangerBypass) > 0.5f
+                && value (fx.phaserBypass) > 0.5f
+                && value (fx.imageMix) <= 0.001f
+                && value (fx.delayBypass) > 0.5f
+                && value (fx.reverbBypass) > 0.5f));
 
-        postEffects_->setChorusBypass (apvts_.getRawParameterValue("chorusBypass")->load() > 0.5f);
-        postEffects_->setChorusMix (apvts_.getRawParameterValue("chorusMix")->load());
-        postEffects_->setChorusRate (apvts_.getRawParameterValue("chorusRate")->load());
-        postEffects_->setChorusDepth (apvts_.getRawParameterValue("chorusDepth")->load());
-        postEffects_->setChorusFeedback (apvts_.getRawParameterValue("chorusFeedback")->load());
-        postEffects_->setChorusDelay (apvts_.getRawParameterValue("chorusDelay")->load());
+        postEffects_->setChorusBypass (value (fx.chorusBypass) > 0.5f);
+        postEffects_->setChorusMix (value (fx.chorusMix));
+        postEffects_->setChorusRate (value (fx.chorusRate));
+        postEffects_->setChorusDepth (value (fx.chorusDepth));
+        postEffects_->setChorusFeedback (value (fx.chorusFeedback));
+        postEffects_->setChorusDelay (value (fx.chorusDelay));
 
-        postEffects_->setFlangerBypass (apvts_.getRawParameterValue("flangerBypass")->load() > 0.5f);
-        postEffects_->setFlangerMix (apvts_.getRawParameterValue("flangerMix")->load());
-        postEffects_->setFlangerRate (apvts_.getRawParameterValue("flangerRate")->load());
-        postEffects_->setFlangerDepth (apvts_.getRawParameterValue("flangerDepth")->load());
-        postEffects_->setFlangerManual (apvts_.getRawParameterValue("flangerManual")->load());
-        postEffects_->setFlangerFeedback (apvts_.getRawParameterValue("flangerFeedback")->load());
+        postEffects_->setFlangerBypass (value (fx.flangerBypass) > 0.5f);
+        postEffects_->setFlangerMix (value (fx.flangerMix));
+        postEffects_->setFlangerRate (value (fx.flangerRate));
+        postEffects_->setFlangerDepth (value (fx.flangerDepth));
+        postEffects_->setFlangerManual (value (fx.flangerManual));
+        postEffects_->setFlangerFeedback (value (fx.flangerFeedback));
 
-        postEffects_->setPhaserBypass (apvts_.getRawParameterValue("phaserBypass")->load() > 0.5f);
-        postEffects_->setPhaserMix (apvts_.getRawParameterValue("phaserMix")->load());
-        postEffects_->setPhaserRate (apvts_.getRawParameterValue("phaserRate")->load());
-        postEffects_->setPhaserDepth (apvts_.getRawParameterValue("phaserDepth")->load());
-        postEffects_->setPhaserFeedback (apvts_.getRawParameterValue("phaserFeedback")->load());
-        postEffects_->setPhaserStages (static_cast<int> (apvts_.getRawParameterValue("phaserStages")->load()));
+        postEffects_->setPhaserBypass (value (fx.phaserBypass) > 0.5f);
+        postEffects_->setPhaserMix (value (fx.phaserMix));
+        postEffects_->setPhaserRate (value (fx.phaserRate));
+        postEffects_->setPhaserDepth (value (fx.phaserDepth));
+        postEffects_->setPhaserFeedback (value (fx.phaserFeedback));
+        postEffects_->setPhaserStages (static_cast<int> (value (fx.phaserStages)));
 
-        postEffects_->setRoomSize (apvts_.getRawParameterValue("roomSize")->load() * 0.01f);
-        postEffects_->setRoomBlend (apvts_.getRawParameterValue("roomBlend")->load() * 0.01f);
+        postEffects_->setImageWidth (value (fx.imageWidth) * 0.01f);
+        postEffects_->setImageMix (value (fx.imageMix) * 0.01f);
 
-        postEffects_->setDelayBypass (apvts_.getRawParameterValue("delayBypass")->load() > 0.5f);
-        postEffects_->setDelayMix (apvts_.getRawParameterValue("delayMix")->load());
-        postEffects_->setDelayTimeMs (apvts_.getRawParameterValue("delayTimeMs")->load());
-        postEffects_->setDelayFeedback (apvts_.getRawParameterValue("delayFeedback")->load());
+        postEffects_->setDelayBypass (value (fx.delayBypass) > 0.5f);
+        postEffects_->setDelayMix (value (fx.delayMix));
+        postEffects_->setDelayTimeMs (value (fx.delayTimeMs));
+        postEffects_->setDelayFeedback (value (fx.delayFeedback));
 
-        postEffects_->setReverbBypass (apvts_.getRawParameterValue("reverbBypass")->load() > 0.5f);
-        postEffects_->setReverbMix (apvts_.getRawParameterValue("reverbMix")->load());
-        postEffects_->setReverbDecay (apvts_.getRawParameterValue("reverbDecay")->load());
-        postEffects_->setReverbWidth (apvts_.getRawParameterValue("reverbWidth")->load());
+        postEffects_->setReverbBypass (value (fx.reverbBypass) > 0.5f);
+        postEffects_->setReverbMix (value (fx.reverbMix));
+        postEffects_->setReverbDecay (value (fx.reverbDecay));
+        postEffects_->setReverbWidth (value (fx.reverbWidth));
 
         postEffects_->processBlock(buffer, midiMessages);
     }
@@ -1049,10 +1149,15 @@ void NAMBerryProcessor::setStateInformation (const void* data, int sizeInBytes)
             if (version < kIrStateVersion)
                 migrateIrBlendState (state);
 
-            if (version < kPostEqStateVersion)
+            if (version < 5)
                 migratePostEqEightBandState (state);
 
-            migrateRoomBypassState (state);
+            if (version < kPostEqStateVersion)
+                migratePostEqBandTypeState (state);
+
+            if (version < kFxStateVersion)
+                migrateStereoImagerState (state);
+
             apvts_.replaceState (state);
 
             // A freshly loaded preset is ground truth for the acoustic-sim

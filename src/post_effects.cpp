@@ -17,7 +17,7 @@ void PostEffects::prepare (const juce::dsp::ProcessSpec& spec)
     chorus_.prepare (spec);
     flanger_.prepare (spec);
     phaser_.prepare (spec);
-    room_.prepare (spec);
+    imager_.prepare (spec);
 
     delayLine_.setMaximumDelayInSamples (static_cast<int> (maxDelaySamples_));
     delayLine_.prepare (spec);
@@ -34,7 +34,7 @@ void PostEffects::reset()
     chorus_.reset();
     flanger_.reset();
     phaser_.reset();
-    room_.reset();
+    imager_.reset();
     delayLine_.reset();
     reverb_.reset();
 }
@@ -58,8 +58,8 @@ void PostEffects::setPhaserDepth (float value)    { phaser_.setDepthPercent (val
 void PostEffects::setPhaserFeedback (float value) { phaser_.setFeedbackPercent (value); }
 void PostEffects::setPhaserStages (int stages)    { phaser_.setStages (stages); }
 
-void PostEffects::setRoomSize (float value)  { room_.setSize (clamp01 (value)); }
-void PostEffects::setRoomBlend (float value) { room_.setBlend (clamp01 (value)); }
+void PostEffects::setImageWidth (float value) { imager_.setWidth (clamp01 (value)); }
+void PostEffects::setImageMix (float value)   { imager_.setMix (clamp01 (value)); }
 
 void PostEffects::setDelayMix (float value)      { delayMix_ = clamp01 (value); }
 void PostEffects::setDelayTimeMs (float value)   { delayTimeMs_ = juce::jlimit (10.0f, 2000.0f, value); }
@@ -93,7 +93,7 @@ void PostEffects::updateReverb()
 }
 
 //==============================================================================
-void PostEffects::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
+void PostEffects::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& /*midi*/)
 {
     if (bypass_ || buffer.getNumSamples() <= 0 || buffer.getNumChannels() == 0)
         return;
@@ -114,9 +114,9 @@ void PostEffects::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     if (! phaserBypass_)
         phaser_.processBlock (buffer);
 
-    // Short algorithmic room. The FDN feedback is normalized by Size so the
-    // ambience stays a controlled short space rather than a long reverb.
-    room_.processBlock (buffer, midi);
+    // Mid/side stereo imager. Mix 0 is an exact passthrough; no ambience tail
+    // is generated here.
+    imager_.processBlock (buffer);
 
     // Feedback delay (stereo, independent per channel).
     if (! delayBypass_)

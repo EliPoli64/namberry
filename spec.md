@@ -5,7 +5,7 @@
 **NAMBerry** is a universal audio plugin that builds upon the foundation of NAM Universal but introduces a more comprehensive and better-implemented signal chain. The goal is to provide guitarists and producers with an all-in-one "amp-in-a-box" solution that rivals dedicated hardware.
 
 ### Key Differentiators from NAM Universal
-- **Expanded FX Chain**: Includes a full suite of studio-quality effects (Compressor, Overdrive, 3-band pre-EQ, 8-band graphical post-EQ, Chorus/Phaser/Flanger, Room, Delay, Reverb) integrated directly into the plugin, rather than relying on external plugins for basic tone shaping.
+- **Expanded FX Chain**: Includes a full suite of studio-quality effects (Compressor, Overdrive, 3-band pre-EQ, 8-band graphical post-EQ, Chorus/Phaser/Flanger, Stereo Imager, Delay, Reverb) integrated directly into the plugin, rather than relying on external plugins for basic tone shaping.
 - **2-IR Loader with one Blend knob**: the same dual-cabinet idea as NAM Universal's loader, reduced to a single crossfading control instead of per-slot level/pan/phase mixers.
 - **Enhanced Amp Control**: Dedicated controls for Gain, Presence, Depth, and Output Volume, providing a more tactile "amp-like" feel compared to the OOMPH/SPARKLE impedance interaction model.
 - **True Static Linking**: Compiled with static libraries for Linux, Windows, and macOS to ensure maximum compatibility and ease of distribution without runtime dependency issues.
@@ -33,7 +33,7 @@
 Input → Tuner (detect) → Impersonator (pickup shaper) → Pitch (capo/drop) → Noise Gate → Acoustic Sim → Compressor → NAM Pedal/Preamp → Pre-Amp EQ →
 NAM Amp Loader (Gain, Bass, Mid, Treble, Presence, Depth, Output) →
 Post-Amp EQ (8-band graphical) → IR Loader (IR 1 / IR 2 + Blend) →
-Post Effects (Chorus/Flanger/Phaser/Room/Delay/Reverb) → Master (+6 dB fixed trim) → Output
+Post Effects (Chorus/Flanger/Phaser/Image/Delay/Reverb) → Master (+6 dB fixed trim) → Output
 ```
 
 ### 3.2 UI Section Order
@@ -69,7 +69,7 @@ The editor should be organized into the following five sections, in this exact o
    - Chorus
    - Flanger
    - Phaser
-   - Room (short algorithmic ambience/doubler, not a long reverb)
+   - Image (mid/side stereo imager, no ambience tail)
    - Delay
    - Reverb
 
@@ -77,7 +77,7 @@ This order keeps the pedal before the amp, keeps all pre-amp shaping before the 
 
 Each tab uses a hardware icon (pedal, amp, EQ, speaker, sparkle) with a small label. Right-click any tab to bypass that section; the icon dims and shows a red LED while bypassed.
 
-A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and always exposes the Room Mix and master Output knobs.
+A persistent **IMAGE / MASTER** strip sits beside the bottom tab buttons and always exposes the Image Mix and master Output knobs.
 
 ### 3.2 Class Structure (High-Level)
 
@@ -98,7 +98,7 @@ A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and alwa
   - `ModulationLfo` (shared sine/triangle LFO)
   - `ModulatedDelay` (chorus/flanger delay core with feedback)
   - `Phaser` (selectable 4/8/12-stage all-pass cascade)
-  - `Room` (short algorithmic ambience/doubler-stereoizer using early reflections and an eight-line FDN, with a Size macro and equal-power dry/wet mix; decay capped at 0.3 s)
+  - `StereoImager` (mid/side width with short allpass decorrelation and a side high-pass; no ambience tail)
   - `Delay` (stereo, with feedback, mix, time)
   - `Reverb` (algorithmic or convolution-based)
   - `DropTuner` (fundamental frequency detection for the tuner display)
@@ -136,12 +136,14 @@ A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and alwa
   - Frequency 20 Hz–20 kHz, gain −24…+24 dB, Q 0.1–10.
   - A footer **Volume** trim adds −12…+12 dB after the bands.
 - **Post-EQ**: `PostAmpEQ`, also built from `dsp::IIR` biquads.
-  - Low shelf, six bell bands and a high shelf, with independent frequency, gain and Q.
+  - Eight bands with independent frequency, gain, Q and curve type. The type is chosen per band in the editor's focus strip: Low Pass (low shelf), High Pass (high shelf) or Band (peaking bell). Shelves are used for Low Pass/High Pass so the gain knob keeps its boost/cut meaning.
+  - Defaults: band 0 Low Pass, bands 1–6 Band, band 7 High Pass.
   - Band frequency 20 Hz–20 kHz, gain −24…+24 dB, Q 0.1–10.
   - A 12 dB/octave high-pass (20 Hz–2 kHz) and low-pass (2–20 kHz), each with adjustable Q.
   - The editor draws the summed response and lets the user drag nodes and filter handles. The same static response helper drives the graph, so the display matches the audio filters.
-  - Parameters: `postEqBand0Freq/Gain/Q` … `postEqBand7Freq/Gain/Q`, `postEqHpfFreq`, `postEqHpfQ`, `postEqLpfFreq`, `postEqLpfQ`, `postEqBypass`.
-  - State version 5 migrates the old three-band post-EQ: low → band 0, mid → band 1, high → band 7. The old HPF/LPF cutoff values carry over and their Q defaults to 0.707.
+  - Parameters: `postEqBand0Freq/Gain/Q/Type` … `postEqBand7Freq/Gain/Q/Type`, `postEqHpfFreq`, `postEqHpfQ`, `postEqLpfFreq`, `postEqLpfQ`, `postEqBypass`. The `Type` choice indices are `0 = Low Pass`, `1 = High Pass`, `2 = Band`.
+  - State version 5 migrates the old three-band post-EQ: low → band 0, mid → band 1, high → band 7. The old HPF/LPF cutoff values carry over and their Q defaults to 0.707. State version 6 adds the per-band `Type` parameter with the legacy curve for each position, so existing projects keep their sound.
+  - The processor caches raw Post EQ parameter pointers at construction; `processBlock` reads the atomics directly instead of building parameter-ID strings.
 
 ### 4.4 Compressor
 - **Goal**: Provide dynamics control, ideally with a "Tight" mode for palm mutes (as seen in NAM Universal’s Aggravator).
@@ -173,16 +175,16 @@ A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and alwa
 - **Goal**: Stereo delay with musical controls.
 - **Implementation**: Circular buffer delay line with parameters: Time (1 ms–2 s), Feedback (0–10, where 0 is one repeat and 10 is a near-endless tail), Mix (0–100%), and optionally a high-cut filter in the feedback path.
 
-### 4.8 Room ambience
-- **Goal**: Add a realistic sense of physical space and depth without turning the tone into a long reverb.
-- **Implementation**: A short algorithmic `Room` stage placed after the modulation effects and before the delay.
-  - **Size** is a macro control: it moves the pre-delay (3–10 ms), early-reflection spacing (0.35×–1×), FDN delay lengths (0.6×–1.8×), decay time (25–300 ms) and high-frequency damping (12–4 kHz) together. Small sizes also widen the stereo image; the minimum is a doubler/stereoizer, the maximum a small 0.3 s room.
-  - The room is built from six sparse early-reflection taps plus an eight-line feedback delay network with a Hadamard feedback matrix, input diffusion and per-line one-pole damping.
-  - **Room Mix** uses an equal-power dry/wet law (`dry = cos(π/2·mix)`, `wet = sin(π/2·mix)`), so the overall level stays similar across the full range.
-  - The FDN input is normalized from the feedback gains, so a larger room does not simply get louder. The wet path has a fixed mid-focused filter (90 Hz high-pass, 1.2 kHz presence lift, 12 kHz low-pass).
-  - Room Mix defaults to **0 %**; at zero the room is skipped and the stage is completely dry. There is no separate room bypass.
-  - The decay is capped at 0.3 s to keep the stage a short ambience/doubler rather than a reverb.
-- **Controls**: Size lives in the Post FX Room pedal; **Room Mix** lives in the persistent bottom strip beside the tabs.
+### 4.8 Stereo imager
+- **Goal**: Widen the stereo image, including mono-derived NAM output, without adding room ambience.
+- **Implementation**: A `StereoImager` stage placed after the modulation effects and before the delay.
+  - **Width** is 0–100 %: 0 % collapses to mono, 50 % is neutral and 100 % widens the image.
+  - Above neutral, a short three-stage allpass chain (0.7 / 1.3 / 2.1 ms, gain 0.62) decorrelates the right channel before the mid/side encode. This creates side content from a mono-derived signal without echoes or a feedback tail.
+  - A 140 Hz side high-pass keeps the low end centered. Both the decorrelation and the side filtering fade in only when widening, so neutral and mono-collapse settings stay clean.
+  - **Image Mix** interpolates the side gain from unity to the Width target. 0 % is an exact passthrough and is the default; there is no separate imager bypass.
+  - Expansion is level-compensated so loudness stays close across the Width and Mix ranges. Width and Mix are smoothed; all buffers are allocated in `prepare()` and cleared by `reset()`.
+  - Parameters are `imageWidth` and `imageMix`. State version 7 migrates the old `roomSize`, `roomBlend` and `roomBypass` values and removes the obsolete children.
+- **Controls**: Width lives in the Post FX Image pedal; **Image Mix** lives in the persistent bottom strip beside the tabs.
 
 ### 4.9 Reverb
 - **Goal**: Add ambience.
@@ -301,7 +303,7 @@ Artifacts: `.vst3` (all), `.component` (AU, macOS), `.aaxplugin` (if SDK availab
 - [x] Implement 4/8/12-stage all-pass `Phaser`.
 - [x] Implement `Delay` (circular buffer).
 - [x] Integrate `juce::Reverb`.
-- [x] Implement algorithmic Room ambience (Size macro, equal-power Room Mix; default 0 %).
+- [x] Implement stereo imager (Width / Image Mix; default 0 % mix; v7 migration from Room).
 
 ### Phase 5: UI & State Management (Weeks 9–10)
 - [x] Design `NAMBerryEditor` with tabs or a scrollable rack layout.

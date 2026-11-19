@@ -761,21 +761,21 @@ private:
 };
 
 //==============================================================================
-/// Compact always-visible room-mix and master-output knobs beside the tabs.
+/// Compact always-visible image-mix and master-output knobs beside the tabs.
 class BottomKnobs : public juce::Component
 {
 public:
     explicit BottomKnobs (APVTS& state)
     {
         addAndMakeVisible (title_);
-        title_.setText ("ROOM / MASTER", juce::dontSendNotification);
+        title_.setText ("IMAGE / MASTER", juce::dontSendNotification);
         title_.setJustificationType (juce::Justification::centred);
         title_.setFont (juce::FontOptions (9.0f, juce::Font::bold));
         title_.setColour (juce::Label::textColourId, juce::Colour (kAccent));
 
-        roomKnob_ = std::make_unique<ParamControl> (state, "roomBlend", "Room Mix");
+        imageKnob_ = std::make_unique<ParamControl> (state, "imageMix", "Image Mix");
         outputKnob_ = std::make_unique<ParamControl> (state, "masterOutput", "Output");
-        addAndMakeVisible (*roomKnob_);
+        addAndMakeVisible (*imageKnob_);
         addAndMakeVisible (*outputKnob_);
     }
 
@@ -803,13 +803,13 @@ public:
         auto controls = r.removeFromTop (84)
                          .withSizeKeepingCentre (cellWidth * 2, 84);
 
-        roomKnob_->setBounds (controls.removeFromLeft (cellWidth));
+        imageKnob_->setBounds (controls.removeFromLeft (cellWidth));
         outputKnob_->setBounds (controls.removeFromLeft (cellWidth));
     }
 
 private:
     juce::Label title_;
-    std::unique_ptr<ParamControl> roomKnob_;
+    std::unique_ptr<ParamControl> imageKnob_;
     std::unique_ptr<ParamControl> outputKnob_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BottomKnobs)
@@ -1351,6 +1351,90 @@ private:
 };
 
 //==============================================================================
+/// Three-way curve-type switch for the focused post-EQ band.
+class BandTypeSelector : public juce::Component
+{
+public:
+    BandTypeSelector()
+    {
+        setName ("PostEqTypeSelector");
+
+        label_.setText ("TYPE", juce::dontSendNotification);
+        label_.setJustificationType (juce::Justification::centred);
+        label_.setFont (juce::FontOptions (8.0f, juce::Font::bold));
+        label_.setColour (juce::Label::textColourId, juce::Colour (kTextDim));
+        addAndMakeVisible (label_);
+
+        const char* labels[] = { "LOW", "HIGH", "BAND" };
+        const char* tooltips[] = {
+            "Low-pass shelf curve",
+            "High-pass shelf curve",
+            "Peaking band curve"
+        };
+        const char* ids[] = {
+            "PostEqTypeLow", "PostEqTypeHigh", "PostEqTypeBand"
+        };
+
+        for (size_t i = 0; i < buttons_.size(); ++i)
+        {
+            auto& button = buttons_[i];
+            button.setName (ids[i]);
+            button.setButtonText (labels[i]);
+            button.setTooltip (tooltips[i]);
+            button.setClickingTogglesState (true);
+            button.setMouseCursor (juce::MouseCursor::PointingHandCursor);
+            button.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff171c20));
+            button.setColour (juce::TextButton::buttonOnColourId,
+                              juce::Colour (kAccent).withAlpha (0.32f));
+            button.setColour (juce::TextButton::textColourOffId, juce::Colour (kTextDim));
+            button.setColour (juce::TextButton::textColourOnId, juce::Colour (kText));
+            button.onClick = [this, i]
+            {
+                if (onTypeChanged != nullptr)
+                    onTypeChanged ((int) i);
+            };
+            addAndMakeVisible (button);
+        }
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds();
+        label_.setBounds (r.removeFromTop (11));
+        r.removeFromTop (2);
+
+        const int gap = 2;
+        const int width = (r.getWidth() - gap * (static_cast<int> (buttons_.size()) - 1))
+                          / static_cast<int> (buttons_.size());
+
+        for (auto& button : buttons_)
+            button.setBounds (r.removeFromLeft (width));
+    }
+
+    void setSelected (int index)
+    {
+        for (size_t i = 0; i < buttons_.size(); ++i)
+            buttons_[i].setToggleState ((int) i == index, juce::dontSendNotification);
+    }
+
+    void setActive (bool active)
+    {
+        setAlpha (active ? 1.0f : 0.32f);
+
+        for (auto& button : buttons_)
+            button.setEnabled (active);
+    }
+
+    std::function<void (int)> onTypeChanged;
+
+private:
+    juce::Label label_;
+    std::array<juce::TextButton, 3> buttons_;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BandTypeSelector)
+};
+
+//==============================================================================
 /// Full-width graphical editor for the eight-band post-amp EQ.
 class PostEqEditor : public juce::Component,
                      private juce::Timer
@@ -1370,10 +1454,12 @@ public:
             bandFreqIds_[(size_t) band] = "postEqBand" + index + "Freq";
             bandGainIds_[(size_t) band] = "postEqBand" + index + "Gain";
             bandQIds_[(size_t) band] = "postEqBand" + index + "Q";
+            bandTypeIds_[(size_t) band] = "postEqBand" + index + "Type";
 
             bandFreqParams_[(size_t) band] = state_.getParameter (bandFreqIds_[(size_t) band]);
             bandGainParams_[(size_t) band] = state_.getParameter (bandGainIds_[(size_t) band]);
             bandQParams_[(size_t) band] = state_.getParameter (bandQIds_[(size_t) band]);
+            bandTypeParams_[(size_t) band] = state_.getParameter (bandTypeIds_[(size_t) band]);
         }
 
         highPassFreqParam_ = state_.getParameter ("postEqHpfFreq");
@@ -1401,6 +1487,21 @@ public:
 
         addAndMakeVisible (boostKnob_);
         addAndMakeVisible (qKnob_);
+        addAndMakeVisible (typeSelector_);
+
+        typeSelector_.onTypeChanged = [this] (int type)
+        {
+            if (selectedBand_ < 0)
+                return;
+
+            const auto index = (size_t) selectedBand_;
+            auto* parameter = bandTypeParams_[index];
+
+            beginGesture (parameter);
+            setParameterValue (parameter, static_cast<float> (type));
+            endGesture (parameter);
+            updateCache();
+        };
 
         boostKnob_.onGestureStart = [this]
         {
@@ -1485,9 +1586,11 @@ public:
         auto focusContent = focusArea_.reduced (6, 4);
         focusTitleArea_ = focusContent.removeFromTop (32);
         focusContent.removeFromTop (4);
+        typeSelector_.setBounds (focusContent.removeFromTop (26));
+        focusContent.removeFromTop (4);
 
-        const int knobHeight = juce::jlimit (88, 118,
-                                            (focusContent.getHeight() - 8) / 2);
+        const int knobHeight = juce::jlimit (60, 110,
+                                            (focusContent.getHeight() - 6) / 2);
         boostKnob_.setBounds (focusContent.removeFromTop (knobHeight));
         focusContent.removeFromTop (6);
         qKnob_.setBounds (focusContent.removeFromTop (knobHeight));
@@ -1535,7 +1638,7 @@ public:
 
         g.setColour (juce::Colour (kTextDim).withAlpha (0.82f));
         g.setFont (juce::FontOptions (9.5f, juce::Font::bold));
-        g.drawFittedText ("DRAG: FREQ / GAIN    WHEEL: Q    DOUBLE-CLICK: RESET    RIGHT-CLICK: MENU    KNOBS: FOCUSED BAND / FILTER",
+        g.drawFittedText ("DRAG: FREQ / GAIN    WHEEL: Q    DOUBLE-CLICK: RESET    RIGHT-CLICK: MENU    KNOBS + TYPE: FOCUSED BAND / FILTER",
                           hintArea_, juce::Justification::centredLeft, 1, 0.85f);
     }
 
@@ -1789,7 +1892,11 @@ private:
             settings.bands[index] = {
                 rawValue (bandFreqIds_[index], settings.bands[index].frequency),
                 rawValue (bandGainIds_[index], 0.0f),
-                rawValue (bandQIds_[index], settings.bands[index].q)
+                rawValue (bandQIds_[index], settings.bands[index].q),
+                PostAmpEQ::bandTypeFromInt (
+                    (int) rawValue (bandTypeIds_[index],
+                                    (float) PostAmpEQ::bandTypeToInt (
+                                        settings.bands[index].type)))
             };
         }
 
@@ -1818,7 +1925,8 @@ private:
     {
         for (size_t i = 0; i < a.bands.size(); ++i)
         {
-            if (! juce::approximatelyEqual (a.bands[i].frequency, b.bands[i].frequency)
+            if (a.bands[i].type != b.bands[i].type
+                || ! juce::approximatelyEqual (a.bands[i].frequency, b.bands[i].frequency)
                 || ! juce::approximatelyEqual (a.bands[i].gainDb, b.bands[i].gainDb)
                 || ! juce::approximatelyEqual (a.bands[i].q, b.bands[i].q))
                 return false;
@@ -1882,6 +1990,7 @@ private:
 
         boostKnob_.setActive (hasBand);
         qKnob_.setActive (hasBand || hasPass);
+        typeSelector_.setActive (hasBand);
         boostKnob_.setLabelColour (hasBand ? highlight : juce::Colour (kTextDim));
         qKnob_.setLabelColour (hasBand || hasPass ? highlight : juce::Colour (kTextDim));
 
@@ -1891,6 +2000,7 @@ private:
             const auto& band = cachedSettings_.bands[index];
             const PostAmpEQ::Settings defaults;
 
+            typeSelector_.setSelected (PostAmpEQ::bandTypeToInt (band.type));
             boostKnob_.setValue (band.gainDb);
             boostKnob_.setDefaultValue (defaults.bands[index].gainDb);
             qKnob_.setValue (band.q);
@@ -2293,6 +2403,17 @@ private:
         return juce::String (q, 2);
     }
 
+    static const char* bandTypeName (PostAmpEQ::BandType type)
+    {
+        switch (type)
+        {
+            case PostAmpEQ::BandType::LowPass:  return "LOW PASS";
+            case PostAmpEQ::BandType::HighPass: return "HIGH PASS";
+            case PostAmpEQ::BandType::Band:
+            default:                            return "BAND";
+        }
+    }
+
     juce::String statusText() const
     {
         if (selectedPass_ == Pass::HighPass)
@@ -2306,11 +2427,9 @@ private:
         if (selectedBand_ >= 0)
         {
             const auto& band = cachedSettings_.bands[(size_t) selectedBand_];
-            const auto type = selectedBand_ == 0 ? "LOW SHELF"
-                            : selectedBand_ == numBands - 1 ? "HIGH SHELF"
-                            : "BELL";
 
-            return "BAND " + juce::String (selectedBand_ + 1) + "  " + type
+            return "BAND " + juce::String (selectedBand_ + 1) + "  "
+                   + bandTypeName (band.type)
                    + "  ·  " + formatFrequency (band.frequency)
                    + "  ·  " + formatGain (band.gainDb)
                    + "  ·  Q " + formatQ (band.q);
@@ -2367,9 +2486,13 @@ private:
         beginGesture (bandFreqParams_[index]);
         beginGesture (bandGainParams_[index]);
         beginGesture (bandQParams_[index]);
+        beginGesture (bandTypeParams_[index]);
         setParameterValue (bandFreqParams_[index], defaults.bands[index].frequency);
         setParameterValue (bandGainParams_[index], defaults.bands[index].gainDb);
         setParameterValue (bandQParams_[index], defaults.bands[index].q);
+        setParameterValue (bandTypeParams_[index],
+                           (float) PostAmpEQ::bandTypeToInt (defaults.bands[index].type));
+        endGesture (bandTypeParams_[index]);
         endGesture (bandQParams_[index]);
         endGesture (bandGainParams_[index]);
         endGesture (bandFreqParams_[index]);
@@ -2400,6 +2523,8 @@ private:
             setParameterValue (bandFreqParams_[index], defaults.bands[index].frequency);
             setParameterValue (bandGainParams_[index], defaults.bands[index].gainDb);
             setParameterValue (bandQParams_[index], defaults.bands[index].q);
+            setParameterValue (bandTypeParams_[index],
+                               (float) PostAmpEQ::bandTypeToInt (defaults.bands[index].type));
         }
 
         setParameterValue (highPassFreqParam_, defaults.highPassFrequency);
@@ -2425,16 +2550,19 @@ private:
 
     FocusKnob boostKnob_;
     FocusKnob qKnob_;
+    BandTypeSelector typeSelector_;
     juce::RangedAudioParameter* boostGestureParam_ = nullptr;
     juce::RangedAudioParameter* qGestureParam_ = nullptr;
 
     std::array<juce::String, PostAmpEQ::kNumBands> bandFreqIds_;
     std::array<juce::String, PostAmpEQ::kNumBands> bandGainIds_;
     std::array<juce::String, PostAmpEQ::kNumBands> bandQIds_;
+    std::array<juce::String, PostAmpEQ::kNumBands> bandTypeIds_;
 
     std::array<juce::RangedAudioParameter*, PostAmpEQ::kNumBands> bandFreqParams_ {};
     std::array<juce::RangedAudioParameter*, PostAmpEQ::kNumBands> bandGainParams_ {};
     std::array<juce::RangedAudioParameter*, PostAmpEQ::kNumBands> bandQParams_ {};
+    std::array<juce::RangedAudioParameter*, PostAmpEQ::kNumBands> bandTypeParams_ {};
 
     juce::RangedAudioParameter* highPassFreqParam_ = nullptr;
     juce::RangedAudioParameter* highPassQParam_ = nullptr;
@@ -3795,7 +3923,7 @@ void NAMBerryEditor::buildUi()
     const juce::Colour chorusBody  (0xff1e3a8a), chorusAccent  (0xff60a5fa);
     const juce::Colour flangerBody (0xff4c1d95), flangerAccent (0xffc084fc);
     const juce::Colour phaserBody  (0xff831843), phaserAccent  (0xfff472b6);
-    const juce::Colour roomBody    (0xff4a3a2a), roomAccent    (0xffe0b080);
+    const juce::Colour imageBody   (0xff4a3a2a), imageAccent   (0xffe0b080);
     const juce::Colour delayBody   (0xff713f12), delayAccent   (0xfffacc15);
     const juce::Colour reverbBody  (0xff1e3a5f), reverbAccent  (0xff93c5fd);
 
@@ -4119,11 +4247,11 @@ void NAMBerryEditor::buildUi()
         phaser->setFooter (makeFootswitch ("phaserBypass", phaserAccent), 82);
     }
 
-    if (auto* room = makePanel (4, "ROOM", UnitStyle::Pedal, 1, 176,
-                                roomBody, roomAccent))
+    if (auto* image = makePanel (4, "IMAGE", UnitStyle::Pedal, 1, 176,
+                                 imageBody, imageAccent))
     {
-        room->addItem (makeControl ("roomSize", "Size"));
-        room->setPreferredHeight (180);
+        image->addItem (makeControl ("imageWidth", "Width"));
+        image->setPreferredHeight (180);
     }
 
     if (auto* delay = makePanel (4, "DELAY", UnitStyle::Pedal, 2, 0,
@@ -4384,7 +4512,7 @@ void NAMBerryEditor::resized()
     const int maxTabWidth = juce::jmax (240, tabArea.getWidth() - knobsWidth - tabGap - 16);
 
     // Lay the bar out at a generous width once, measure the natural button
-    // group, then shrink the bar to that width and place the room/master
+    // group, then shrink the bar to that width and place the image/master
     // knobs immediately to its right.
     tabBar_.setBounds (tabArea.withSizeKeepingCentre (juce::jmin (maxTabWidth, 760), 48));
 

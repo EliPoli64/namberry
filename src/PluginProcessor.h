@@ -119,6 +119,60 @@ private:
     juce::AudioProcessorValueTreeState apvts_;
     std::unique_ptr<juce::PropertiesFile> settings_;
 
+    // Raw Post EQ parameter pointers cached once so processBlock never has to
+    // build parameter-ID strings on the audio thread.
+    struct CachedPostEqParams
+    {
+        std::atomic<float>* bypass = nullptr;
+        std::array<std::atomic<float>*, PostAmpEQ::kNumBands> frequency {};
+        std::array<std::atomic<float>*, PostAmpEQ::kNumBands> gain {};
+        std::array<std::atomic<float>*, PostAmpEQ::kNumBands> q {};
+        std::array<std::atomic<float>*, PostAmpEQ::kNumBands> type {};
+        std::atomic<float>* highPassFrequency = nullptr;
+        std::atomic<float>* highPassQ = nullptr;
+        std::atomic<float>* lowPassFrequency = nullptr;
+        std::atomic<float>* lowPassQ = nullptr;
+    };
+
+    CachedPostEqParams postEqParams_;
+
+    // Post FX parameters are read every block too. Cache the raw pointers so
+    // this section also avoids constructing parameter-ID strings on audio.
+    struct CachedPostFxParams
+    {
+        std::atomic<float>* bypass = nullptr;
+        std::atomic<float>* chorusBypass = nullptr;
+        std::atomic<float>* chorusMix = nullptr;
+        std::atomic<float>* chorusRate = nullptr;
+        std::atomic<float>* chorusDepth = nullptr;
+        std::atomic<float>* chorusFeedback = nullptr;
+        std::atomic<float>* chorusDelay = nullptr;
+        std::atomic<float>* flangerBypass = nullptr;
+        std::atomic<float>* flangerMix = nullptr;
+        std::atomic<float>* flangerRate = nullptr;
+        std::atomic<float>* flangerDepth = nullptr;
+        std::atomic<float>* flangerManual = nullptr;
+        std::atomic<float>* flangerFeedback = nullptr;
+        std::atomic<float>* phaserBypass = nullptr;
+        std::atomic<float>* phaserMix = nullptr;
+        std::atomic<float>* phaserRate = nullptr;
+        std::atomic<float>* phaserDepth = nullptr;
+        std::atomic<float>* phaserFeedback = nullptr;
+        std::atomic<float>* phaserStages = nullptr;
+        std::atomic<float>* imageWidth = nullptr;
+        std::atomic<float>* imageMix = nullptr;
+        std::atomic<float>* delayBypass = nullptr;
+        std::atomic<float>* delayMix = nullptr;
+        std::atomic<float>* delayTimeMs = nullptr;
+        std::atomic<float>* delayFeedback = nullptr;
+        std::atomic<float>* reverbBypass = nullptr;
+        std::atomic<float>* reverbMix = nullptr;
+        std::atomic<float>* reverbDecay = nullptr;
+        std::atomic<float>* reverbWidth = nullptr;
+    };
+
+    CachedPostFxParams postFxParams_;
+
     std::atomic<int> pendingLatencySamples_ { 0 };
     std::atomic<int> appliedLatencySamples_ { 0 };
 

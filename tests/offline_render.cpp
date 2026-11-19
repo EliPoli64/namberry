@@ -10,10 +10,11 @@
 #include "PluginProcessor.h"
 
 #include "namberry/PostAmpEQ.h"
-#include "namberry/Room.h"
+#include "namberry/StereoImager.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
 
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <tuple>
@@ -849,7 +850,7 @@ int runReverbDryTest()
     fx.setChorusBypass (true);
     fx.setFlangerBypass (true);
     fx.setPhaserBypass (true);
-    fx.setRoomBlend (0.0f);
+    fx.setImageMix (0.0f);
     fx.setDelayBypass (true);
     fx.setReverbBypass (false);
 
@@ -905,7 +906,7 @@ int runDelayFeedbackTest()
         fx.setChorusBypass (true);
         fx.setFlangerBypass (true);
         fx.setPhaserBypass (true);
-        fx.setRoomBlend (0.0f);
+        fx.setImageMix (0.0f);
         fx.setReverbBypass (true);
         fx.setDelayBypass (false);
         fx.setDelayMix (1.0f);
@@ -999,37 +1000,49 @@ int runDelayResetTest()
     return passed ? 0 : 2;
 }
 
-struct RoomRender
+struct ImageRender
 {
     std::vector<float> left;
     std::vector<float> right;
 };
 
-RoomRender renderRoom (namberry::Room& room,
-                       float size,
-                       float blend,
-                       const std::vector<float>& inputLeft,
-                       const std::vector<float>& inputRight)
+ImageRender renderImage (namberry::StereoImager& imager,
+                         float width,
+                         float mix,
+                         const std::vector<float>& inputLeft,
+                         const std::vector<float>& inputRight,
+                         int blockSize = 0)
 {
     const int numSamples = static_cast<int> (
         juce::jmin (inputLeft.size(), inputRight.size()));
 
-    room.setSize (size);
-    room.setBlend (blend);
-    room.reset();
+    imager.setWidth (width);
+    imager.setMix (mix);
+    imager.reset();
 
-    juce::AudioBuffer<float> buffer (2, numSamples);
-    buffer.copyFrom (0, 0, inputLeft.data(), numSamples);
-    buffer.copyFrom (1, 0, inputRight.data(), numSamples);
+    ImageRender result;
+    result.left.resize (static_cast<size_t> (numSamples));
+    result.right.resize (static_cast<size_t> (numSamples));
 
-    juce::MidiBuffer midi;
-    room.processBlock (buffer, midi);
+    const int chunk = (blockSize > 0 && blockSize < numSamples)
+        ? blockSize : juce::jmax (1, numSamples);
 
-    RoomRender result;
-    result.left.assign (buffer.getReadPointer (0),
-                        buffer.getReadPointer (0) + numSamples);
-    result.right.assign (buffer.getReadPointer (1),
-                         buffer.getReadPointer (1) + numSamples);
+    for (int offset = 0; offset < numSamples; offset += chunk)
+    {
+        const int count = juce::jmin (chunk, numSamples - offset);
+        juce::AudioBuffer<float> buffer (2, count);
+        buffer.copyFrom (0, 0, inputLeft.data() + offset, count);
+        buffer.copyFrom (1, 0, inputRight.data() + offset, count);
+
+        imager.processBlock (buffer);
+
+        for (int i = 0; i < count; ++i)
+        {
+            result.left[static_cast<size_t> (offset + i)] = buffer.getSample (0, i);
+            result.right[static_cast<size_t> (offset + i)] = buffer.getSample (1, i);
+        }
+    }
+
     return result;
 }
 
@@ -1066,43 +1079,9 @@ float windowRms (const std::vector<float>& samples,
         windowEnergy (samples, sampleRate, startSeconds, endSeconds) / count));
 }
 
-int firstSampleAbove (const std::vector<float>& samples, float threshold)
-{
-    for (int i = 0; i < static_cast<int> (samples.size()); ++i)
-        if (std::abs (samples[static_cast<size_t> (i)]) > threshold)
-            return i;
-
-    return -1;
-}
-
-double highFrequencyRatio (const std::vector<float>& samples,
-                           double sampleRate,
-                           double startSeconds,
-                           double endSeconds)
-{
-    const int start = juce::jlimit (0, static_cast<int> (samples.size()),
-                                    static_cast<int> (std::round (startSeconds * sampleRate)));
-    const int end = juce::jlimit (start, static_cast<int> (samples.size()),
-                                  static_cast<int> (std::round (endSeconds * sampleRate)));
-
-    double differenceEnergy = 0.0;
-    double totalEnergy = 0.0;
-
-    for (int i = start + 1; i < end; ++i)
-    {
-        const double current = samples[static_cast<size_t> (i)];
-        const double previous = samples[static_cast<size_t> (i - 1)];
-        const double difference = current - previous;
-        differenceEnergy += difference * difference;
-        totalEnergy += current * current;
-    }
-
-    return totalEnergy > 1.0e-20 ? std::sqrt (differenceEnergy / totalEnergy) : 0.0;
-}
-
-void makeRoomNoise (std::vector<float>& left,
-                    std::vector<float>& right,
-                    float amplitude)
+void makeImageNoise (std::vector<float>& left,
+                     std::vector<float>& right,
+                     float amplitude)
 {
     juce::Random random (0x51a7);
     float stateLeft = 0.0f;
@@ -1118,7 +1097,7 @@ void makeRoomNoise (std::vector<float>& left,
     }
 }
 
-double stereoCorrelation (const RoomRender& render,
+double stereoCorrelation (const ImageRender& render,
                           double sampleRate,
                           double startSeconds,
                           double endSeconds)
@@ -1145,134 +1124,167 @@ double stereoCorrelation (const RoomRender& render,
     return denominator > 1.0e-20 ? sumLR / denominator : 1.0;
 }
 
-int runRoomTest()
+int runImageTest()
 {
     constexpr double sampleRate = 48000.0;
     constexpr int totalSamples = static_cast<int> (sampleRate * 2.0);
 
-    namberry::Room room;
+    namberry::StereoImager imager;
     juce::dsp::ProcessSpec spec;
     spec.sampleRate = sampleRate;
     spec.maximumBlockSize = 512;
     spec.numChannels = 2;
-    room.prepare (spec);
+    imager.prepare (spec);
 
-    std::vector<float> impulseLeft (totalSamples, 0.0f);
-    std::vector<float> impulseRight (totalSamples, 0.0f);
+    std::vector<float> noiseLeft (static_cast<size_t> (totalSamples));
+    std::vector<float> noiseRight (static_cast<size_t> (totalSamples));
+    makeImageNoise (noiseLeft, noiseRight, 0.25f);
+
+    std::vector<float> impulseLeft (static_cast<size_t> (totalSamples), 0.0f);
+    std::vector<float> impulseRight (static_cast<size_t> (totalSamples), 0.0f);
     impulseLeft[0] = 1.0f;
     impulseRight[0] = 1.0f;
 
     bool passed = true;
-
     const auto check = [&passed] (bool condition, const char* name)
     {
         if (! condition)
         {
-            std::cout << "room " << name << " FAIL\n";
+            std::cout << "image " << name << " FAIL\n";
             passed = false;
         }
     };
 
-    // Room Mix 0 % must be completely dry and must not run the room.
-    const auto dry = renderRoom (room, 0.45f, 0.0f, impulseLeft, impulseRight);
-    check (std::abs (dry.left[0] - 1.0f) < 1.0e-6f, "dry-direct");
-
-    double dryResidue = 0.0;
-    for (int i = 1; i < totalSamples; ++i)
-        dryResidue += std::abs (dry.left[static_cast<size_t> (i)]);
-    check (dryResidue < 1.0e-9, "dry-residue");
-
-    // Equal-power dry law. At sample 0 the wet path has not arrived yet, so
-    // the direct output is exactly the dry gain.
-    for (const float mix : { 0.25f, 0.5f, 0.75f, 1.0f })
+    const auto maxDiff = [] (const std::vector<float>& a,
+                             const std::vector<float>& b,
+                             int start,
+                             int end)
     {
-        const auto rendered = renderRoom (room, 0.45f, mix, impulseLeft, impulseRight);
-        const float expected = std::cos (juce::MathConstants<float>::halfPi * mix);
-        check (std::abs (rendered.left[0] - expected) < 1.0e-4f, "equal-power");
-    }
+        double maximum = 0.0;
+        for (int i = juce::jmax (0, start);
+             i < juce::jmin (static_cast<int> (a.size()), end); ++i)
+        {
+            maximum = juce::jmax (maximum, std::abs (
+                static_cast<double> (a[static_cast<size_t> (i)])
+              - static_cast<double> (b[static_cast<size_t> (i)])));
+        }
+        return maximum;
+    };
 
-    const auto small = renderRoom (room, 0.0f, 1.0f, impulseLeft, impulseRight);
-    const auto large = renderRoom (room, 1.0f, 1.0f, impulseLeft, impulseRight);
+    const auto stereoRms = [&] (const ImageRender& render)
+    {
+        const float left = windowRms (render.left, sampleRate, 0.20, 0.40);
+        const float right = windowRms (render.right, sampleRate, 0.20, 0.40);
+        return std::sqrt (0.5f * (left * left + right * right));
+    };
 
-    const int smallOnset = firstSampleAbove (small.left, 1.0e-4f);
-    const int largeOnset = firstSampleAbove (large.left, 1.0e-4f);
+    // Mix 0 must be an exact passthrough even when Width is extreme.
+    const auto dry = renderImage (imager, 1.0f, 0.0f, noiseLeft, noiseRight);
+    check (maxDiff (dry.left, noiseLeft, 0, totalSamples) < 1.0e-6
+        && maxDiff (dry.right, noiseRight, 0, totalSamples) < 1.0e-6, "dry-passthrough");
 
-    check (smallOnset > static_cast<int> (0.001 * sampleRate), "predelay-small");
-    check (smallOnset < static_cast<int> (0.006 * sampleRate), "predelay-small-short");
-    check (largeOnset > static_cast<int> (0.008 * sampleRate), "predelay-large");
-    check (largeOnset > smallOnset + static_cast<int> (0.005 * sampleRate),
-           "predelay-macro");
+    // Width 50 is neutral: full Mix must not change an existing stereo image.
+    const auto neutral = renderImage (imager, 0.5f, 1.0f, noiseLeft, noiseRight);
+    check (maxDiff (neutral.left, noiseLeft, 0, totalSamples) < 1.0e-5
+        && maxDiff (neutral.right, noiseRight, 0, totalSamples) < 1.0e-5, "neutral-width");
 
-    // The top of the Size range must ring noticeably longer than the bottom.
-    const double smallLate = windowEnergy (small.left, sampleRate, 0.10, 0.20);
-    const double largeLate = windowEnergy (large.left, sampleRate, 0.10, 0.20);
-    check (largeLate > 1.0e-7, "decay-length");
-    check (smallLate < largeLate * 0.01, "decay-scaling");
-    check (windowEnergy (small.left, sampleRate, 0.50, 0.70) < 1.0e-9, "decay-small");
-    check (windowEnergy (large.left, sampleRate, 0.50, 0.70) < largeLate * 0.01,
-           "decay-large");
+    // Width 0 collapses to a clean mono average.
+    const auto mono = renderImage (imager, 0.0f, 1.0f, noiseLeft, noiseRight);
+    std::vector<float> expectedMid (static_cast<size_t> (totalSamples));
+    for (int i = 0; i < totalSamples; ++i)
+        expectedMid[static_cast<size_t> (i)] =
+            0.5f * (noiseLeft[static_cast<size_t> (i)]
+                  + noiseRight[static_cast<size_t> (i)]);
 
-    // HF damping: the late tail should be darker than the early tail.
-    const double earlyHf = highFrequencyRatio (large.left, sampleRate, 0.02, 0.06);
-    const double lateHf = highFrequencyRatio (large.left, sampleRate, 0.15, 0.25);
-    check (lateHf < earlyHf * 0.85, "hf-damping");
+    const double monoMidDiff = maxDiff (mono.left, expectedMid, 0, totalSamples)
+                             + maxDiff (mono.right, expectedMid, 0, totalSamples);
+    check (monoMidDiff < 0.005, "mono-collapse");
+    check (stereoCorrelation (mono, sampleRate, 0.10, 0.40) > 0.999, "mono-correlation");
 
-    // Level should stay close as Size moves from 0 to 100 %.
-    std::vector<float> noiseLeft (static_cast<size_t> (totalSamples));
-    std::vector<float> noiseRight (static_cast<size_t> (totalSamples));
-    makeRoomNoise (noiseLeft, noiseRight, 0.25f);
+    // Width 100 must generate side content from a mono-derived signal.
+    const auto neutralMono = renderImage (imager, 0.5f, 1.0f, noiseLeft, noiseLeft);
+    const auto wideMono = renderImage (imager, 1.0f, 1.0f, noiseLeft, noiseLeft);
+    const double corrNeutral = stereoCorrelation (neutralMono, sampleRate, 0.10, 0.40);
+    const double corrWide = stereoCorrelation (wideMono, sampleRate, 0.10, 0.40);
+    check (corrNeutral > 0.999, "neutral-mono");
+    check (corrWide < 0.90, "mono-decorrelation");
+    check (corrWide < corrNeutral - 0.05, "width-expands");
 
-    const float rmsSmall = windowRms (renderRoom (room, 0.0f, 1.0f, noiseLeft, noiseRight).left,
-                                      sampleRate, 0.20, 0.40);
-    const float rmsMid = windowRms (renderRoom (room, 0.5f, 1.0f, noiseLeft, noiseRight).left,
-                                    sampleRate, 0.20, 0.40);
-    const float rmsLarge = windowRms (renderRoom (room, 1.0f, 1.0f, noiseLeft, noiseRight).left,
-                                      sampleRate, 0.20, 0.40);
+    // No ambience tail: the impulse response must die out within tens of ms.
+    const auto impulse = renderImage (imager, 1.0f, 1.0f, impulseLeft, impulseRight);
+    const double earlyEnergy = windowEnergy (impulse.left, sampleRate, 0.0, 0.01);
+    const double lateEnergy = windowEnergy (impulse.left, sampleRate, 0.03, 0.10)
+                            + windowEnergy (impulse.right, sampleRate, 0.03, 0.10);
+    check (lateEnergy < earlyEnergy * 0.02 && lateEnergy < 1.0e-3, "no-tail");
 
-    const float sizeMin = juce::jmin (rmsSmall, rmsMid, rmsLarge);
-    const float sizeMax = juce::jmax (rmsSmall, rmsMid, rmsLarge);
-    check (sizeMin > 1.0e-5f && sizeMax < sizeMin * 1.5f, "size-level");
+    // Level stays close across Width and Mix.
+    const float rmsNeutral = stereoRms (renderImage (imager, 0.5f, 1.0f,
+                                                     noiseLeft, noiseRight));
+    const float rmsWide75 = stereoRms (renderImage (imager, 0.75f, 1.0f,
+                                                    noiseLeft, noiseRight));
+    const float rmsWide100 = stereoRms (renderImage (imager, 1.0f, 1.0f,
+                                                     noiseLeft, noiseRight));
+    const float widthMin = juce::jmin (rmsNeutral, rmsWide75, rmsWide100);
+    const float widthMax = juce::jmax (rmsNeutral, rmsWide75, rmsWide100);
+    check (widthMin > 1.0e-5f && widthMax < widthMin * 1.5f, "width-level");
 
-    // Equal-power mix should not dip in the middle.
-    const float mixDry = windowRms (renderRoom (room, 0.5f, 0.0f, noiseLeft, noiseRight).left,
-                                    sampleRate, 0.20, 0.40);
-    const float mixHalf = windowRms (renderRoom (room, 0.5f, 0.5f, noiseLeft, noiseRight).left,
-                                     sampleRate, 0.20, 0.40);
-    const float mixWet = windowRms (renderRoom (room, 0.5f, 1.0f, noiseLeft, noiseRight).left,
-                                    sampleRate, 0.20, 0.40);
-
-    const float mixMin = juce::jmin (mixDry, mixHalf, mixWet);
-    const float mixMax = juce::jmax (mixDry, mixHalf, mixWet);
+    const float rmsMix0 = stereoRms (renderImage (imager, 1.0f, 0.0f,
+                                                  noiseLeft, noiseRight));
+    const float rmsMix50 = stereoRms (renderImage (imager, 1.0f, 0.5f,
+                                                   noiseLeft, noiseRight));
+    const float rmsMix100 = stereoRms (renderImage (imager, 1.0f, 1.0f,
+                                                    noiseLeft, noiseRight));
+    const float mixMin = juce::jmin (rmsMix0, rmsMix50, rmsMix100);
+    const float mixMax = juce::jmax (rmsMix0, rmsMix50, rmsMix100);
     check (mixMin > 1.0e-5f && mixMax < mixMin * 1.5f, "mix-level");
 
-    // The smallest setting is deliberately a wide doubler/stereoizer: a mono
-    // source should come out with a low L/R correlation at that setting.
-    const auto smallStereo = renderRoom (room, 0.0f, 1.0f, noiseLeft, noiseLeft);
-    const auto largeStereo = renderRoom (room, 1.0f, 1.0f, noiseLeft, noiseLeft);
-    const double corrSmall = stereoCorrelation (smallStereo, sampleRate, 0.10, 0.40);
-    const double corrLarge = stereoCorrelation (largeStereo, sampleRate, 0.10, 0.40);
-    check (corrSmall < 0.90, "stereo-width-small");
-    check (corrSmall < corrLarge, "stereo-width-macro");
+    // Odd block sizes must produce the same sample-by-sample result.
+    const auto blocked = renderImage (imager, 1.0f, 1.0f,
+                                      noiseLeft, noiseLeft, 137);
+    check (maxDiff (blocked.left, wideMono.left, 0, totalSamples) < 1.0e-5
+        && maxDiff (blocked.right, wideMono.right, 0, totalSamples) < 1.0e-5,
+        "block-size");
+
+    // The decorrelator delays are sample-rate dependent; check the endpoints.
+    bool otherRatesOk = true;
+    for (const double rate : { 44100.0, 96000.0 })
+    {
+        namberry::StereoImager rateImager;
+        juce::dsp::ProcessSpec rateSpec;
+        rateSpec.sampleRate = rate;
+        rateSpec.maximumBlockSize = 512;
+        rateSpec.numChannels = 2;
+        rateImager.prepare (rateSpec);
+
+        const int count = static_cast<int> (rate);
+        std::vector<float> monoSource (static_cast<size_t> (count));
+        makeImageNoise (monoSource, monoSource, 0.25f);
+        const auto rendered = renderImage (rateImager, 1.0f, 1.0f,
+                                           monoSource, monoSource);
+
+        otherRatesOk = otherRatesOk
+            && stereoCorrelation (rendered, rate, 0.10, 0.40) < 0.95
+            && std::all_of (rendered.left.begin(), rendered.left.end(),
+                            [] (float value) { return std::isfinite (value); });
+    }
+    check (otherRatesOk, "sample-rates");
 
     bool finite = true;
-    for (const float value : large.left)
+    for (const float value : wideMono.left)
+        finite = finite && std::isfinite (value);
+    for (const float value : wideMono.right)
         finite = finite && std::isfinite (value);
     check (finite, "finite");
 
-    std::cout << "room smallOnset=" << smallOnset
-              << " largeOnset=" << largeOnset
-              << " lateSmall=" << smallLate
-              << " lateLarge=" << largeLate
-              << " earlyHf=" << earlyHf
-              << " lateHf=" << lateHf
-              << " rmsSmall=" << rmsSmall
-              << " rmsMid=" << rmsMid
-              << " rmsLarge=" << rmsLarge
-              << " mixDry=" << mixDry
-              << " mixHalf=" << mixHalf
-              << " mixWet=" << mixWet
-              << " corrSmall=" << corrSmall
-              << " corrLarge=" << corrLarge
+    std::cout << "image corrNeutral=" << corrNeutral
+              << " corrWide=" << corrWide
+              << " lateEnergy=" << lateEnergy
+              << " rmsNeutral=" << rmsNeutral
+              << " rmsWide75=" << rmsWide75
+              << " rmsWide100=" << rmsWide100
+              << " rmsMix0=" << rmsMix0
+              << " rmsMix50=" << rmsMix50
+              << " rmsMix100=" << rmsMix100
               << " " << (passed ? "PASS" : "FAIL") << "\n";
 
     return passed ? 0 : 2;
@@ -1331,7 +1343,7 @@ int runModulationTest()
         fx.setChorusBypass (true);
         fx.setFlangerBypass (true);
         fx.setPhaserBypass (true);
-        fx.setRoomBlend (0.0f);
+        fx.setImageMix (0.0f);
         fx.setDelayBypass (true);
         fx.setReverbBypass (true);
     };
@@ -1418,18 +1430,33 @@ int runFxStateMigrationTest()
         }
     };
 
+    auto setLegacyValue = [&] (const juce::String& id, float value)
+    {
+        auto child = state.getChildWithProperty ("id", id);
+
+        if (! child.isValid())
+        {
+            juce::ValueTree parameter ("PARAM");
+            parameter.setProperty ("id", id, nullptr);
+            state.appendChild (parameter, nullptr);
+            child = parameter;
+        }
+
+        child.setProperty ("value", value, nullptr);
+    };
+
+    removeChild ("imageWidth");
+    removeChild ("imageMix");
+
     setValue ("chorusMix", 0.2f);
     setValue ("chorusDepth", 0.35f);
     setValue ("flangerFeedback", 0.4f);
     setValue ("phaserDepth", 0.5f);
     setValue ("chorusRate", 1.5f);
     setValue ("delayFeedback", 0.4f);
-    setValue ("roomBlend", 50.0f);
-
-    juce::ValueTree oldRoomBypass ("PARAM");
-    oldRoomBypass.setProperty ("id", "roomBypass", nullptr);
-    oldRoomBypass.setProperty ("value", 1.0f, nullptr);
-    state.appendChild (oldRoomBypass, nullptr);
+    setLegacyValue ("roomSize", 75.0f);
+    setLegacyValue ("roomBlend", 50.0f);
+    setLegacyValue ("roomBypass", 1.0f);
 
     removeChild ("chorusFeedback");
     removeChild ("chorusDelay");
@@ -1453,19 +1480,64 @@ int runFxStateMigrationTest()
     const float phaserFeedback = params.getRawParameterValue ("phaserFeedback")->load();
     const float phaserStages = params.getRawParameterValue ("phaserStages")->load();
     const float delayFeedback = params.getRawParameterValue ("delayFeedback")->load();
-    const float roomBlend = params.getRawParameterValue ("roomBlend")->load();
+    const float imageWidth = params.getRawParameterValue ("imageWidth")->load();
+    const float imageMix = params.getRawParameterValue ("imageMix")->load();
 
-    const bool passed = std::abs (chorusMix - 20.0f) < 0.01f
-                     && std::abs (chorusDepth - 35.0f) < 0.01f
-                     && std::abs (flangerFeedback - 38.0f) < 0.01f
-                     && std::abs (phaserDepth - 50.0f) < 0.01f
-                     && std::abs (chorusFeedback - 15.0f) < 0.01f
-                     && std::abs (chorusDelay - 15.0f) < 0.01f
-                     && std::abs (flangerManual - 2.0f) < 0.01f
-                     && std::abs (phaserFeedback - 30.0f) < 0.01f
-                     && std::abs (phaserStages - 8.0f) < 0.01f
-                     && std::abs (delayFeedback - 4.0f) < 0.01f
-                     && std::abs (roomBlend - 0.0f) < 0.01f;
+    auto migratedState = params.copyState();
+    const bool oldRoomsRemoved =
+        ! migratedState.getChildWithProperty ("id", "roomSize").isValid()
+     && ! migratedState.getChildWithProperty ("id", "roomBlend").isValid()
+     && ! migratedState.getChildWithProperty ("id", "roomBypass").isValid();
+
+    bool passed = std::abs (chorusMix - 20.0f) < 0.01f
+               && std::abs (chorusDepth - 35.0f) < 0.01f
+               && std::abs (flangerFeedback - 38.0f) < 0.01f
+               && std::abs (phaserDepth - 50.0f) < 0.01f
+               && std::abs (chorusFeedback - 15.0f) < 0.01f
+               && std::abs (chorusDelay - 15.0f) < 0.01f
+               && std::abs (flangerManual - 2.0f) < 0.01f
+               && std::abs (phaserFeedback - 30.0f) < 0.01f
+               && std::abs (phaserStages - 8.0f) < 0.01f
+               && std::abs (delayFeedback - 4.0f) < 0.01f
+               && std::abs (imageWidth - 75.0f) < 0.01f
+               && std::abs (imageMix - 0.0f) < 0.01f
+               && oldRoomsRemoved;
+
+    // Without a legacy room bypass, the old mix maps straight to Image Mix.
+    auto plainState = params.copyState();
+    plainState.removeProperty ("fxVersion", nullptr);
+
+    for (const auto* id : { "imageWidth", "imageMix" })
+    {
+        for (int i = plainState.getNumChildren(); --i >= 0;)
+            if (plainState.getChild (i).getProperty ("id").toString() == id)
+                plainState.removeChild (i, nullptr);
+    }
+
+    auto setPlainValue = [&plainState] (const juce::String& id, float value)
+    {
+        juce::ValueTree parameter ("PARAM");
+        parameter.setProperty ("id", id, nullptr);
+        parameter.setProperty ("value", value, nullptr);
+        plainState.appendChild (parameter, nullptr);
+    };
+
+    setPlainValue ("roomSize", 25.0f);
+    setPlainValue ("roomBlend", 60.0f);
+
+    xml = plainState.createXml();
+    juce::MemoryBlock plainBlock;
+    juce::AudioProcessor::copyXmlToBinary (*xml, plainBlock);
+    processor.setStateInformation (plainBlock.getData(),
+                                   static_cast<int> (plainBlock.getSize()));
+
+    const float plainWidth =
+        params.getRawParameterValue ("imageWidth")->load();
+    const float plainMix =
+        params.getRawParameterValue ("imageMix")->load();
+
+    passed = passed && std::abs (plainWidth - 25.0f) < 0.01f
+                    && std::abs (plainMix - 60.0f) < 0.01f;
 
     std::cout << "migration chorusMix=" << chorusMix
               << " chorusDepth=" << chorusDepth
@@ -1474,7 +1546,10 @@ int runFxStateMigrationTest()
               << " new=" << chorusFeedback << "/" << chorusDelay << "/"
               << flangerManual << "/" << phaserFeedback << "/" << phaserStages
               << " delayFeedback=" << delayFeedback
-              << " roomBlend=" << roomBlend
+              << " imageWidth=" << imageWidth
+              << " imageMix=" << imageMix
+              << " plain=" << plainWidth << "/" << plainMix
+              << " oldRoomsRemoved=" << (oldRoomsRemoved ? "yes" : "no")
               << " " << (passed ? "PASS" : "FAIL") << "\n";
 
     return passed ? 0 : 2;
@@ -2400,6 +2475,26 @@ int runPostEqTest()
     const auto responseAt1k = namberry::PostAmpEQ::getResponseDb (boosted, sampleRate, 1000.0);
     const auto responseAt100 = namberry::PostAmpEQ::getResponseDb (boosted, sampleRate, 100.0);
 
+    // The curve type belongs to each band, not its position in the array.
+    auto lowPassBand = flat;
+    lowPassBand.bands[0].frequency = 200.0f;
+    lowPassBand.bands[0].gainDb = 12.0f;
+
+    auto sameBandAsHighPass = lowPassBand;
+    sameBandAsHighPass.bands[0].type = namberry::PostAmpEQ::BandType::HighPass;
+
+    const auto lowPassAt50 = namberry::PostAmpEQ::getResponseDb (lowPassBand, sampleRate, 50.0);
+    const auto lowPassAt5k = namberry::PostAmpEQ::getResponseDb (lowPassBand, sampleRate, 5000.0);
+    const auto highPassAt50 = namberry::PostAmpEQ::getResponseDb (
+        sameBandAsHighPass, sampleRate, 50.0);
+    const auto highPassAt5k = namberry::PostAmpEQ::getResponseDb (
+        sameBandAsHighPass, sampleRate, 5000.0);
+
+    const auto renderedLowPass = gainDb (render (50.0, lowPassBand),
+                                         render (50.0, flat));
+    const auto renderedHighPass = gainDb (render (50.0, sameBandAsHighPass),
+                                          render (50.0, flat));
+
     const bool boostOk = std::abs (boostGain - 12.0f) < 1.2f;
     const bool cutOk = std::abs (cutGain + 12.0f) < 1.2f;
     const bool isolationOk = std::abs (distantGain) < 1.0f;
@@ -2408,9 +2503,15 @@ int runPostEqTest()
     const bool bypassOk = std::abs (bypassed1k - inputRms) < inputRms * 0.002f;
     const bool responseOk = std::abs (responseAt1k - 12.0f) < 1.0f
                          && std::abs (responseAt100) < 1.0f;
+    const bool typeResponseOk = lowPassAt50 > 8.0f
+                             && std::abs (lowPassAt5k) < 1.5f
+                             && std::abs (highPassAt50) < 2.0f
+                             && highPassAt5k > 8.0f;
+    const bool typeAudioOk = std::abs (renderedLowPass - lowPassAt50) < 2.0f
+                          && std::abs (renderedHighPass - highPassAt50) < 2.0f;
 
     const bool passed = boostOk && cutOk && isolationOk && hpfOk && lpfOk
-                     && bypassOk && responseOk;
+                     && bypassOk && responseOk && typeResponseOk && typeAudioOk;
 
     std::cout << "postEq boost=" << boostGain << " dB"
               << " cut=" << cutGain << " dB"
@@ -2420,6 +2521,10 @@ int runPostEqTest()
               << " bypass=" << bypassed1k
               << " response1k=" << responseAt1k
               << " response100=" << responseAt100
+              << " lowPass50=" << lowPassAt50
+              << " highPass50=" << highPassAt50
+              << " renderedLowPass=" << renderedLowPass
+              << " renderedHighPass=" << renderedHighPass
               << " " << (passed ? "PASS" : "FAIL") << "\n";
 
     return passed ? 0 : 2;
@@ -2468,7 +2573,7 @@ int runPostEqStateMigrationTest()
     processor.setStateInformation (block.getData(), static_cast<int> (block.getSize()));
 
     auto& parameters = processor.getValueTreeState();
-    auto value = [&parameters] (const char* id)
+    auto value = [&parameters] (const juce::String& id)
     {
         auto* parameter = parameters.getRawParameterValue (id);
         return parameter != nullptr ? parameter->load() : -9999.0f;
@@ -2489,6 +2594,16 @@ int runPostEqStateMigrationTest()
                             && std::abs (value ("postEqLpfQ") - 0.707f) < 0.01f;
     const bool defaultsOk = std::abs (value ("postEqBand3Freq") - 500.0f) < 0.01f
                          && std::abs (value ("postEqBand3Gain")) < 0.01f;
+    const bool typesOk =
+        std::abs (value ("postEqBand0Type")
+                  - static_cast<float> (namberry::PostAmpEQ::bandTypeToInt (
+                      namberry::PostAmpEQ::BandType::LowPass))) < 0.01f
+        && std::abs (value ("postEqBand1Type")
+                     - static_cast<float> (namberry::PostAmpEQ::bandTypeToInt (
+                         namberry::PostAmpEQ::BandType::Band))) < 0.01f
+        && std::abs (value ("postEqBand7Type")
+                     - static_cast<float> (namberry::PostAmpEQ::bandTypeToInt (
+                         namberry::PostAmpEQ::BandType::HighPass))) < 0.01f;
 
     auto legacyRemoved = [&processor]()
     {
@@ -2507,14 +2622,53 @@ int runPostEqStateMigrationTest()
         return true;
     };
 
+    // A version-5 project has the eight bands but no per-band type yet.
+    auto v5State = parameters.copyState();
+    v5State.setProperty ("fxVersion", 5, nullptr);
+
+    for (int i = v5State.getNumChildren(); --i >= 0;)
+    {
+        const auto id = v5State.getChild (i).getProperty ("id").toString();
+
+        if (id.startsWith ("postEqBand") && id.endsWith ("Type"))
+            v5State.removeChild (i, nullptr);
+    }
+
+    xml = v5State.createXml();
+    juce::MemoryBlock v5Block;
+    juce::AudioProcessor::copyXmlToBinary (*xml, v5Block);
+    processor.setStateInformation (v5Block.getData(), static_cast<int> (v5Block.getSize()));
+
+    bool v5TypesOk = true;
+
+    for (int band = 0; band < namberry::PostAmpEQ::kNumBands; ++band)
+    {
+        const auto expectedType = band == 0
+            ? namberry::PostAmpEQ::BandType::LowPass
+            : (band == namberry::PostAmpEQ::kNumBands - 1
+                   ? namberry::PostAmpEQ::BandType::HighPass
+                   : namberry::PostAmpEQ::BandType::Band);
+        const auto id = "postEqBand" + juce::String (band) + "Type";
+
+        if (std::abs (value (id) - static_cast<float> (
+                namberry::PostAmpEQ::bandTypeToInt (expectedType))) > 0.01f)
+            v5TypesOk = false;
+    }
+
+    const bool v5GainOk = std::abs (value ("postEqBand1Gain") + 2.0f) < 0.01f;
+
     const bool passed = lowShelfOk && midOk && highShelfOk && passFiltersOk
-                     && defaultsOk && legacyRemoved();
+                     && defaultsOk && typesOk && legacyRemoved()
+                     && v5TypesOk && v5GainOk;
 
     std::cout << "postEq migration lowShelf=" << (lowShelfOk ? "ok" : "bad")
               << " mid=" << (midOk ? "ok" : "bad")
               << " highShelf=" << (highShelfOk ? "ok" : "bad")
               << " passFilters=" << (passFiltersOk ? "ok" : "bad")
               << " defaults=" << (defaultsOk ? "ok" : "bad")
+              << " types=" << (typesOk ? "ok" : "bad")
+              << " v5Types=" << (v5TypesOk ? "ok" : "bad")
+              << " v5Gain=" << (v5GainOk ? "ok" : "bad")
               << " legacyRemoved=" << (legacyRemoved() ? "yes" : "no")
               << " " << (passed ? "PASS" : "FAIL") << "\n";
 
@@ -2595,8 +2749,8 @@ int main (int argc, char** argv)
     if (argc > 1 && juce::String (argv[1]) == "--delay-reset")
         return runDelayResetTest();
 
-    if (argc > 1 && juce::String (argv[1]) == "--room")
-        return runRoomTest();
+    if (argc > 1 && juce::String (argv[1]) == "--image")
+        return runImageTest();
 
     if (argc > 1 && juce::String (argv[1]) == "--modulation")
         return runModulationTest();

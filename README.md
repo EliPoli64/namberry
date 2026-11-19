@@ -1,6 +1,6 @@
 # NAMberry
 
-NAMberry is an all-in-one NAM-based guitar amp and effects plugin. It combines a NAM amp capture, a second NAM pedal/preamp capture, two blendable IRs with a single Blend knob, dynamics, a 3-band pre-EQ plus an 8-band graphical post-EQ, modulation/room/delay/reverb, and a low-latency pitch stage for capo and drop tuning.
+NAMberry is an all-in-one NAM-based guitar amp and effects plugin. It combines a NAM amp capture, a second NAM pedal/preamp capture, two blendable IRs with a single Blend knob, dynamics, a 3-band pre-EQ plus an 8-band graphical post-EQ, modulation/stereo imaging/delay/reverb, and a low-latency pitch stage for capo and drop tuning.
 
 The goal is to stop treating an amp capture as a single plugin in a long external chain. Load two captures, two cabinets, and a complete studio-style effects chain in one stereo plugin, with fast model browsing and a hardware-inspired interface.
 
@@ -16,7 +16,7 @@ NAM captures sound excellent, but the surrounding workflow is usually fragmented
 - another for a pedal capture,
 - another for IRs,
 - separate gate/compressor/EQ plugins,
-- separate modulation/room/delay/reverb plugins,
+- separate modulation/imaging/delay/reverb plugins,
 - manual file browsing for every model,
 - and no simple capo/drop-tune stage.
 
@@ -27,7 +27,7 @@ NAMberry packages all of that into one plugin:
 - **Impersonator pickup shaper** — a bridge/neck EQ preamp immediately after the tuner.
 - **Acoustic simulator** — a Boss-style AC-2/AC-3 mode pedal before the compressor that turns a magnetic pickup into an acoustic character; engaging it switches the distortion, EQ and IR stages off automatically.
 - **A complete chain** — tuner, pickup shaper, pitch stage, gate, acoustic sim, compressor, pedal, pre-amp EQ, amp, post-amp EQ, IR, post effects, master.
-- **Room ambience** — a short algorithmic room/stereo widener with a single Size macro, separate from the reverb.
+- **Stereo imager** — mid/side Width and Mix controls that widen the image without adding ambience, separate from the reverb.
 - **Fast model management** — tap any filename screen to list its folder in place, a **LOAD** button for the system file browser, previous/next arrows, and drag-and-drop.
 - **Persistent choices** — the selected amp, pedal and both IR files are restored on the next session.
 - **Preset save/load** — store the complete parameter state together with the current amp, pedal and IR file paths.
@@ -54,7 +54,7 @@ Input
   → NAM Amp
   → Post-Amp EQ
   → IR Loader (2 IRs + Blend)
-  → Post FX (Chorus / Flanger / Phaser / Room / Delay / Reverb)
+  → Post FX (Chorus / Flanger / Phaser / Image / Delay / Reverb)
   → Master Output
 ```
 
@@ -64,13 +64,13 @@ Input
 |---|---|
 | **Pre FX** | Impersonator, Pitch, Gate, Acoustic Sim, Compressor, NAM Pedal, Pre-Amp EQ (the tuner stays in the editor header) |
 | **Amp** | NAM amp model, Power, Gain, Bass, Mid, Treble, Presence, Depth, Output |
-| **Post EQ** | Full-width 8-band graphical EQ with draggable nodes, adjustable Q and high-pass/low-pass filters |
+| **Post EQ** | Full-width 8-band graphical EQ with draggable nodes, per-band curve type, adjustable Q and high-pass/low-pass filters |
 | **IR** | Two IR rows (filename screen, **LOAD**, arrows) plus one **Blend** knob and section bypass |
-| **Post FX** | Chorus, Flanger, Phaser, Room (Size), Delay, Reverb |
+| **Post FX** | Chorus, Flanger, Phaser, Image (Width), Delay, Reverb |
 
 Each tab shows a hardware icon (pedal, amp, EQ, speaker, sparkle). **Right-click any tab** to bypass that whole section; the icon dims and shows a red LED while bypassed.
 
-The bottom strip beside the tabs always exposes **Room Mix** and **Output** (master volume). NAMBerry applies a fixed +6 dB output trim in addition to the saved Master value. The header contains the **Reduced Motion** preference and the **PRESET** menu.
+The bottom strip beside the tabs always exposes **Image Mix** and **Output** (master volume). NAMBerry applies a fixed +6 dB output trim in addition to the saved Master value. The header contains the **Reduced Motion** preference and the **PRESET** menu.
 
 ---
 
@@ -154,7 +154,7 @@ The reference affects the note/cents display only. The tuner lives permanently i
 - `NoiseGate` — linked peak detector, attack/release, bypass.
 - `Compressor` — attack, release, threshold, ratio, makeup, optional Tight low-band sidechain, and automatic makeup gain so compression remains audible without a level drop.
 - `MultiBandEQ` — low shelf, mid peak, high shelf; used for the Pre-EQ.
-- `PostAmpEQ` — eight-band graphical EQ (low shelf, six bells, high shelf) plus 12 dB/octave high-pass and low-pass filters, used after the amp.
+- `PostAmpEQ` — eight-band graphical EQ with a selectable low-pass shelf, high-pass shelf or bell curve on every band, plus 12 dB/octave high-pass and low-pass filters, used after the amp.
 
 ### Acoustic simulator
 
@@ -177,7 +177,7 @@ A fixed 72 Hz high-pass conditions the input, then the four mode chains run in p
 
 **Level** is a manual ±12 dB trim with no automatic makeup. The pedal starts **bypassed**.
 
-Engaging the pedal also force-bypasses the **NAM Pedal, NAM Amp, Pre-EQ, Post-EQ and IR Loader** by flipping their bypass parameters, so the UI reflects the change. Disengaging restores each stage the sim switched off — unless the user changed it while the sim was on, which is left alone. A freshly loaded preset is treated as ground truth and clears this bookkeeping. There is no internal reverb; ambience comes from the Post FX Room/Reverb as usual.
+Engaging the pedal also force-bypasses the **NAM Pedal, NAM Amp, Pre-EQ, Post-EQ and IR Loader** by flipping their bypass parameters, so the UI reflects the change. Disengaging restores each stage the sim switched off — unless the user changed it while the sim was on, which is left alone. A freshly loaded preset is treated as ground truth and clears this bookkeeping. There is no internal reverb; ambience comes from the Post FX Reverb as usual.
 
 ### Post effects
 
@@ -186,13 +186,13 @@ Engaging the pedal also force-bypasses the **NAM Pedal, NAM Amp, Pre-EQ, Post-EQ
 - a custom `ModulatedDelay` for chorus: sine LFO, right-channel 180° phase, 5–30 ms delay, feedback and mix,
 - a custom `ModulatedDelay` for flanger: triangle LFO, 0.5–10 ms manual delay, signed feedback and mix,
 - a custom `Phaser` with 4/8/12 first-order all-pass stages, sine LFO and feedback,
-- a short algorithmic `Room` stage using early reflections and an eight-line feedback delay network,
+- a `StereoImager` stage using mid/side gains and a short decorrelation chain,
 - `juce::dsp::DelayLine` with feedback and mix,
 - `juce::dsp::Reverb`.
 
-The chorus and flanger share the modulated-delay core; all three share the LFO and parameter-smoothing framework, but use different delay ranges, waveforms and filter topologies. The Room is a short algorithmic ambience, not a reverb: **Size** moves the pre-delay (3–10 ms), early-reflection spacing (0.35×–1×), FDN delay lengths (0.6×–1.8×), decay time (25–300 ms) and high-frequency damping (12–4 kHz) together, while widening the stereo image at small settings. At the minimum it is essentially a wide doubler/stereoizer; at the maximum it is a small 0.3 s room. **Room Mix** uses an equal-power dry/wet law, so the level stays similar at every setting. Room Mix defaults to 0 %, where the stage is completely dry. The wet path has a fixed mid-focused filter (90 Hz high-pass, 1.2 kHz presence lift, 12 kHz low-pass). The separate Reverb provides the long tail.
+The chorus and flanger share the modulated-delay core; all three share the LFO and parameter-smoothing framework, but use different delay ranges, waveforms and filter topologies. The **Stereo Imager** replaces the old Room stage. **Width** sets the side gain: 50 % is neutral, 0 % collapses to mono and 100 % widens the image. Above 50 %, a few milliseconds of allpass decorrelation creates side content even from mono-derived guitar, while a 140 Hz side high-pass keeps the low end centered. **Image Mix** fades the whole effect in; 0 % is an exact passthrough and is the default. Level compensation keeps loudness close as Width moves. There is no ambience tail; use Reverb for that.
 
-Switching the delay off clears its delay line, so old feedback cannot reappear when it is switched back on. Bypassing the whole post-FX block also clears the delay and room buffers.
+Switching the delay off clears its delay line, so old feedback cannot reappear when it is switched back on. Bypassing the whole post-FX block also clears the delay and imager buffers.
 
 ### File management and persistence
 
@@ -216,7 +216,7 @@ DAW project state stores all parameter values through `AudioProcessorValueTreeSt
 The editor is JUCE-native and hardware-inspired:
 
 - left-to-right signal chain in a horizontally scrollable viewport,
-- a persistent bottom strip with **Room Mix** and **Output** beside the tabs,
+- a persistent bottom strip with **Image Mix** and **Output** beside the tabs,
 - pedal enclosures, an amp head and rack units,
 - large 48 px hardware controls (the browser list is desktop-sized),
 - footswitch LEDs show **active** (not bypassed) state,
@@ -237,7 +237,7 @@ The editor is JUCE-native and hardware-inspired:
 | NAM inference | **NeuralAudio** (with NeuralAmpModelerCore, RTNeural and its submodules) |
 | IR convolution | `juce::dsp::Convolution` |
 | EQ / dynamics | JUCE `dsp::IIR`, custom compressor/gate |
-| Post FX | Custom LFO/modulated-delay chorus and flanger; custom 4/8/12-stage phaser; algorithmic FDN `Room`; JUCE `dsp::DelayLine` and `dsp::Reverb` |
+| Post FX | Custom LFO/modulated-delay chorus and flanger; custom 4/8/12-stage phaser; mid/side `StereoImager`; JUCE `dsp::DelayLine` and `dsp::Reverb` |
 | Pitch | **Rubber Band** when available, with **Signalsmith Stretch** fallback |
 | Settings | JUCE `PropertiesFile` |
 | Build | CMake 3.22+, CMake presets, helper scripts |
@@ -279,7 +279,7 @@ src/
   post_amp_eq.cpp
   compressor.cpp
   noise_gate.cpp
-  room.cpp
+  stereo_imager.cpp
   post_effects.cpp
 
 include/namberry/
@@ -295,7 +295,7 @@ include/namberry/
   PostAmpEQ.h
   Compressor.h
   NoiseGate.h
-  Room.h
+  StereoImager.h
   PostEffects.h
   DirectoryBrowser.h
 
@@ -539,9 +539,11 @@ Engaging the pedal automatically switches the NAM Pedal, NAM Amp, Pre-EQ, Post-E
 
 The Pre-EQ has three bands: low shelf, mid peak, high shelf with frequency, gain and Q, plus a **Volume** trim in its footer (−12…+12 dB, up to +12 dB of boost).
 
-The Post-EQ is a full-width **8-band graphical EQ**: low shelf, six bell bands and a high shelf. Drag a node horizontally to change frequency and vertically to change gain; use the mouse wheel for Q. Double-click a node to reset its gain, or right-click for reset options. A fixed pair of **Boost** and **Q** knobs on the right retargets to whichever band or filter is focused. For HPF/LPF, the Q knob adjusts the filter Q and Boost is inactive. The **Flat** button zeroes all gains and resets the filters. The Post-EQ also has a 12 dB/octave high-pass and low-pass filter (defaults 20 Hz and 20 kHz), with draggable cutoff handles on the graph and adjustable Q.
+The Post-EQ is a full-width **8-band graphical EQ**. Drag a node horizontally to change frequency and vertically to change gain; use the mouse wheel for Q. Double-click a node to reset its gain, or right-click for reset options. A fixed pair of **Boost** and **Q** knobs on the right retargets to whichever band or filter is focused. For HPF/LPF, the Q knob adjusts the filter Q and Boost is inactive. The **Flat** button zeroes all gains and resets the filters.
 
-Older presets migrate automatically: the previous low/mid/high post-EQ bands become the new low shelf, first bell and high shelf, and the old high-pass/low-pass cutoff frequencies are retained.
+Every point has its own selectable curve type in the focus strip above the knobs: **Low Pass** (low shelf), **High Pass** (high shelf) or **Band** (peaking bell). All three types use the Boost knob for boost/cut, so the type changes the shape rather than muting the control. The default curves are Low Pass on band 1, Band on bands 2–7 and High Pass on band 8. The Post-EQ also has a separate 12 dB/octave high-pass and low-pass filter (defaults 20 Hz and 20 kHz), with draggable cutoff handles on the graph and adjustable Q.
+
+Older presets migrate automatically: the previous low/mid/high post-EQ bands become the new low shelf, first bell and high shelf, and the old high-pass/low-pass cutoff frequencies are retained. Projects from the eight-band version keep their curves because each band's saved type defaults to the shape it had before the selector was added.
 
 ### IR
 
@@ -560,12 +562,12 @@ The two IRs are gained so they always sum to unity, so the cabinet level stays c
 - Chorus: rate, depth, feedback, delay, mix, bypass. Mix tops out at 50 %, which is the old maximum, with a 2× wet boost.
 - Flanger: rate, depth, manual, feedback, mix, bypass. Mix tops out at 50 %, with a 2× wet boost.
 - Phaser: rate, depth, feedback, stages, mix, bypass. Mix tops out at 50 %, with a 2× wet boost.
-- Room: **Size** in the Post FX pedal; **Room Mix** in the bottom strip. This is a short algorithmic ambience, not a reverb: Size moves pre-delay (3–10 ms), early-reflection spacing, FDN delay lengths, decay (25–300 ms), HF damping (12–4 kHz) and stereo width together. The minimum is a wide doubler/stereoizer; the maximum is a small 0.3 s room. Room Mix uses an equal-power law and defaults to 0 %, where the stage is completely dry; the wet level is normalized so moving Size does not make the room louder.
+- Image: **Width** in the Post FX pedal; **Image Mix** in the bottom strip. Width 50 % is neutral, 0 % is mono and 100 % widens the image. Above 50 %, a short allpass decorrelator creates side content from mono-derived guitar and a 140 Hz side high-pass keeps the lows centered. Image Mix defaults to 0 %, where the imager is an exact passthrough; there is no separate bypass.
 - Delay: mix, time, feedback, bypass. Feedback is 0–10: 0 is one repeat and 10 is an almost endless tail.
 - Reverb: mix, decay, width, bypass. Its dry level is normalized so increasing reverb never boosts the dry guitar.
 - Master **Output** is in the bottom strip beside the tabs.
 
-Use **Room Mix** in the bottom strip to add ambience; there is no separate room bypass. Switching the delay off discards its feedback tail.
+Use **Image Mix** in the bottom strip to widen the image; there is no separate imager bypass. Switching the delay off discards its feedback tail.
 
 ### Reduced Motion
 
@@ -618,7 +620,7 @@ cmake --build build --target NAMBerryOfflineTest NAMBerryUiSnapshot
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --delay-feedback
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --delay-reset
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --reverb-dry
-./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --room
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --image
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --modulation
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --fx-state
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --preset
@@ -654,7 +656,7 @@ What they cover:
 - `--detected-stage`: detector → Stretch pitch stage.
 - `--dry-center`: verifies both channels are identical when fully dry.
 - `--delay-reset`: verifies the delay tail is discarded on bypass.
-- `--room`: verifies the algorithmic room's macro mapping, equal-power mix, decay, damping, stereo width, level consistency and dry 0 % mix.
+- `--image`: verifies stereo-imager passthrough, neutral width, mono collapse, mono-source decorrelation, short impulse response, level consistency, odd block sizes and sample-rate robustness.
 - `--modulation`: verifies finite chorus, flanger and phaser output, all phaser stage counts, and bypass.
 - `--fx-state`: verifies migration of old post-FX parameter ranges/defaults.
 - `--preset`: verifies preset save/load, including amp/IR file paths.
@@ -665,8 +667,8 @@ What they cover:
 - `--tone-match`: verifies Tone Match keeps the source brighter than a natural detune.
 - `--ir-level`: verifies unity level across the whole Blend range (0, 0.25, 0.5, 1) and untouched dry passthrough with no IR loaded.
 - `--ir-state`: verifies migration of legacy four-slot IR parameters to `irBlend`.
-- `--post-eq`: verifies the 8-band boost/cut, HPF/LPF attenuation, bypass pass-through and the shared response calculation.
-- `--post-eq-state`: verifies version-5 migration of the old three-band post-EQ into the 8-band layout.
+- `--post-eq`: verifies the 8-band boost/cut, per-band curve types, HPF/LPF attenuation, bypass pass-through and the shared response calculation.
+- `--post-eq-state`: verifies version-5 migration of the old three-band post-EQ into the 8-band layout and version-6 migration that adds each band's curve type.
 - `--reference`: verifies 432/440 Hz reference behaviour.
 - `--persist`: restores selected amp, pedal and IR paths; expects local sample files and skips if they are missing.
 - `--dirs`: sets the amp, pedal and IR root directories.
@@ -679,8 +681,8 @@ What they cover:
 ```
 
 The snapshot run also drives a Post EQ drag, wheel-Q change, double-click
-reset and the focused-band Boost/Q knobs, and fails if the parameters do not
-follow.
+reset, the focused-band Boost/Q knobs and the curve-type switch, and fails if
+the parameters do not follow.
 
 Writes:
 
@@ -706,7 +708,7 @@ The snapshot tool is headless and does not need a DAW.
 - The **Impersonator** is an EQ approximation. It cannot reproduce the physical pick-attack geometry or the full phase relationship between pickup positions.
 - The **Acoustic Sim** is likewise a filter-bank approximation: it shapes an existing signal but cannot add true body radiance or the projection of a real acoustic guitar.
 - NAM model latency is not separately reported by the plugin; only the pitch-stage latency is reported.
-- The **Room** is a short algorithmic ambience (25–300 ms decay) with early reflections and an FDN tail; at small sizes it acts as a doubler/stereoizer, not a long reverb. Use the Reverb effect for a long tail.
+- The **Stereo Imager** uses a short phase decorrelator to create side content from mono-derived guitar. It can sound phasey on already-wide material, so keep Width near 50 % if the source is genuinely stereo. Use the Reverb effect for an ambience tail.
 - The plugin is **stereo in / stereo out only**.
 - Model and IR paths are **per-user settings**, not embedded in the DAW project. Moving a project to another machine may require reloading them.
 - `ui-spec.md` is an earlier Qt/QML exploration; the shipped UI is JUCE-native.

@@ -31,6 +31,22 @@ bool sameValue (float a, float b)
 } // namespace
 
 //==============================================================================
+PostAmpEQ::BandType PostAmpEQ::bandTypeFromInt (int value)
+{
+    switch (value)
+    {
+        case static_cast<int> (BandType::HighPass): return BandType::HighPass;
+        case static_cast<int> (BandType::Band):     return BandType::Band;
+        default:                                    return BandType::LowPass;
+    }
+}
+
+int PostAmpEQ::bandTypeToInt (BandType type)
+{
+    return static_cast<int> (type);
+}
+
+//==============================================================================
 PostAmpEQ::PostAmpEQ (const Settings& settings)
     : bands_ (settings.bands),
       highPassFrequency_ (settings.highPassFrequency),
@@ -90,7 +106,8 @@ void PostAmpEQ::reset()
 }
 
 //==============================================================================
-void PostAmpEQ::setBandParameters (int bandIdx, float frequency, float gainDb, float q)
+void PostAmpEQ::setBandParameters (int bandIdx, float frequency, float gainDb,
+                                   float q, BandType type)
 {
     if (bandIdx < 0 || bandIdx >= kNumBands)
         return;
@@ -98,12 +115,14 @@ void PostAmpEQ::setBandParameters (int bandIdx, float frequency, float gainDb, f
     const BandParams next {
         static_cast<float> (clampFrequency (frequency, sampleRate_)),
         clampGainDb (gainDb),
-        clampQ (q)
+        clampQ (q),
+        type
     };
 
     auto& current = bands_[static_cast<size_t> (bandIdx)];
 
-    if (sameValue (current.frequency, next.frequency)
+    if (current.type == next.type
+        && sameValue (current.frequency, next.frequency)
         && sameValue (current.gainDb, next.gainDb)
         && sameValue (current.q, next.q))
         return;
@@ -141,29 +160,34 @@ void PostAmpEQ::setLowPassParameters (float frequencyHz, float q)
 PostAmpEQ::BandParams PostAmpEQ::getBandParameters (int bandIdx) const
 {
     if (bandIdx < 0 || bandIdx >= kNumBands)
-        return { 1000.0f, 0.0f, 1.0f };
+        return { 1000.0f, 0.0f, 1.0f, BandType::Band };
 
     return bands_[static_cast<size_t> (bandIdx)];
 }
 
 //==============================================================================
 juce::dsp::IIR::Coefficients<float>::Ptr PostAmpEQ::makeBandCoefficients (
-    int bandIdx, double sampleRate, const BandParams& band)
+    double sampleRate, const BandParams& band)
 {
     const auto frequency = clampFrequency (band.frequency, sampleRate);
     const auto gain = juce::Decibels::decibelsToGain (clampGainDb (band.gainDb));
     const auto q = clampQ (band.q);
 
-    if (bandIdx == 0)
-        return juce::dsp::IIR::Coefficients<float>::makeLowShelf (
-            sampleRate, frequency, q, gain);
+    switch (band.type)
+    {
+        case BandType::LowPass:
+            return juce::dsp::IIR::Coefficients<float>::makeLowShelf (
+                sampleRate, frequency, q, gain);
 
-    if (bandIdx == kNumBands - 1)
-        return juce::dsp::IIR::Coefficients<float>::makeHighShelf (
-            sampleRate, frequency, q, gain);
+        case BandType::HighPass:
+            return juce::dsp::IIR::Coefficients<float>::makeHighShelf (
+                sampleRate, frequency, q, gain);
 
-    return juce::dsp::IIR::Coefficients<float>::makePeakFilter (
-        sampleRate, frequency, q, gain);
+        case BandType::Band:
+        default:
+            return juce::dsp::IIR::Coefficients<float>::makePeakFilter (
+                sampleRate, frequency, q, gain);
+    }
 }
 
 juce::dsp::IIR::Coefficients<float>::Ptr PostAmpEQ::makeHighPassCoefficients (
@@ -186,7 +210,7 @@ void PostAmpEQ::updateBandCoefficients (int bandIdx)
         return;
 
     const auto coefficients = makeBandCoefficients (
-        bandIdx, sampleRate_, bands_[static_cast<size_t> (bandIdx)]);
+        sampleRate_, bands_[static_cast<size_t> (bandIdx)]);
 
     for (auto& filter : filters_[static_cast<size_t> (bandIdx)])
         if (filter != nullptr)
@@ -291,8 +315,8 @@ void PostAmpEQ::getResponseDb (const Settings& settings, double sampleRate,
     };
 
     for (int band = 0; band < kNumBands; ++band)
-        accumulate (makeBandCoefficients (band, safeSampleRate,
-                                          settings.bands[static_cast<size_t> (band)]));
+        accumulate (makeBandCoefficients (
+            safeSampleRate, settings.bands[static_cast<size_t> (band)]));
 
     accumulate (makeHighPassCoefficients (settings.highPassFrequency,
                                           settings.highPassQ, safeSampleRate));

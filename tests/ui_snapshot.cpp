@@ -340,6 +340,55 @@ int main (int argc, char** argv)
             std::cerr << "FAIL: post EQ Q knob not found\n";
             interactionOk = false;
         }
+
+        // The curve-type switch retargets to the focused band as well.
+        if (auto* selector = findChildByName (editor, "PostEqTypeSelector"))
+        {
+            if (! selector->isVisible() || selector->getWidth() < 40
+                || selector->getHeight() < 20)
+            {
+                std::cerr << "FAIL: post EQ type selector has no usable bounds\n";
+                interactionOk = false;
+            }
+        }
+        else
+        {
+            std::cerr << "FAIL: post EQ type selector not found\n";
+            interactionOk = false;
+        }
+
+        auto checkTypeButton = [&] (const char* name, float expected)
+        {
+            auto* button = dynamic_cast<juce::TextButton*> (
+                findChildByName (editor, name));
+
+            if (button == nullptr)
+            {
+                std::cerr << "FAIL: post EQ type button not found: " << name << "\n";
+                interactionOk = false;
+                return;
+            }
+
+            if (! button->isVisible() || button->getWidth() < 8)
+            {
+                std::cerr << "FAIL: post EQ type button not laid out: " << name << "\n";
+                interactionOk = false;
+                return;
+            }
+
+            button->setToggleState (true, juce::sendNotification);
+
+            if (std::abs (value ("postEqBand0Type") - expected) > 0.01f)
+            {
+                std::cerr << "FAIL: post EQ type " << name << " wrote "
+                          << value ("postEqBand0Type") << "\n";
+                interactionOk = false;
+            }
+        };
+
+        checkTypeButton ("PostEqTypeHigh", 1.0f);
+        checkTypeButton ("PostEqTypeBand", 2.0f);
+        checkTypeButton ("PostEqTypeLow", 0.0f);
     }
     else
     {

@@ -62,7 +62,7 @@ target_sources(NAMBerry PRIVATE
     src/modulation_effects.cpp
     src/compressor.cpp
     src/noise_gate.cpp
-    src/room.cpp
+    src/stereo_imager.cpp
     src/post_effects.cpp
 )
 
