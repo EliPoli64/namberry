@@ -539,7 +539,7 @@ Engaging the pedal automatically switches the NAM Pedal, NAM Amp, Pre-EQ, Post-E
 
 The Pre-EQ has three bands: low shelf, mid peak, high shelf with frequency, gain and Q, plus a **Volume** trim in its footer (−12…+12 dB, up to +12 dB of boost).
 
-The Post-EQ is a full-width **8-band graphical EQ**: low shelf, six bell bands and a high shelf. Drag a node horizontally to change frequency and vertically to change gain; use the mouse wheel for Q. Double-click a node to reset its gain, or right-click for reset options. The **Flat** button zeroes all gains and resets the filters. The Post-EQ also has a 12 dB/octave high-pass and low-pass filter (defaults 20 Hz and 20 kHz), with draggable cutoff handles on the graph and adjustable Q.
+The Post-EQ is a full-width **8-band graphical EQ**: low shelf, six bell bands and a high shelf. Drag a node horizontally to change frequency and vertically to change gain; use the mouse wheel for Q. Double-click a node to reset its gain, or right-click for reset options. A fixed pair of **Boost** and **Q** knobs on the right retargets to whichever band or filter is focused. For HPF/LPF, the Q knob adjusts the filter Q and Boost is inactive. The **Flat** button zeroes all gains and resets the filters. The Post-EQ also has a 12 dB/octave high-pass and low-pass filter (defaults 20 Hz and 20 kHz), with draggable cutoff handles on the graph and adjustable Q.
 
 Older presets migrate automatically: the previous low/mid/high post-EQ bands become the new low shelf, first bell and high shelf, and the old high-pass/low-pass cutoff frequencies are retained.
 
@@ -678,8 +678,9 @@ What they cover:
 ./build/NAMBerryUiSnapshot_artefacts/Release/NAMBerryUiSnapshot /tmp/namberry-ui
 ```
 
-The snapshot run also drives a Post EQ drag, wheel-Q change and double-click
-reset, and fails if the parameters do not follow.
+The snapshot run also drives a Post EQ drag, wheel-Q change, double-click
+reset and the focused-band Boost/Q knobs, and fails if the parameters do not
+follow.
 
 Writes:
 

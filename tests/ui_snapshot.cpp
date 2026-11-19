@@ -246,7 +246,7 @@ int main (int argc, char** argv)
         const float height = (float) graph->getHeight();
         const float plotX = 52.0f;
         const float plotY = 46.0f;
-        const float plotWidth = width - 74.0f;
+        const float plotWidth = width - 192.0f;
         const float plotHeight = height - 94.0f;
 
         auto xForFrequency = [plotX, plotWidth] (float frequency)
@@ -299,6 +299,45 @@ int main (int argc, char** argv)
         {
             std::cerr << "FAIL: post EQ double-click did not reset gain: "
                       << resetGain << "\n";
+            interactionOk = false;
+        }
+
+        // The focus knobs retarget to the selected band. Drive them through
+        // their sliders to confirm they write the matching parameters.
+        if (auto* boost = dynamic_cast<juce::Slider*> (
+                findChildByName (editor, "PostEqBoostSlider")))
+        {
+            boost->setValue (3.0, juce::sendNotificationSync);
+            const auto knobGain = value ("postEqBand0Gain");
+
+            if (std::abs (knobGain - 3.0f) > 0.15f)
+            {
+                std::cerr << "FAIL: post EQ boost knob wrote gain "
+                          << knobGain << "\n";
+                interactionOk = false;
+            }
+        }
+        else
+        {
+            std::cerr << "FAIL: post EQ boost knob not found\n";
+            interactionOk = false;
+        }
+
+        if (auto* q = dynamic_cast<juce::Slider*> (
+                findChildByName (editor, "PostEqQSlider")))
+        {
+            q->setValue (2.0, juce::sendNotificationSync);
+            const auto knobQ = value ("postEqBand0Q");
+
+            if (std::abs (knobQ - 2.0f) > 0.02f)
+            {
+                std::cerr << "FAIL: post EQ Q knob wrote Q " << knobQ << "\n";
+                interactionOk = false;
+            }
+        }
+        else
+        {
+            std::cerr << "FAIL: post EQ Q knob not found\n";
             interactionOk = false;
         }
     }

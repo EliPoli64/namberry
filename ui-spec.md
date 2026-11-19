@@ -38,6 +38,7 @@ This document describes the visual language and interaction model for the **NAMb
 - A single full-width rack panel rather than a grid of knobs.
 - A dark inset screen shows the summed EQ response from 20 Hz to 20 kHz.
 - Eight colour-coded, numbered nodes sit on the curve. Dragging changes frequency and gain; the wheel changes Q.
+- A narrow focus strip on the right holds one **Boost** and one **Q** knob. They always edit the focused band, so the panel needs only a single set of knobs; with an HPF/LPF focused, Q edits the filter and Boost is inactive.
 - HPF and LPF handles sit along the bottom of the graph and are dragged horizontally.
 - The top bar shows the selected band or filter values, with **Flat** and **Bypass** controls on the right.
 - The graph and readout update from host automation as well as mouse input.

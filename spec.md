@@ -60,6 +60,7 @@ The editor should be organized into the following five sections, in this exact o
 3. Post Amp EQ
    - Full-width, full-height graphical 8-band EQ
    - Draggable nodes for frequency and gain, mouse wheel for Q
+   - Focused-band Boost and Q knobs that retarget to the selected band; the Q knob also follows the selected HPF/LPF
    - Adjustable high-pass and low-pass filters with draggable cutoff handles
    - Flat and bypass controls
 4. IR

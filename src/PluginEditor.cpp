@@ -1262,13 +1262,104 @@ private:
 };
 
 //==============================================================================
+/// A labelled metal knob that can be retargeted to the focused EQ band.
+class FocusKnob : public juce::Component
+{
+public:
+    FocusKnob (const juce::String& knobName, const juce::String& labelText,
+               const juce::String& suffix, double minimum, double maximum,
+               double interval, double defaultValue)
+    {
+        setName (knobName);
+
+        addAndMakeVisible (label_);
+        label_.setText (labelText, juce::dontSendNotification);
+        label_.setJustificationType (juce::Justification::centred);
+        label_.setFont (juce::FontOptions (9.5f, juce::Font::bold));
+        label_.setColour (juce::Label::textColourId, juce::Colour (kTextDim));
+
+        addAndMakeVisible (slider_);
+        slider_.setName (knobName + "Slider");
+        slider_.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+        slider_.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 62, 18);
+        slider_.setColour (juce::Slider::textBoxTextColourId, juce::Colour (kTextDim));
+        slider_.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+        slider_.setNumDecimalPlacesToDisplay (interval < 0.1 ? 2 : 1);
+        slider_.setTextValueSuffix (suffix);
+        slider_.setRange (minimum, maximum, interval);
+        slider_.setValue (defaultValue, juce::dontSendNotification);
+        slider_.setDoubleClickReturnValue (true, defaultValue);
+        slider_.setTooltip (labelText);
+
+        slider_.onValueChange = [this]
+        {
+            if (onValueChanged != nullptr)
+                onValueChanged (static_cast<float> (slider_.getValue()));
+        };
+
+        slider_.onDragStart = [this]
+        {
+            if (onGestureStart != nullptr)
+                onGestureStart();
+        };
+
+        slider_.onDragEnd = [this]
+        {
+            if (onGestureEnd != nullptr)
+                onGestureEnd();
+        };
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds();
+        label_.setBounds (r.removeFromTop (15));
+        slider_.setBounds (r.reduced (0, 1));
+    }
+
+    void setValue (float value)
+    {
+        if (std::abs (slider_.getValue() - value) > 1.0e-6)
+            slider_.setValue (value, juce::dontSendNotification);
+    }
+
+    void setDefaultValue (float value)
+    {
+        slider_.setDoubleClickReturnValue (true, value);
+    }
+
+    void setActive (bool active)
+    {
+        setAlpha (active ? 1.0f : 0.32f);
+        slider_.setEnabled (active);
+    }
+
+    void setLabelColour (juce::Colour colour)
+    {
+        label_.setColour (juce::Label::textColourId, colour);
+    }
+
+    std::function<void (float)> onValueChanged;
+    std::function<void()> onGestureStart;
+    std::function<void()> onGestureEnd;
+
+private:
+    juce::Label label_;
+    juce::Slider slider_;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FocusKnob)
+};
+
+//==============================================================================
 /// Full-width graphical editor for the eight-band post-amp EQ.
 class PostEqEditor : public juce::Component,
                      private juce::Timer
 {
 public:
     PostEqEditor (APVTS& state, std::function<double()> sampleRateProvider)
-        : state_ (state), sampleRateProvider_ (std::move (sampleRateProvider))
+        : state_ (state), sampleRateProvider_ (std::move (sampleRateProvider)),
+          boostKnob_ ("PostEqBoost", "BOOST", " dB", -24.0, 24.0, 0.1, 0.0),
+          qKnob_ ("PostEqQ", "Q", {}, 0.1, 10.0, 0.01, 1.0)
     {
         setName ("PostEqGraph");
         setWantsKeyboardFocus (true);
@@ -1308,14 +1399,57 @@ public:
         flatButton_.onClick = [this] { flatten(); };
         addAndMakeVisible (flatButton_);
 
+        addAndMakeVisible (boostKnob_);
+        addAndMakeVisible (qKnob_);
+
+        boostKnob_.onGestureStart = [this]
+        {
+            boostGestureParam_ = focusedGainParameter();
+            beginGesture (boostGestureParam_);
+        };
+        boostKnob_.onGestureEnd = [this]
+        {
+            endGesture (boostGestureParam_);
+            boostGestureParam_ = nullptr;
+        };
+        boostKnob_.onValueChanged = [this] (float value)
+        {
+            if (auto* parameter = focusedGainParameter())
+            {
+                setParameterValue (parameter, value);
+                updateCache();
+            }
+        };
+
+        qKnob_.onGestureStart = [this]
+        {
+            qGestureParam_ = focusedQParameter();
+            beginGesture (qGestureParam_);
+        };
+        qKnob_.onGestureEnd = [this]
+        {
+            endGesture (qGestureParam_);
+            qGestureParam_ = nullptr;
+        };
+        qKnob_.onValueChanged = [this] (float value)
+        {
+            if (auto* parameter = focusedQParameter())
+            {
+                setParameterValue (parameter, value);
+                updateCache();
+            }
+        };
+
         cachedSettings_ = readSettings();
         cachedBypassed_ = isBypassedInState();
+        updateFocusControls();
         startTimerHz (30);
     }
 
     ~PostEqEditor() override
     {
         endActiveGesture();
+        endFocusGestures();
         stopTimer();
     }
 
@@ -1324,6 +1458,7 @@ public:
         if (! isVisible())
         {
             endActiveGesture();
+            endFocusGestures();
             dragTarget_ = DragTarget::None;
             activeBand_ = -1;
         }
@@ -1334,6 +1469,10 @@ public:
         auto r = getLocalBounds().reduced (14, 8);
         topArea_ = r.removeFromTop (30);
         hintArea_ = r.removeFromBottom (22);
+
+        auto focus = r.removeFromRight (108);
+        r.removeFromRight (10);
+        focusArea_ = focus;
         screenArea_ = r.toFloat();
 
         auto plot = r;
@@ -1342,6 +1481,16 @@ public:
         plot.removeFromTop (8);
         plot.removeFromBottom (18);
         plotArea_ = plot.toFloat();
+
+        auto focusContent = focusArea_.reduced (6, 4);
+        focusTitleArea_ = focusContent.removeFromTop (32);
+        focusContent.removeFromTop (4);
+
+        const int knobHeight = juce::jlimit (88, 118,
+                                            (focusContent.getHeight() - 8) / 2);
+        boostKnob_.setBounds (focusContent.removeFromTop (knobHeight));
+        focusContent.removeFromTop (6);
+        qKnob_.setBounds (focusContent.removeFromTop (knobHeight));
 
         auto controls = topArea_;
         auto buttonArea = controls.removeFromRight (176);
@@ -1368,6 +1517,7 @@ public:
         g.setColour (juce::Colour (0xff1d3438));
         g.drawRoundedRectangle (screenArea_, 6.0f, 1.2f);
 
+        drawFocusPanel (g);
         drawGrid (g);
         drawCutRegions (g);
         drawCurve (g);
@@ -1385,7 +1535,7 @@ public:
 
         g.setColour (juce::Colour (kTextDim).withAlpha (0.82f));
         g.setFont (juce::FontOptions (9.5f, juce::Font::bold));
-        g.drawFittedText ("DRAG: FREQ / GAIN    WHEEL: Q    DOUBLE-CLICK: RESET    RIGHT-CLICK: MENU",
+        g.drawFittedText ("DRAG: FREQ / GAIN    WHEEL: Q    DOUBLE-CLICK: RESET    RIGHT-CLICK: MENU    KNOBS: FOCUSED BAND / FILTER",
                           hintArea_, juce::Justification::centredLeft, 1, 0.85f);
     }
 
@@ -1410,6 +1560,7 @@ public:
                 selectedPass_ = pass;
             }
 
+            updateFocusControls();
             repaint();
             showContextMenu (band, pass);
             return;
@@ -1429,6 +1580,7 @@ public:
 
             beginGesture (bandFreqParams_[(size_t) band]);
             beginGesture (bandGainParams_[(size_t) band]);
+            updateFocusControls();
             repaint();
             return;
         }
@@ -1443,6 +1595,7 @@ public:
                                                  : DragTarget::LowPass;
 
             beginGesture (pass == Pass::HighPass ? highPassFreqParam_ : lowPassFreqParam_);
+            updateFocusControls();
             repaint();
             return;
         }
@@ -1450,6 +1603,7 @@ public:
         selectedBand_ = -1;
         selectedPass_ = Pass::None;
         dragTarget_ = DragTarget::None;
+        updateFocusControls();
         repaint();
     }
 
@@ -1589,6 +1743,41 @@ private:
 
     static constexpr int numBands = (int) PostAmpEQ::kNumBands;
 
+    static juce::Colour bandColour (int band)
+    {
+        static const juce::uint32 colours[] = {
+            0xff22d3ee, 0xff34d399, 0xffa3e635, 0xfffbbf24,
+            0xfffb923c, 0xfff472b6, 0xffc084fc, 0xff60a5fa
+        };
+
+        return juce::Colour (colours[(size_t) juce::jlimit (0, numBands - 1, band)]);
+    }
+
+    juce::Colour focusColour() const
+    {
+        if (selectedBand_ >= 0)
+            return bandColour (selectedBand_);
+
+        if (selectedPass_ != Pass::None)
+            return juce::Colour (0xff93c5fd);
+
+        return juce::Colour (kTextDim);
+    }
+
+    juce::String focusTitle() const
+    {
+        if (selectedBand_ >= 0)
+            return "BAND " + juce::String (selectedBand_ + 1);
+
+        if (selectedPass_ == Pass::HighPass)
+            return "HPF";
+
+        if (selectedPass_ == Pass::LowPass)
+            return "LPF";
+
+        return "NONE";
+    }
+
     //==========================================================================
     PostAmpEQ::Settings readSettings() const
     {
@@ -1645,6 +1834,7 @@ private:
     {
         cachedSettings_ = readSettings();
         cachedBypassed_ = isBypassedInState();
+        updateFocusControls();
         repaint();
     }
 
@@ -1657,8 +1847,73 @@ private:
         {
             cachedSettings_ = settings;
             cachedBypassed_ = bypassed;
+            updateFocusControls();
             repaint();
         }
+    }
+
+    juce::RangedAudioParameter* focusedGainParameter() const
+    {
+        if (selectedBand_ < 0)
+            return nullptr;
+
+        return bandGainParams_[(size_t) selectedBand_];
+    }
+
+    juce::RangedAudioParameter* focusedQParameter() const
+    {
+        if (selectedBand_ >= 0)
+            return bandQParams_[(size_t) selectedBand_];
+
+        if (selectedPass_ == Pass::HighPass)
+            return highPassQParam_;
+
+        if (selectedPass_ == Pass::LowPass)
+            return lowPassQParam_;
+
+        return nullptr;
+    }
+
+    void updateFocusControls()
+    {
+        const bool hasBand = selectedBand_ >= 0;
+        const bool hasPass = selectedPass_ != Pass::None;
+        const auto highlight = focusColour();
+
+        boostKnob_.setActive (hasBand);
+        qKnob_.setActive (hasBand || hasPass);
+        boostKnob_.setLabelColour (hasBand ? highlight : juce::Colour (kTextDim));
+        qKnob_.setLabelColour (hasBand || hasPass ? highlight : juce::Colour (kTextDim));
+
+        if (hasBand)
+        {
+            const auto index = (size_t) selectedBand_;
+            const auto& band = cachedSettings_.bands[index];
+            const PostAmpEQ::Settings defaults;
+
+            boostKnob_.setValue (band.gainDb);
+            boostKnob_.setDefaultValue (defaults.bands[index].gainDb);
+            qKnob_.setValue (band.q);
+            qKnob_.setDefaultValue (defaults.bands[index].q);
+        }
+        else if (hasPass)
+        {
+            const auto q = selectedPass_ == Pass::HighPass
+                ? cachedSettings_.highPassQ
+                : cachedSettings_.lowPassQ;
+
+            boostKnob_.setValue (0.0f);
+            qKnob_.setValue (q);
+            qKnob_.setDefaultValue (0.707f);
+        }
+        else
+        {
+            boostKnob_.setValue (0.0f);
+            qKnob_.setValue (1.0f);
+            qKnob_.setDefaultValue (1.0f);
+        }
+
+        repaint (focusArea_);
     }
 
     static void setParameterValue (juce::RangedAudioParameter* parameter, float value)
@@ -1700,6 +1955,14 @@ private:
         {
             endGesture (lowPassFreqParam_);
         }
+    }
+
+    void endFocusGestures()
+    {
+        endGesture (boostGestureParam_);
+        boostGestureParam_ = nullptr;
+        endGesture (qGestureParam_);
+        qGestureParam_ = nullptr;
     }
 
     //==========================================================================
@@ -1780,6 +2043,36 @@ private:
     }
 
     //==========================================================================
+    void drawFocusPanel (juce::Graphics& g)
+    {
+        const auto area = focusArea_.toFloat();
+
+        if (area.isEmpty())
+            return;
+
+        g.setGradientFill (juce::ColourGradient (
+            juce::Colour (0xff171a1e), area.getX(), area.getY(),
+            juce::Colour (0xff0c0e10), area.getX(), area.getBottom(), false));
+        g.fillRoundedRectangle (area, 6.0f);
+        g.setColour (juce::Colour (0xff1d3438));
+        g.drawRoundedRectangle (area, 6.0f, 1.2f);
+
+        g.setColour (focusColour().withAlpha (0.7f));
+        g.fillRoundedRectangle (area.getX() + 8.0f, area.getY() + 2.0f,
+                                area.getWidth() - 16.0f, 2.0f, 1.0f);
+
+        auto title = focusTitleArea_.toFloat();
+        auto caption = title.removeFromTop (12.0f);
+
+        g.setColour (juce::Colour (kTextDim).withAlpha (0.72f));
+        g.setFont (juce::FontOptions (7.5f, juce::Font::bold));
+        g.drawText ("FOCUS", caption, juce::Justification::centred);
+
+        g.setColour (focusColour());
+        g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
+        g.drawText (focusTitle(), title, juce::Justification::centred);
+    }
+
     void drawGrid (juce::Graphics& g)
     {
         static const float minorFrequencies[] = {
@@ -1933,17 +2226,12 @@ private:
 
     void drawNodes (juce::Graphics& g)
     {
-        static const juce::uint32 colours[] = {
-            0xff22d3ee, 0xff34d399, 0xffa3e635, 0xfffbbf24,
-            0xfffb923c, 0xfff472b6, 0xffc084fc, 0xff60a5fa
-        };
-
         for (int band = 0; band < numBands; ++band)
         {
             const auto centre = bandNodeCentre (band);
             const bool selected = selectedBand_ == band;
             const bool hovered = hoverBand_ == band;
-            const auto colour = juce::Colour (colours[band]);
+            const auto colour = bandColour (band);
             const float radius = selected ? 11.5f : (hovered ? 10.5f : 9.0f);
 
             if (selected || hovered)
@@ -2135,6 +2423,11 @@ private:
     APVTS& state_;
     std::function<double()> sampleRateProvider_;
 
+    FocusKnob boostKnob_;
+    FocusKnob qKnob_;
+    juce::RangedAudioParameter* boostGestureParam_ = nullptr;
+    juce::RangedAudioParameter* qGestureParam_ = nullptr;
+
     std::array<juce::String, PostAmpEQ::kNumBands> bandFreqIds_;
     std::array<juce::String, PostAmpEQ::kNumBands> bandGainIds_;
     std::array<juce::String, PostAmpEQ::kNumBands> bandQIds_;
@@ -2154,6 +2447,8 @@ private:
 
     juce::Rectangle<int> topArea_;
     juce::Rectangle<int> hintArea_;
+    juce::Rectangle<int> focusArea_;
+    juce::Rectangle<int> focusTitleArea_;
     juce::Rectangle<float> screenArea_;
     juce::Rectangle<float> plotArea_;
 
