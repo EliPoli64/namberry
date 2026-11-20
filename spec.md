@@ -238,13 +238,15 @@ A persistent **IMAGE / MASTER** strip sits beside the bottom tab buttons and alw
 - **Controls**: B → N / N → B switch, Level, bypass footswitch.
 
 ### 4.14 Acoustic Simulator
-- **Goal**: Emulate a Boss-style acoustic simulator (AC-2/AC-3): turn a magnetic-pickup electric guitar signal into an acoustic-guitar character.
+- **Goal**: Turn a magnetic-pickup electric guitar signal into a real steel-string acoustic character, with body support on the standard low E/A/D strings and a plucked attack rather than electric sustain.
 - **Placement**: Immediately after the gate and before the compressor, so the sim shapes the raw pickup before dynamics.
 - **Implementation**: Modal filter bank with four fixed IIR mode curves (Standard, Jumbo, Enhanced, Piezo) crossfaded with a smoothed weight vector, followed by three parallel sections whose mix gains are smoothed per sample so continuous automation stays click-free:
-  - **Body**: peaking filters at 95 Hz (Q 2.0, +5 dB), 205 Hz (Q 1.8, +4.5 dB), 430 Hz (Q 1.6, +3.5 dB) plus a −2.5 dB dip at 850 Hz for the electric-honk removal; the Body knob crossfades toward this curve.
-  - **Top**: +6 dB high shelf at 4.5 kHz plus a +2.5 dB peak at 8 kHz; the Top knob crossfades toward it.
-  - **Piezo**: +6 dB peak at 2.8 kHz (Q 1.4) plus a +3 dB high shelf at 4 kHz, with a mild `tanh` soft clipper on the 2–5 kHz band only (drive 1.5, unity-normalised) to mimic piezo-preamp harshness on hard strums; the Piezo knob crossfades toward it.
-  - A fixed 72 Hz high-pass conditions the input; Level is a manual ±12 dB trim with no automatic makeup.
+  - **Body**: resonances at 85 Hz (Q 2.2, +4.5 dB), 180 Hz (Q 1.8, +4 dB) and 360 Hz (Q 1.5, +3 dB) to excite low E (~82 Hz), A (~110 Hz) and D (~147 Hz); a −3.5 dB dip at 700 Hz removes electric honk and a −2 dB cut at 2.5 kHz tames pickup presence. The Body knob crossfades toward this curve.
+  - **Top**: −2 dB at 2.4 kHz, +2 dB at 3.5 kHz, +5 dB high shelf at 5.5 kHz and +3 dB at 9 kHz. The Top knob crossfades toward it.
+  - **Piezo**: +4 dB peak at 2.4 kHz (Q 1.3) plus a +3 dB high shelf at 4 kHz, with a mild `tanh` soft clipper on the 2–5 kHz band only (drive 1.5, unity-normalised). The Piezo knob crossfades toward it.
+  - **Attack envelope**: one mono fast/slow envelope pair (1 ms attack, 70 ms fast release, 250 ms slow follow) derives a transient amount from the dry input. It briefly lifts the Body section by up to 25 % and the Top section by up to 60 %, then settles to zero during sustain. The envelope gain lives inside the wet paths, so a knob at 0 stays bit-transparent. All envelope state is plain floats and all coefficients are computed in `prepare()`; the audio thread allocates nothing.
+  - Mode high-passes sit between 55 and 90 Hz; Level is a manual ±12 dB trim with no automatic makeup.
+- **Defaults**: Top 60 %, Body 65 %, Piezo 20 %. Changing a default only affects new instances; saved DAW state and presets keep their stored values.
 - **Auto-off of distortion/EQ/IR**: Engaging the pedal force-bypasses the NAM Pedal, NAM Amp, Pre-EQ, Post-EQ and IR Loader by flipping their bypass parameters (so the UI reflects it), and disengaging restores each stage the sim switched off — unless the user changed it while the sim was on. A loaded preset is treated as ground truth.
 - **Controls**: Mode (Standard/Jumbo/Enhanced/Piezo), Top, Body, Piezo, Level, bypass footswitch. The pedal starts bypassed.
 

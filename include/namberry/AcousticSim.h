@@ -7,11 +7,13 @@
 
 namespace namberry {
 
-/// Boss-style acoustic simulator (AC-2/AC-3). Four fixed modal-EQ curves
-/// approximate the body of different acoustic guitars and crossfade on mode
-/// switches; Top, Body and Piezo knobs crossfade additive parallel sections
-/// so continuous automation stays click-free. Level is a manual trim with no
-/// automatic makeup. The pedal is bypassed by default.
+/// Electric-to-acoustic simulator. Four fixed modal-EQ curves approximate the
+/// body of different acoustic guitars and crossfade on mode switches; Top,
+/// Body and Piezo knobs crossfade additive parallel sections so continuous
+/// automation stays click-free. A mono envelope adds a brief pick attack and
+/// low-mid bloom to the Top and Body sections, so plucks settle like a steel
+/// string instead of sustaining like a magnetic pickup. Level is a manual trim
+/// with no automatic makeup. The pedal is bypassed by default.
 class AcousticSim
 {
 public:
@@ -55,6 +57,7 @@ private:
     float processPiezoSection (int channel, float sample) noexcept;
 
     static float modeWeight (Mode mode, int index) noexcept;
+    static float onePoleCoefficient (double sampleRate, double timeMs) noexcept;
 
     std::array<FilterChain, numModes> modeChains_;
     FilterChain bodyChain_;
@@ -73,7 +76,18 @@ private:
     juce::SmoothedValue<float> piezoAmount_;
     juce::SmoothedValue<float> levelSmoothed_;
 
+    /// One-pole envelope coefficients derived once in prepare(). The fast
+    /// follower tracks the pick attack; the slow one tracks sustained level.
+    float fastAttackCoeff_ = 0.0f;
+    float fastReleaseCoeff_ = 0.0f;
+    float slowAttackCoeff_ = 0.0f;
+    float slowReleaseCoeff_ = 0.0f;
+    float fastEnvelope_ = 0.0f;
+    float slowEnvelope_ = 0.0f;
+
     static constexpr float piezoDrive = 1.5f;
+    static constexpr float bodyTransientAmount = 0.25f;
+    static constexpr float topTransientAmount = 0.60f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AcousticSim)
 };

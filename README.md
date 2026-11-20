@@ -25,7 +25,7 @@ NAMberry packages all of that into one plugin:
 - **Two NAM captures** — one amp, one pedal/preamp.
 - **Two IRs and one Blend knob** — crossfade between two cabinets, or run just one, with a section bypass.
 - **Impersonator pickup shaper** — a bridge/neck EQ preamp immediately after the tuner.
-- **Acoustic simulator** — a Boss-style AC-2/AC-3 mode pedal before the compressor that turns a magnetic pickup into an acoustic character; engaging it switches the distortion, EQ and IR stages off automatically.
+- **Acoustic simulator** — a steel-string acoustic voicing before the compressor that gives magnetic pickups low-string body and a plucked attack; engaging it switches the distortion, EQ and IR stages off automatically.
 - **A complete chain** — tuner, pickup shaper, pitch stage, gate, acoustic sim, compressor, pedal, pre-amp EQ, amp, post-amp EQ, IR, post effects, master.
 - **Stereo imager** — mid/side Width and Mix controls that widen the image without adding ambience, separate from the reverb.
 - **Fast model management** — tap any filename screen to list its folder in place, a **LOAD** button for the system file browser, previous/next arrows, and drag-and-drop.
@@ -158,22 +158,22 @@ The reference affects the note/cents display only. The tuner lives permanently i
 
 ### Acoustic simulator
 
-`AcousticSim` sits immediately before the compressor, after the gate, so it shapes the raw pickup before dynamics. It models a Boss-style acoustic simulator: four fixed modal-EQ curves approximate the body of different acoustic guitars, and Top/Body/Piezo knobs crossfade additive parallel sections, so continuous automation stays click-free.
+`AcousticSim` sits immediately before the compressor, after the gate, so it shapes the raw pickup before dynamics. It aims at a real steel-string acoustic rather than a vintage AC-2/AC-3 voicing: four fixed modal-EQ curves approximate different body sizes, and Top/Body/Piezo knobs crossfade additive parallel sections, so continuous automation stays click-free. A mono envelope adds a short pick attack and low-string bloom, so plucks settle instead of sustaining like a magnetic pickup.
 
-A fixed 72 Hz high-pass conditions the input, then the four mode chains run in parallel with a smoothed weight vector (a mode switch is a 20 ms crossfade, never a hard switch). Each knob crossfades toward its own EQ curve — at 0 the section contributes exactly nothing:
+A gentle 55–90 Hz high-pass (depending on mode) conditions the input, then the four mode chains run in parallel with a smoothed weight vector (a mode switch is a 20 ms crossfade, never a hard switch). Each knob crossfades toward its own EQ curve — at 0 the section contributes exactly nothing:
 
-- **Body** — peaking filters at 95 Hz (Q 2.0, +5 dB), 205 Hz (Q 1.8, +4.5 dB), 430 Hz (Q 1.6, +3.5 dB) plus a −2.5 dB dip at 850 Hz for the electric-honk removal.
-- **Top** — +6 dB high shelf at 4.5 kHz plus a +2.5 dB peak at 8 kHz.
-- **Piezo** — +6 dB peak at 2.8 kHz (Q 1.4) plus a +3 dB high shelf at 4 kHz, with a mild `tanh` soft clipper on the 2–5 kHz band only (drive 1.5, unity-normalised) so hard strums pick up piezo-preamp harshness without turning the whole signal into distortion.
+- **Body** — resonances at 85 Hz (Q 2.2, +4.5 dB), 180 Hz (Q 1.8, +4 dB) and 360 Hz (Q 1.5, +3 dB) to excite low E, A and D, a −3.5 dB dip at 700 Hz for electric honk, and a −2 dB cut at 2.5 kHz. The envelope briefly lifts this section on attack.
+- **Top** — −2 dB at 2.4 kHz, +2 dB at 3.5 kHz, a +5 dB high shelf at 5.5 kHz and +3 dB air at 9 kHz. The same envelope opens this section on the pick and closes it again during sustain.
+- **Piezo** — a gentler +4 dB peak at 2.4 kHz and +3 dB high shelf at 4 kHz, with a mild `tanh` soft clipper on the 2–5 kHz band only (drive 1.5, unity-normalised) for piezo-preamp edge without turning the whole signal into distortion.
 
 **Mode curves**
 
 | Mode | Character |
 |---|---|
-| Standard | balanced dreadnought: body around 220/450 Hz, mild honk dip at 900 Hz, +3 dB high shelf at 5 kHz |
-| Jumbo | warm and big-bottomed: +4 dB low shelf at 110 Hz, 190 Hz peak, softer top, 12 kHz low-pass |
-| Enhanced | bright and "recorded": presence peak at 1.5 kHz, +5 dB high shelf at 6 kHz, extra air at 8 kHz |
-| Piezo | thin, direct and quacky: scooped 500 Hz, +5 dB peak at 2.8 kHz, +5 dB high shelf at 4 kHz |
+| Standard | balanced steel-string: 90/190/380 Hz body modes, 700 Hz honk dip, +4 dB high shelf at 4.5 kHz |
+| Jumbo | big air mode at 85 Hz, 175 Hz top, warmer 4 kHz shelf, 11 kHz low-pass |
+| Enhanced | "recorded" acoustic: 100/200 Hz low support, 2.4 kHz presence, +6 dB shelf at 5.5 kHz, 9 kHz air |
+| Piezo | thin and direct: scooped 500 Hz, modest 2.2/3.2 kHz peaks, 10 kHz low-pass |
 
 **Level** is a manual ±12 dB trim with no automatic makeup. The pedal starts **bypassed**.
 
@@ -529,9 +529,9 @@ The **ACOUSTIC** pedal sits between the gate and the compressor:
 | Control | Meaning |
 |---|---|
 | **Mode** | Standard / Jumbo / Enhanced / Piezo — four fixed body curves, crossfaded on switch |
-| **Top** | 0–100 % brilliance and air (default 50 %) |
-| **Body** | 0–100 % modal body resonance and honk removal (default 50 %) |
-| **Piezo** | 0–100 % piezo quack and 2–5 kHz saturation (default 30 %) |
+| **Top** | 0–100 % brilliance, air and pick attack (default 60 %) |
+| **Body** | 0–100 % modal body resonance, honk removal and low-string bloom (default 65 %) |
+| **Piezo** | 0–100 % piezo quack and 2–5 kHz saturation (default 20 %) |
 | **Level** | −12…+12 dB manual trim, default 0 dB |
 | **Footswitch** | Bypass; the pedal starts **bypassed** |
 
@@ -708,7 +708,7 @@ The snapshot tool is headless and does not need a DAW.
 - The **Standalone app** does not apply host-style plugin delay compensation; the active pitch latency is audible there. DAWs compensate it.
 - The pitch stage uses an optional runtime Rubber Band engine and a self-contained Stretch fallback. Missing Rubber Band affects quality, not correctness.
 - The **Impersonator** is an EQ approximation. It cannot reproduce the physical pick-attack geometry or the full phase relationship between pickup positions.
-- The **Acoustic Sim** is likewise a filter-bank approximation: it shapes an existing signal but cannot add true body radiance or the projection of a real acoustic guitar.
+- The **Acoustic Sim** is a filter-bank plus envelope approximation. It gives low strings body support and a plucked attack, but it cannot add true body radiance or the room projection of a real acoustic guitar.
 - NAM model latency is not separately reported by the plugin; only the pitch-stage latency is reported.
 - The **Stereo Imager** uses a short phase decorrelator to create side content from mono-derived guitar. It can sound phasey on already-wide material, so keep Width near 50 % if the source is genuinely stereo. Use the Reverb effect for an ambience tail.
 - The plugin is **stereo in / stereo out only**.

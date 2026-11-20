@@ -95,15 +95,15 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
         juce::StringArray { "Standard", "Jumbo", "Enhanced", "Piezo" }, 0));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "acousticSimTop", "Acoustic Sim Top",
-        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 50.0f,
+        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 60.0f,
         juce::AudioParameterFloatAttributes().withLabel ("%")));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "acousticSimBody", "Acoustic Sim Body",
-        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 50.0f,
+        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 65.0f,
         juce::AudioParameterFloatAttributes().withLabel ("%")));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "acousticSimPiezo", "Acoustic Sim Piezo",
-        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 30.0f,
+        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 20.0f,
         juce::AudioParameterFloatAttributes().withLabel ("%")));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "acousticSimLevel", "Acoustic Sim Level",

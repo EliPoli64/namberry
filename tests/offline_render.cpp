@@ -1937,6 +1937,108 @@ int runAcousticSimTest()
         return worst;
     };
 
+    auto windowRms = [] (const std::vector<float>& x, size_t start, size_t count) -> float
+    {
+        const size_t end = juce::jmin (x.size(), start + count);
+        float sum = 0.0f;
+
+        for (size_t i = start; i < end; ++i)
+            sum += x[i] * x[i];
+
+        return end > start ? std::sqrt (sum / static_cast<float> (end - start)) : 0.0f;
+    };
+
+    // Renders a gated 220 Hz tone: silent for four blocks, then playing. The
+    // short attack window must be louder than the late sustain window.
+    auto renderBurst = [&] (float top, float body, float piezo) -> std::vector<float>
+    {
+        namberry::AcousticSim sim;
+        juce::dsp::ProcessSpec spec;
+        spec.sampleRate = sampleRate;
+        spec.maximumBlockSize = blockSize;
+        spec.numChannels = 2;
+        sim.setMode (Mode::standard);
+        sim.setTop (top);
+        sim.setBody (body);
+        sim.setPiezo (piezo);
+        sim.setOutputLevelDb (0.0f);
+        sim.prepare (spec);
+        sim.setBypass (false);
+
+        juce::AudioBuffer<float> buffer (2, blockSize);
+        juce::MidiBuffer midi;
+        double phase = 0.0;
+        std::vector<float> captured;
+        captured.reserve (static_cast<size_t> (16 * blockSize));
+
+        for (int block = 0; block < 16; ++block)
+        {
+            const bool active = block >= 4;
+
+            for (int i = 0; i < blockSize; ++i)
+            {
+                const float s = active
+                    ? inputAmplitude * static_cast<float> (std::sin (phase))
+                    : 0.0f;
+                phase += 2.0 * juce::MathConstants<double>::pi * 220.0 / sampleRate;
+                buffer.setSample (0, i, s);
+                buffer.setSample (1, i, s);
+            }
+
+            sim.processBlock (buffer, midi);
+
+            for (int i = 0; i < blockSize; ++i)
+                captured.push_back (buffer.getSample (0, i));
+        }
+
+        return captured;
+    };
+
+    // Stress knobs and envelopes at uneven block sizes and two sample rates.
+    auto finiteAtRate = [&] (double rate, int bs) -> bool
+    {
+        namberry::AcousticSim sim;
+        juce::dsp::ProcessSpec spec;
+        spec.sampleRate = rate;
+        spec.maximumBlockSize = static_cast<juce::uint32> (bs);
+        spec.numChannels = 2;
+        sim.setMode (Mode::enhanced);
+        sim.setTop (1.0f);
+        sim.setBody (1.0f);
+        sim.setPiezo (1.0f);
+        sim.prepare (spec);
+        sim.setBypass (false);
+
+        juce::AudioBuffer<float> buffer (2, bs);
+        juce::MidiBuffer midi;
+        double phase = 0.0;
+
+        for (int block = 0; block < 12; ++block)
+        {
+            for (int i = 0; i < bs; ++i)
+            {
+                const float s = 0.12f * static_cast<float> (std::sin (phase))
+                              + 0.05f * static_cast<float> (std::sin (phase * 13.0));
+                phase += 2.0 * juce::MathConstants<double>::pi * 110.0 / rate;
+                buffer.setSample (0, i, s);
+                buffer.setSample (1, i, s);
+            }
+
+            sim.processBlock (buffer, midi);
+
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = 0; i < bs; ++i)
+                {
+                    const float v = buffer.getSample (ch, i);
+
+                    if (! std::isfinite (v) || std::abs (v) > 4.0f)
+                        return false;
+                }
+        }
+
+        return true;
+    };
+
     // --- Bypass must be a bit-exact pass-through ---
     const auto bypassed = renderCapture (1000.0, Mode::standard, 0.5f, 0.5f, 0.3f, true);
     const bool bypassOk = std::abs (rmsOf (bypassed) - inputRms) < inputRms * 0.02f;
@@ -1972,6 +2074,39 @@ int runAcousticSimTest()
                 modesOk = false;
         }
 
+    // --- Low strings: Body must lift E/A/D without building a midrange wall ---
+    auto bodyGainAt = [&] (float frequency) -> float
+    {
+        const auto off = renderCapture (frequency, Mode::standard, 0.0f, 0.0f, 0.0f, false);
+        const auto on  = renderCapture (frequency, Mode::standard, 0.0f, 1.0f, 0.0f, false);
+        return rmsOf (on) / juce::jmax (1.0e-6f, rmsOf (off));
+    };
+
+    const float lowEGain = bodyGainAt (82.0f);
+    const float lowAGain = bodyGainAt (110.0f);
+    const float lowDGain = bodyGainAt (147.0f);
+    const float mudGain  = bodyGainAt (300.0f);
+    const float honkGain = bodyGainAt (700.0f);
+
+    const bool lowStringsOk = lowEGain > 1.20f && lowAGain > 1.20f && lowDGain > 1.15f
+                           && mudGain < 2.00f && honkGain < 0.90f;
+
+    const auto airOff = renderCapture (9000.0, Mode::standard, 0.0f, 0.0f, 0.0f, false);
+    const auto airOn  = renderCapture (9000.0, Mode::standard, 1.0f, 0.0f, 0.0f, false);
+    const float airGain = rmsOf (airOn) / juce::jmax (1.0e-6f, rmsOf (airOff));
+    const bool airOk = airGain > 1.30f;
+
+    // --- Pick attack must bloom, then settle like a plucked string ---
+    const auto burst = renderBurst (0.60f, 0.65f, 0.20f);
+    // Skip the first ~5 ms so the resonant filters have settled; the attack
+    // envelope is still near its peak over this window.
+    const float attackRms = windowRms (burst, static_cast<size_t> (4 * blockSize + 256), 256);
+    const float sustainRms = windowRms (burst, static_cast<size_t> (14 * blockSize), 256);
+    const bool transientOk = std::isfinite (attackRms)
+                          && attackRms > sustainRms * 1.10f;
+
+    const bool ratesOk = finiteAtRate (44100.0, 128) && finiteAtRate (96000.0, 333);
+
     // --- Mode switches and knob automation must stay click-free ---
     int changeCount = 0;
     const auto modeSwitch = renderCapture (
@@ -2003,7 +2138,8 @@ int runAcousticSimTest()
                            && steadyDelta < 0.04f;
 
     const bool passed = bypassOk && bodyOk && topOk && piezoOk
-                     && levelOk && modesOk && continuityOk;
+                     && levelOk && modesOk && continuityOk
+                     && lowStringsOk && airOk && transientOk && ratesOk;
 
     std::cout << "acousticSim bypass=" << rmsOf (bypassed)
               << " body=" << rmsOf (bodyOff) << "->" << rmsOf (bodyOn)
@@ -2011,6 +2147,10 @@ int runAcousticSimTest()
               << " piezo=" << rmsOf (piezoOff) << "->" << rmsOf (piezoOn)
               << " level=" << rmsOf (levelUnity) << "->" << rmsOf (levelCut)
               << " modes=" << (modesOk ? "ok" : "bad")
+              << " low E/A/D=" << lowEGain << "/" << lowAGain << "/" << lowDGain
+              << " mud=" << mudGain << " honk=" << honkGain << " air=" << airGain
+              << " attack/sustain=" << attackRms << "/" << sustainRms
+              << " rates=" << (ratesOk ? "ok" : "bad")
               << " delta steady/switch/sweep=" << steadyDelta << "/" << switchDelta
               << "/" << sweepDelta
               << " " << (passed ? "PASS" : "FAIL") << "\n";
