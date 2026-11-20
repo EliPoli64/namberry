@@ -13,7 +13,7 @@ NAMBerry is a **C++20 / JUCE 8.0.6 audio plugin** for guitar:
 - two NAM neural captures: pedal/preamp and amp
 - two IRs crossfaded by one Blend control
 - pitch/capo stage, tuner, gate, acoustic sim, compressor, pre/post EQ,
-  modulation, stereo imager, delay, reverb
+  modulation, room, delay, reverb
 - hardware-inspired JUCE editor, not a web UI and not Qt/QML
 
 The shipped UI is native JUCE. `ui-spec.md` is a historical Qt/QML exploration;
@@ -70,8 +70,8 @@ src/
   post_amp_eq.cpp           eight-band Post-EQ
   ir_loader.cpp
   modulation_effects.cpp
-  stereo_imager.cpp
   post_effects.cpp
+  room_sim.cpp
   directory_browser.cpp     legacy, compiled but not reachable from UI
   main.cpp                  standalone entry point
 
@@ -182,7 +182,8 @@ TEST=./build-standalone/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTes
 "$TEST" --reverb-dry
 "$TEST" --delay-feedback
 "$TEST" --delay-reset
-"$TEST" --image
+"$TEST" --delay-ping-pong
+"$TEST" --room
 "$TEST" --modulation
 "$TEST" --fx-state
 "$TEST" --preset
@@ -353,8 +354,8 @@ Current state versions in `PluginProcessor.cpp`:
 ```cpp
 constexpr int kPostFxStateVersion = 3;
 constexpr int kIrStateVersion = 4;
-constexpr int kPostEqStateVersion = 5;
-constexpr int kFxStateVersion = kPostEqStateVersion;
+constexpr int kPostEqStateVersion = 6;
+constexpr int kFxStateVersion = 8;
 ```
 
 `getStateInformation()` writes `fxVersion`; `setStateInformation()` runs the

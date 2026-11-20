@@ -17,7 +17,6 @@ void PostEffects::prepare (const juce::dsp::ProcessSpec& spec)
     chorus_.prepare (spec);
     flanger_.prepare (spec);
     phaser_.prepare (spec);
-    imager_.prepare (spec);
 
     delayLine_.setMaximumDelayInSamples (static_cast<int> (maxDelaySamples_));
     delayLine_.prepare (spec);
@@ -34,7 +33,6 @@ void PostEffects::reset()
     chorus_.reset();
     flanger_.reset();
     phaser_.reset();
-    imager_.reset();
     delayLine_.reset();
     reverb_.reset();
 }
@@ -58,9 +56,6 @@ void PostEffects::setPhaserDepth (float value)    { phaser_.setDepthPercent (val
 void PostEffects::setPhaserFeedback (float value) { phaser_.setFeedbackPercent (value); }
 void PostEffects::setPhaserStages (int stages)    { phaser_.setStages (stages); }
 
-void PostEffects::setImageWidth (float value) { imager_.setWidth (clamp01 (value)); }
-void PostEffects::setImageMix (float value)   { imager_.setMix (clamp01 (value)); }
-
 void PostEffects::setDelayMix (float value)      { delayMix_ = clamp01 (value); }
 void PostEffects::setDelayTimeMs (float value)   { delayTimeMs_ = juce::jlimit (10.0f, 2000.0f, value); }
 
@@ -70,6 +65,16 @@ void PostEffects::setDelayFeedback (float value)
     // without allowing an unbounded feedback loop.
     const float amount = juce::jlimit (0.0f, 10.0f, value) * 0.1f;
     delayFeedback_ = juce::jlimit (0.0f, 0.999f, amount * 0.999f);
+}
+
+void PostEffects::setDelayPingPong (bool value)
+{
+    if (value == delayPingPong_)
+        return;
+
+    // Cross-fed left/right state is meaningless in the other mode.
+    delayPingPong_ = value;
+    delayLine_.reset();
 }
 
 void PostEffects::setReverbMix (float value)   { reverbMix_ = clamp01 (value); updateReverb(); }
@@ -114,26 +119,50 @@ void PostEffects::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     if (! phaserBypass_)
         phaser_.processBlock (buffer);
 
-    // Mid/side stereo imager. Mix 0 is an exact passthrough; no ambience tail
-    // is generated here.
-    imager_.processBlock (buffer);
-
-    // Feedback delay (stereo, independent per channel).
+    // Feedback delay. Ping-pong folds the input to mono and bounces the echo
+    // between left and right; mono mode keeps a single centred repeat.
     if (! delayBypass_)
     {
         const float delaySamples = juce::jlimit (1.0f, maxDelaySamples_ - 2.0f,
                                                  delayTimeMs_ * 0.001f * static_cast<float> (sampleRate_));
+        const bool pingPong = delayPingPong_ && numChannels > 1;
 
         for (int i = 0; i < numSamples; ++i)
         {
+            float mono = 0.0f;
             for (int ch = 0; ch < numChannels; ++ch)
-            {
-                const float dry = buffer.getSample (ch, i);
-                const float delayed = delayLine_.popSample (ch, delaySamples, true);
-                const float mixed = dry * (1.0f - delayMix_) + delayed * delayMix_;
+                mono += buffer.getSample (ch, i);
 
-                delayLine_.pushSample (ch, dry + delayed * delayFeedback_);
-                buffer.setSample (ch, i, mixed);
+            mono /= static_cast<float> (numChannels);
+
+            if (pingPong)
+            {
+                const float leftTap = delayLine_.popSample (0, delaySamples, true);
+                const float rightTap = delayLine_.popSample (1, delaySamples, true);
+
+                // Right repeats the previous left echo; left receives the mono
+                // input plus the right echo scaled by feedback. One feedback
+                // gain is applied per round trip (two delay times).
+                delayLine_.pushSample (0, mono + rightTap * delayFeedback_);
+                delayLine_.pushSample (1, leftTap);
+
+                for (int ch = 0; ch < numChannels; ++ch)
+                {
+                    const float wet = (ch % 2 == 0) ? leftTap : rightTap;
+                    const float dry = buffer.getSample (ch, i);
+                    buffer.setSample (ch, i, dry * (1.0f - delayMix_) + wet * delayMix_);
+                }
+            }
+            else
+            {
+                const float tap = delayLine_.popSample (0, delaySamples, true);
+                delayLine_.pushSample (0, mono + tap * delayFeedback_);
+
+                for (int ch = 0; ch < numChannels; ++ch)
+                {
+                    const float dry = buffer.getSample (ch, i);
+                    buffer.setSample (ch, i, dry * (1.0f - delayMix_) + tap * delayMix_);
+                }
             }
         }
     }

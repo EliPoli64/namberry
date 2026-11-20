@@ -4,14 +4,13 @@
 #include <juce_dsp/juce_dsp.h>
 
 #include "namberry/ModulationEffects.h"
-#include "namberry/StereoImager.h"
 
 namespace namberry {
 
-/// Post-amp effects: Chorus, Flanger, Phaser, Stereo Imager, Delay and Reverb.
+/// Post-amp effects: Chorus, Flanger, Phaser, Delay and Reverb.
 ///
-/// The three modulation pedals use a shared custom LFO/delay framework; the
-/// imager is a mid/side stereo-width stage, and Delay/Reverb use JUCE DSP.
+/// The three modulation pedals use a shared custom LFO/delay framework; Delay
+/// and Reverb use JUCE DSP. The Room stage lives after this class.
 class PostEffects
 {
 public:
@@ -29,7 +28,6 @@ public:
             chorus_.reset();
             flanger_.reset();
             phaser_.reset();
-            imager_.reset();
             delayLine_.reset();
         }
 
@@ -77,12 +75,10 @@ public:
         phaserBypass_ = value;
     }
 
-    void setImageWidth (float value);
-    void setImageMix (float value);
-
     void setDelayMix (float value);
     void setDelayTimeMs (float value);
     void setDelayFeedback (float value);
+    void setDelayPingPong (bool value);
     void setDelayBypass (bool value)
     {
         if (value != delayBypass_)
@@ -111,6 +107,7 @@ private:
     bool phaserBypass_ = true;
 
     bool delayBypass_ = true;
+    bool delayPingPong_ = true;
     float delayMix_ = 0.25f;
     float delayTimeMs_ = 200.0f;
     float delayFeedback_ = 0.4f;
@@ -123,7 +120,6 @@ private:
     ModulatedDelay chorus_ { 40.0f, ModulationLfo::Waveform::sine, 0.5f, 5.0f };
     ModulatedDelay flanger_ { 10.0f, ModulationLfo::Waveform::triangle, 0.0f, 2.0f };
     Phaser phaser_;
-    StereoImager imager_;
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> delayLine_;
     juce::dsp::Reverb reverb_;
 

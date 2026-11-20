@@ -62,8 +62,8 @@ target_sources(NAMBerry PRIVATE
     src/modulation_effects.cpp
     src/compressor.cpp
     src/noise_gate.cpp
-    src/stereo_imager.cpp
     src/post_effects.cpp
+    src/room_sim.cpp
 )
 
 target_include_directories(NAMBerry

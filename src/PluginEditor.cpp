@@ -761,21 +761,21 @@ private:
 };
 
 //==============================================================================
-/// Compact always-visible image-mix and master-output knobs beside the tabs.
+/// Compact always-visible room and master-output knobs beside the tabs.
 class BottomKnobs : public juce::Component
 {
 public:
     explicit BottomKnobs (APVTS& state)
     {
         addAndMakeVisible (title_);
-        title_.setText ("IMAGE / MASTER", juce::dontSendNotification);
+        title_.setText ("ROOM / MASTER", juce::dontSendNotification);
         title_.setJustificationType (juce::Justification::centred);
         title_.setFont (juce::FontOptions (9.0f, juce::Font::bold));
         title_.setColour (juce::Label::textColourId, juce::Colour (kAccent));
 
-        imageKnob_ = std::make_unique<ParamControl> (state, "imageMix", "Image Mix");
+        roomKnob_ = std::make_unique<ParamControl> (state, "roomAmount", "Room");
         outputKnob_ = std::make_unique<ParamControl> (state, "masterOutput", "Output");
-        addAndMakeVisible (*imageKnob_);
+        addAndMakeVisible (*roomKnob_);
         addAndMakeVisible (*outputKnob_);
     }
 
@@ -803,13 +803,13 @@ public:
         auto controls = r.removeFromTop (84)
                          .withSizeKeepingCentre (cellWidth * 2, 84);
 
-        imageKnob_->setBounds (controls.removeFromLeft (cellWidth));
+        roomKnob_->setBounds (controls.removeFromLeft (cellWidth));
         outputKnob_->setBounds (controls.removeFromLeft (cellWidth));
     }
 
 private:
     juce::Label title_;
-    std::unique_ptr<ParamControl> imageKnob_;
+    std::unique_ptr<ParamControl> roomKnob_;
     std::unique_ptr<ParamControl> outputKnob_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BottomKnobs)
@@ -3942,7 +3942,6 @@ void NAMBerryEditor::buildUi()
     const juce::Colour chorusBody  (0xff1e3a8a), chorusAccent  (0xff60a5fa);
     const juce::Colour flangerBody (0xff4c1d95), flangerAccent (0xffc084fc);
     const juce::Colour phaserBody  (0xff831843), phaserAccent  (0xfff472b6);
-    const juce::Colour imageBody   (0xff4a3a2a), imageAccent   (0xffe0b080);
     const juce::Colour delayBody   (0xff713f12), delayAccent   (0xfffacc15);
     const juce::Colour reverbBody  (0xff1e3a5f), reverbAccent  (0xff93c5fd);
 
@@ -4268,19 +4267,13 @@ void NAMBerryEditor::buildUi()
         phaser->setFooter (makeFootswitch ("phaserBypass", phaserAccent), 82);
     }
 
-    if (auto* image = makePanel (4, "IMAGE", UnitStyle::Pedal, 1, 176,
-                                 imageBody, imageAccent))
-    {
-        image->addItem (makeControl ("imageWidth", "Width"));
-        image->setPreferredHeight (180);
-    }
-
     if (auto* delay = makePanel (4, "DELAY", UnitStyle::Pedal, 2, 0,
                                  delayBody, delayAccent))
     {
         delay->addItem (makeControl ("delayMix", "Mix"));
         delay->addItem (makeControl ("delayTimeMs", "Time"));
         delay->addItem (makeControl ("delayFeedback", "Feedback"));
+        delay->addItem (makeControl ("delayPingPong", "Ping-Pong", ParamControl::Kind::Toggle));
         delay->setFooter (makeFootswitch ("delayBypass", delayAccent), 82);
     }
 
@@ -4533,7 +4526,7 @@ void NAMBerryEditor::resized()
     const int maxTabWidth = juce::jmax (240, tabArea.getWidth() - knobsWidth - tabGap - 16);
 
     // Lay the bar out at a generous width once, measure the natural button
-    // group, then shrink the bar to that width and place the image/master
+    // group, then shrink the bar to that width and place the room/master
     // knobs immediately to its right.
     tabBar_.setBounds (tabArea.withSizeKeepingCentre (juce::jmin (maxTabWidth, 760), 48));
 

@@ -323,16 +323,6 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
         juce::NormalisableRange<float>(0.0f, 50.0f, 1.0f), 50.0f,
         juce::AudioParameterFloatAttributes().withLabel ("%")));
 
-    // ---- Stereo imager (mid/side width; no ambience tail) ----
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "imageWidth", "Image Width",
-        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 50.0f,
-        juce::AudioParameterFloatAttributes().withLabel ("%")));
-    params.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "imageMix", "Image Mix",
-        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 0.0f,
-        juce::AudioParameterFloatAttributes().withLabel ("%")));
-
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         "delayBypass", "Delay Bypass", true));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
@@ -344,6 +334,8 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "delayFeedback", "Delay Feedback",
         juce::NormalisableRange<float>(0.0f, 10.0f, 0.1f), 4.0f));
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        "delayPingPong", "Delay Ping-Pong", true));
 
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         "reverbBypass", "Reverb Bypass", true));
@@ -356,6 +348,12 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "reverbWidth", "Reverb Width",
         juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.7f));
+
+    // ---- Room (short dark ambience at the very end of the chain) ----
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "roomAmount", "Room",
+        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 0.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("%")));
 
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         "reducedMotion", "Reduced Motion", false));
@@ -382,7 +380,7 @@ namespace {
 constexpr int kPostFxStateVersion = 3;
 constexpr int kIrStateVersion = 4;
 constexpr int kPostEqStateVersion = 6;
-constexpr int kFxStateVersion = 7;
+constexpr int kFxStateVersion = 8;
 
 juce::ValueTree findParameterState (const juce::ValueTree& state, const juce::String& id)
 {
@@ -431,6 +429,39 @@ void migrateStereoImagerState (juce::ValueTree& state)
                                        : parameterValue (state, "roomBlend", 0.0f));
 
     for (const auto* id : { "roomSize", "roomBlend", "roomBypass" })
+    {
+        auto child = findParameterState (state, id);
+
+        if (child.isValid())
+            state.removeChild (child, nullptr);
+    }
+
+    state.setProperty ("fxVersion", 7, nullptr);
+}
+
+void migrateRoomState (juce::ValueTree& state)
+{
+    // Version 8 brings back a single Room control in place of the imager. The
+    // old Image Mix position is the closest match to the new amount; if a very
+    // old state still has the original room parameters, use those instead.
+    float amount = parameterValue (state, "imageMix", -1.0f);
+
+    if (amount < 0.0f)
+        amount = parameterValue (state, "roomBlend", 0.0f);
+
+    const auto roomBypass = findParameterState (state, "roomBypass");
+
+    if (roomBypass.isValid()
+        && static_cast<float> (roomBypass.getProperty ("value", 1.0f)) > 0.5f)
+        amount = 0.0f;
+
+    addParameterIfMissing (state, "roomAmount", juce::jlimit (0.0f, 100.0f, amount));
+
+    // Ping-pong delay is new; older states get the default-on behaviour.
+    addParameterIfMissing (state, "delayPingPong", 1.0f);
+
+    for (const auto* id : { "imageWidth", "imageMix",
+                            "roomSize", "roomBlend", "roomBypass" })
     {
         auto child = findParameterState (state, id);
 
@@ -700,12 +731,12 @@ NAMBerryProcessor::NAMBerryProcessor()
     postFxParams_.phaserDepth = cacheFx ("phaserDepth");
     postFxParams_.phaserFeedback = cacheFx ("phaserFeedback");
     postFxParams_.phaserStages = cacheFx ("phaserStages");
-    postFxParams_.imageWidth = cacheFx ("imageWidth");
-    postFxParams_.imageMix = cacheFx ("imageMix");
+    postFxParams_.roomAmount = cacheFx ("roomAmount");
     postFxParams_.delayBypass = cacheFx ("delayBypass");
     postFxParams_.delayMix = cacheFx ("delayMix");
     postFxParams_.delayTimeMs = cacheFx ("delayTimeMs");
     postFxParams_.delayFeedback = cacheFx ("delayFeedback");
+    postFxParams_.delayPingPong = cacheFx ("delayPingPong");
     postFxParams_.reverbBypass = cacheFx ("reverbBypass");
     postFxParams_.reverbMix = cacheFx ("reverbMix");
     postFxParams_.reverbDecay = cacheFx ("reverbDecay");
@@ -724,6 +755,7 @@ NAMBerryProcessor::NAMBerryProcessor()
     preAmpEQ_ = std::make_unique<MultiBandEQ>();
     postAmpEQ_ = std::make_unique<PostAmpEQ>();
     postEffects_ = std::make_unique<PostEffects>();
+    room_ = std::make_unique<RoomSim>();
 }
 
 NAMBerryProcessor::~NAMBerryProcessor() = default;
@@ -757,6 +789,7 @@ void NAMBerryProcessor::prepareToPlay (double sampleRate, int maxSamplesPerBlock
     preAmpEQ_->prepare(spec);
     postAmpEQ_->prepare(spec);
     postEffects_->prepare (spec);
+    room_->prepare (spec);
 
     restoreSavedFiles();
 }
@@ -778,7 +811,7 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     // Signal chain order (see spec.md §3.1):
     // Input → Tuner (detect) → Impersonator → Pitch (capo/drop) → NoiseGate →
     // Acoustic Sim → Compressor → NAM Pedal → Pre-Amp EQ → NAM Amp →
-    // Post-Amp EQ → IR Loader → Post FX → Master
+    // Post-Amp EQ → IR Loader → Post FX → Room → Master
     //==============================================================================
 
     const bool preFxBypassed = apvts_.getRawParameterValue("preFxBypass")->load() > 0.5f;
@@ -988,7 +1021,6 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
             || (value (fx.chorusBypass) > 0.5f
                 && value (fx.flangerBypass) > 0.5f
                 && value (fx.phaserBypass) > 0.5f
-                && value (fx.imageMix) <= 0.001f
                 && value (fx.delayBypass) > 0.5f
                 && value (fx.reverbBypass) > 0.5f));
 
@@ -1013,13 +1045,11 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         postEffects_->setPhaserFeedback (value (fx.phaserFeedback));
         postEffects_->setPhaserStages (static_cast<int> (value (fx.phaserStages)));
 
-        postEffects_->setImageWidth (value (fx.imageWidth) * 0.01f);
-        postEffects_->setImageMix (value (fx.imageMix) * 0.01f);
-
         postEffects_->setDelayBypass (value (fx.delayBypass) > 0.5f);
         postEffects_->setDelayMix (value (fx.delayMix));
         postEffects_->setDelayTimeMs (value (fx.delayTimeMs));
         postEffects_->setDelayFeedback (value (fx.delayFeedback));
+        postEffects_->setDelayPingPong (value (fx.delayPingPong) > 0.5f);
 
         postEffects_->setReverbBypass (value (fx.reverbBypass) > 0.5f);
         postEffects_->setReverbMix (value (fx.reverbMix));
@@ -1029,7 +1059,17 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         postEffects_->processBlock(buffer, midiMessages);
     }
 
-    // 11. Master output. A fixed +6 dB trim makes the plugin sit at a more
+    // 11. Room. A short dark ambience tail at the end of the chain, before the
+    // fixed master trim. The raw parameter is cached with the other FX values
+    // so nothing constructs parameter IDs on the audio thread.
+    {
+        const float amount = postFxParams_.roomAmount != nullptr
+            ? postFxParams_.roomAmount->load() : 0.0f;
+        room_->setAmount (amount * 0.01f);
+        room_->processBlock (buffer);
+    }
+
+    // 12. Master output. A fixed +6 dB trim makes the plugin sit at a more
     // useful level without changing the saved Master value.
     {
         const float gainDb = apvts_.getRawParameterValue("masterOutput")->load();
@@ -1155,8 +1195,11 @@ void NAMBerryProcessor::setStateInformation (const void* data, int sizeInBytes)
             if (version < kPostEqStateVersion)
                 migratePostEqBandTypeState (state);
 
-            if (version < kFxStateVersion)
+            if (version < 7)
                 migrateStereoImagerState (state);
+
+            if (version < kFxStateVersion)
+                migrateRoomState (state);
 
             apvts_.replaceState (state);
 

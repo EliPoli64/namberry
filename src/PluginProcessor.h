@@ -18,6 +18,7 @@
 #include "namberry/Impersonator.h"
 #include "namberry/AcousticSim.h"
 #include "namberry/PostEffects.h"
+#include "namberry/RoomSim.h"
 
 namespace namberry {
 
@@ -104,6 +105,7 @@ private:
     std::unique_ptr<MultiBandEQ> preAmpEQ_;
     std::unique_ptr<PostAmpEQ> postAmpEQ_;
     std::unique_ptr<PostEffects> postEffects_;
+    std::unique_ptr<RoomSim> room_;
 
     //==============================================================================
     // Acoustic-sim auto-off bookkeeping. The edge detector runs on the audio
@@ -159,12 +161,12 @@ private:
         std::atomic<float>* phaserDepth = nullptr;
         std::atomic<float>* phaserFeedback = nullptr;
         std::atomic<float>* phaserStages = nullptr;
-        std::atomic<float>* imageWidth = nullptr;
-        std::atomic<float>* imageMix = nullptr;
+        std::atomic<float>* roomAmount = nullptr;
         std::atomic<float>* delayBypass = nullptr;
         std::atomic<float>* delayMix = nullptr;
         std::atomic<float>* delayTimeMs = nullptr;
         std::atomic<float>* delayFeedback = nullptr;
+        std::atomic<float>* delayPingPong = nullptr;
         std::atomic<float>* reverbBypass = nullptr;
         std::atomic<float>* reverbMix = nullptr;
         std::atomic<float>* reverbDecay = nullptr;

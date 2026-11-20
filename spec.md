@@ -5,7 +5,7 @@
 **NAMBerry** is a universal audio plugin that builds upon the foundation of NAM Universal but introduces a more comprehensive and better-implemented signal chain. The goal is to provide guitarists and producers with an all-in-one "amp-in-a-box" solution that rivals dedicated hardware.
 
 ### Key Differentiators from NAM Universal
-- **Expanded FX Chain**: Includes a full suite of studio-quality effects (Compressor, Overdrive, 3-band pre-EQ, 8-band graphical post-EQ, Chorus/Phaser/Flanger, Stereo Imager, Delay, Reverb) integrated directly into the plugin, rather than relying on external plugins for basic tone shaping.
+- **Expanded FX Chain**: Includes a full suite of studio-quality effects (Compressor, Overdrive, 3-band pre-EQ, 8-band graphical post-EQ, Chorus/Phaser/Flanger, Room, Delay, Reverb) integrated directly into the plugin, rather than relying on external plugins for basic tone shaping.
 - **2-IR Loader with one Blend knob**: the same dual-cabinet idea as NAM Universal's loader, reduced to a single crossfading control instead of per-slot level/pan/phase mixers.
 - **Enhanced Amp Control**: Dedicated controls for Gain, Presence, Depth, and Output Volume, providing a more tactile "amp-like" feel compared to the OOMPH/SPARKLE impedance interaction model.
 - **True Static Linking**: Compiled with static libraries for Linux, Windows, and macOS to ensure maximum compatibility and ease of distribution without runtime dependency issues.
@@ -33,7 +33,7 @@
 Input → Tuner (detect) → Impersonator (pickup shaper) → Pitch (capo/drop) → Noise Gate → Acoustic Sim → Compressor → NAM Pedal/Preamp → Pre-Amp EQ →
 NAM Amp Loader (Gain, Bass, Mid, Treble, Presence, Depth, Output) →
 Post-Amp EQ (8-band graphical) → IR Loader (IR 1 / IR 2 + Blend) →
-Post Effects (Chorus/Flanger/Phaser/Image/Delay/Reverb) → Master (+6 dB fixed trim) → Output
+Post Effects (Chorus/Flanger/Phaser/Delay/Reverb) → Room (short dark ambience) → Master (+6 dB fixed trim) → Output
 ```
 
 ### 3.2 UI Section Order
@@ -69,7 +69,6 @@ The editor should be organized into the following five sections, in this exact o
    - Chorus
    - Flanger
    - Phaser
-   - Image (mid/side stereo imager, no ambience tail)
    - Delay
    - Reverb
 
@@ -77,7 +76,7 @@ This order keeps the pedal before the amp, keeps all pre-amp shaping before the 
 
 Each tab uses a hardware icon (pedal, amp, EQ, speaker, sparkle) with a small label. Right-click any tab to bypass that section; the icon dims and shows a red LED while bypassed.
 
-A persistent **IMAGE / MASTER** strip sits beside the bottom tab buttons and always exposes the Image Mix and master Output knobs.
+A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and always exposes the Room amount and master Output knobs.
 
 ### 3.2 Class Structure (High-Level)
 
@@ -98,8 +97,8 @@ A persistent **IMAGE / MASTER** strip sits beside the bottom tab buttons and alw
   - `ModulationLfo` (shared sine/triangle LFO)
   - `ModulatedDelay` (chorus/flanger delay core with feedback)
   - `Phaser` (selectable 4/8/12-stage all-pass cascade)
-  - `StereoImager` (mid/side width with short allpass decorrelation and a side high-pass; no ambience tail)
-  - `Delay` (stereo, with feedback, mix, time)
+  - `RoomSim` (two short, offset filtered delays with low feedback and a single amount control)
+  - `Delay` (ping-pong stereo or centred mono, with feedback, mix, time)
   - `Reverb` (algorithmic or convolution-based)
   - `DropTuner` (fundamental frequency detection for the tuner display)
   - `Impersonator` (bridge/neck pickup-shaping preamp)
@@ -172,19 +171,22 @@ A persistent **IMAGE / MASTER** strip sits beside the bottom tab buttons and alw
   - Each effect has its own bypass footswitch and resets its delay/filter state when bypassed.
 
 ### 4.7 Delay
-- **Goal**: Stereo delay with musical controls.
-- **Implementation**: Circular buffer delay line with parameters: Time (1 ms–2 s), Feedback (0–10, where 0 is one repeat and 10 is a near-endless tail), Mix (0–100%), and optionally a high-cut filter in the feedback path.
+- **Goal**: Musical delay that can bounce echoes between stereo channels or keep them centred.
+- **Implementation**: Two `juce::dsp::DelayLine` channels with Time (10 ms–2 s), Feedback (0–10, where 0 is one repeat and 10 is a near-endless tail), Mix (0–100%), and a Ping-Pong/Mono toggle (default Ping-Pong).
+  - Ping-Pong sums the input to mono, feeds the left delay, then feeds the right delay from the left echo. The right echo is scaled by Feedback and returned to the left, so repeats alternate L/R once per feedback loop.
+  - Mono feeds one delay from the summed input and copies the centred echo to both outputs. The dry signal stays stereo in both modes.
+  - Switching mode or bypassing the delay clears both delay lines so stale cross-fed repeats cannot leak through.
 
-### 4.8 Stereo imager
-- **Goal**: Widen the stereo image, including mono-derived NAM output, without adding room ambience.
-- **Implementation**: A `StereoImager` stage placed after the modulation effects and before the delay.
-  - **Width** is 0–100 %: 0 % collapses to mono, 50 % is neutral and 100 % widens the image.
-  - Above neutral, a short three-stage allpass chain (0.7 / 1.3 / 2.1 ms, gain 0.62) decorrelates the right channel before the mid/side encode. This creates side content from a mono-derived signal without echoes or a feedback tail.
-  - A 140 Hz side high-pass keeps the low end centered. Both the decorrelation and the side filtering fade in only when widening, so neutral and mono-collapse settings stay clean.
-  - **Image Mix** interpolates the side gain from unity to the Width target. 0 % is an exact passthrough and is the default; there is no separate imager bypass.
-  - Expansion is level-compensated so loudness stays close across the Width and Mix ranges. Width and Mix are smoothed; all buffers are allocated in `prepare()` and cleared by `reset()`.
-  - Parameters are `imageWidth` and `imageMix`. State version 7 migrates the old `roomSize`, `roomBlend` and `roomBypass` values and removes the obsolete children.
-- **Controls**: Width lives in the Post FX Image pedal; **Image Mix** lives in the persistent bottom strip beside the tabs.
+### 4.8 Room
+- **Goal**: Make a lone guitar sound bigger with short, audible stereo early reflections, without changing the dry level or touching the Reverb effect.
+- **Implementation**: A `RoomSim` stage after `PostEffects` and before the master trim.
+  - Input channels are summed to mono, then fed to two filtered feedback delays with 28 ms and 34 ms lengths. The offset produces a wide stereo image from the mono source.
+  - Feedback is intentionally low: 3 % at minimum amount and 15 % at full amount. The delayed guitar is the dominant sound; repeats decay almost immediately rather than becoming a reverb tail.
+  - The wet path is 120 Hz high-passed and 6 kHz low-passed so the reflections stay dark but remain audible. Maximum wet gain is 0.8 (about -2 dB). Dry stays at unity.
+  - **Room** (0–100 %, default 0 %) fades the wet path and increases feedback. 0 % is an exact passthrough; stale delay state is cleared when the room is turned back on.
+  - All delay lines and filters are allocated in `prepare()` and cleared by `reset()`; the parameter is read from a cached raw APVTS atomic on the audio thread.
+  - The parameter is `roomAmount`. State version 8 migrates `imageMix` (or older `roomBlend`) to `roomAmount`, removes `imageWidth`, `imageMix`, `roomSize`, `roomBlend` and `roomBypass`, and adds `delayPingPong` with a default-on value for older states.
+- **Controls**: Room lives in the persistent bottom strip beside the tabs; Reverb is unchanged.
 
 ### 4.9 Reverb
 - **Goal**: Add ambience.
@@ -303,9 +305,9 @@ Artifacts: `.vst3` (all), `.component` (AU, macOS), `.aaxplugin` (if SDK availab
 ### Phase 4: Time-Based & Modulation FX (Weeks 7–8)
 - [x] Implement shared `ModulationLfo` and `ModulatedDelay` chorus/flanger.
 - [x] Implement 4/8/12-stage all-pass `Phaser`.
-- [x] Implement `Delay` (circular buffer).
+- [x] Implement `Delay` (ping-pong stereo / centred mono circular buffers).
 - [x] Integrate `juce::Reverb`.
-- [x] Implement stereo imager (Width / Image Mix; default 0 % mix; v7 migration from Room).
+- [x] Implement `RoomSim` (Room 0–100 %; default 0 %; two short low-feedback delays; v8 migration from Image Mix).
 
 ### Phase 5: UI & State Management (Weeks 9–10)
 - [x] Design `NAMBerryEditor` with tabs or a scrollable rack layout.
