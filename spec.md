@@ -77,7 +77,7 @@ This order keeps the pedal before the amp, keeps all pre-amp shaping before the 
 
 Each tab uses a hardware icon (pedal, amp, EQ, speaker, sparkle) with a small label. Right-click any tab to bypass that section; the icon dims and shows a red LED while bypassed.
 
-A persistent bottom strip always exposes **Input Gain** on the far left (−24…+24 dB, default 0 dB), the tab buttons in the middle, and **Room** / **Master** (master Output) on the far right.
+A persistent bottom strip groups **Input Gain** (−24…+24 dB, default 0 dB), the tab buttons and **Room** / **Master** (master Output) into one centred row, with the knobs sitting immediately beside the tab bar. The tab buttons are a fixed, generous size with a larger icon and label.
 
 ### 3.2 Class Structure (High-Level)
 
@@ -188,7 +188,7 @@ A persistent bottom strip always exposes **Input Gain** on the far left (−24�
   - **Room** (0–100 %, default 0 %) fades the wet path and increases feedback. 0 % is an exact passthrough; stale delay state is cleared when the room is turned back on.
   - All delay lines and filters are allocated in `prepare()` and cleared by `reset()`; the parameter is read from a cached raw APVTS atomic on the audio thread.
   - The parameter is `roomAmount`. State version 8 migrates `imageMix` (or older `roomBlend`) to `roomAmount`, removes `imageWidth`, `imageMix`, `roomSize`, `roomBlend` and `roomBypass`, and adds `delayPingPong` with a default-on value for older states.
-- **Controls**: Room lives in the persistent bottom strip on the far right, beside the master Output; Reverb is unchanged. Input Gain sits on the far left of the same strip.
+- **Controls**: Room lives in the persistent bottom strip, beside the master Output next to the tab bar; Reverb is unchanged. Input Gain sits on the other side of the same bar.
 
 ### 4.9 Reverb
 - **Goal**: Add ambience.

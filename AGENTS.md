@@ -122,15 +122,16 @@ build-vst3/NAMBerry_artefacts/Release/VST3/NAMberry.vst3
 ### Local Linux/sysroot gotcha
 
 The helper scripts automatically detect `/tmp/sysroot` and set `CPATH`,
-`LIBRARY_PATH`, `LD_LIBRARY_PATH`, `PKG_CONFIG_SYSROOT_DIR`, and
-`PKG_CONFIG_PATH`. That directory is a local machine workaround, not part of the
-repository. If you configure CMake directly without the scripts on such a
-machine, export the same variables first:
+`LIBRARY_PATH`, `PKG_CONFIG_SYSROOT_DIR`, and `PKG_CONFIG_PATH`. They do **not**
+set `LD_LIBRARY_PATH`; the sysroot is only needed for compile/link/pkg-config,
+and pointing it at runtime can crash build tools when the sysroot is a foreign
+runtime (e.g. a Flatpak SDK). That directory is a local machine workaround, not
+part of the repository. If you configure CMake directly without the scripts on
+such a machine, export the same variables first:
 
 ```bash
 export CPATH=/tmp/sysroot/usr/include:/tmp/sysroot/usr/include/freetype2
 export LIBRARY_PATH=/tmp/sysroot/usr/lib64
-export LD_LIBRARY_PATH=/tmp/sysroot/usr/lib64
 export PKG_CONFIG_SYSROOT_DIR=/tmp/sysroot
 export PKG_CONFIG_PATH=/tmp/pc:/tmp/sysroot/usr/lib64/pkgconfig:/tmp/sysroot/usr/share/pkgconfig
 ```

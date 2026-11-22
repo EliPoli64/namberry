@@ -73,7 +73,7 @@ Input
 
 Each tab shows a hardware icon (pedal, amp, EQ, speaker, sparkle). **Right-click any tab** to bypass that whole section; the icon dims and shows a red LED while bypassed.
 
-The bottom strip always exposes **Input Gain** (−24…+24 dB, default 0 dB) on the far left, the tab buttons in the middle, and **Room** and **Master** (master volume) on the far right. NAMBerry applies a fixed +6 dB output trim in addition to the saved Master value. The header contains the **Reduced Motion** preference and the **PRESET** menu.
+The bottom strip exposes **Input Gain** (−24…+24 dB, default 0 dB), the tab buttons, and **Room** and **Master** (master volume) as one centred group, with the knobs sitting immediately beside the tab bar rather than at the window edges. NAMBerry applies a fixed +6 dB output trim in addition to the saved Master value. The header contains the **Reduced Motion** preference and the **PRESET** menu.
 
 ---
 
@@ -226,7 +226,7 @@ DAW project state stores all parameter values through `AudioProcessorValueTreeSt
 The editor is JUCE-native and hardware-inspired:
 
 - left-to-right signal chain in a horizontally scrollable viewport,
-- a persistent bottom strip with **Room** and **Output** beside the tabs,
+- a persistent centred bottom strip with **Input Gain**, the tabs, and **Room** / **Output** grouped together,
 - pedal enclosures, an amp head and rack units,
 - large 48 px hardware controls (the browser list is desktop-sized),
 - footswitch LEDs show **active** (not bypassed) state,
@@ -447,7 +447,7 @@ The plugin is stereo in / stereo out. The NAM stages are mono internally and cop
 
 Every loader offers the same two ways to pick a file: tap its filename screen to list the folder right there, or press **LOAD** to open the system file browser.
 
-- **NAM amp**: Amp tab → tap the **CURRENT AMP** display in the grille, or **LOAD** beside Power.
+- **NAM amp**: Amp tab → tap the model display on the grille, or **LOAD** underneath it. The `<` / `>` arrows on either side of the display step through the folder.
 - **NAM pedal**: Pre FX → **PEDAL** → tap the pedal's filename screen, or **LOAD**.
 - **IR rows**: IR tab → tap the row's filename screen, or **LOAD**.
 
@@ -517,7 +517,7 @@ The pitch stage uses a real-time Rubber Band engine when `librubberband` is avai
 
 ### Amp
 
-- Load the amp `.nam` with **AMP MODEL**.
+- Load the amp `.nam` from the model display on the grille: tap it to list the folder, use `<` / `>` to step, or **LOAD** for the file browser.
 - Power, Gain, Bass, Mid, Treble, Presence, Depth, Output.
 - The tone stack runs after the model.
 
