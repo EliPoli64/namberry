@@ -57,6 +57,7 @@ target_sources(NAMBerry PRIVATE
     src/reverb_ir_loader.cpp
     src/multi_band_eq.cpp
     src/post_amp_eq.cpp
+    src/signal_spectrum.cpp
     src/drop_tuner.cpp
     src/digital_capo.cpp
     src/pitch_shifter.cpp

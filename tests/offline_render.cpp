@@ -11,6 +11,7 @@
 
 #include "namberry/PostAmpEQ.h"
 #include "namberry/RoomSim.h"
+#include "namberry/SignalSpectrum.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -3209,6 +3210,118 @@ int runPresetTest()
     return passed ? 0 : 2;
 }
 
+int runSpectrumTest()
+{
+    constexpr double sampleRate = 48000.0;
+    constexpr float amplitude = 0.5f;
+    constexpr double toneHz = 1000.0;
+
+    namberry::SignalSpectrum spectrum;
+    spectrum.prepare (sampleRate);
+
+    juce::AudioBuffer<float> buffer (2, 512);
+    double phase = 0.0;
+
+    for (int block = 0; block < 200; ++block)
+    {
+        for (int i = 0; i < buffer.getNumSamples(); ++i)
+        {
+            const auto sample = amplitude * (float) std::sin (phase);
+            phase += 2.0 * juce::MathConstants<double>::pi * toneHz / sampleRate;
+            buffer.setSample (0, i, sample);
+            buffer.setSample (1, i, sample);
+        }
+
+        spectrum.pushBlock (buffer);
+        spectrum.update();
+    }
+
+    int peakBin = 1;
+    float peakDb = -200.0f;
+
+    for (int bin = 1; bin < spectrum.getNumBins(); ++bin)
+    {
+        const auto db = spectrum.getBinDecibels (bin);
+
+        if (db > peakDb)
+        {
+            peakDb = db;
+            peakBin = bin;
+        }
+    }
+
+    const auto peakHz = spectrum.getBinFrequency (peakBin);
+    const bool toneOk = std::abs (peakHz - (float) toneHz) <= 30.0f
+                        && peakDb > -9.0f && peakDb < -3.0f
+                        && spectrum.hasSignal();
+
+    // Feed silence; the meter release must bring the trace down.
+    buffer.clear();
+
+    for (int block = 0; block < 400; ++block)
+    {
+        spectrum.pushBlock (buffer);
+        spectrum.update();
+    }
+
+    float silentDb = -200.0f;
+    for (int bin = 1; bin < spectrum.getNumBins(); ++bin)
+        silentDb = juce::jmax (silentDb, spectrum.getBinDecibels (bin));
+
+    const bool silenceOk = silentDb < -70.0f && ! spectrum.hasSignal();
+
+    // The processor tap must see the post-EQ signal at its real level.
+    namberry::NAMBerryProcessor processor;
+    processor.setPlayConfigDetails (2, 2, 48000, 512);
+    processor.prepareToPlay (48000.0, 512);
+
+    juce::MidiBuffer midi;
+    double tonePhase = 0.0;
+
+    for (int block = 0; block < 200; ++block)
+    {
+        for (int i = 0; i < buffer.getNumSamples(); ++i)
+        {
+            const auto sample = 0.2f * (float) std::sin (tonePhase);
+            tonePhase += 2.0 * juce::MathConstants<double>::pi * toneHz / sampleRate;
+            buffer.setSample (0, i, sample);
+            buffer.setSample (1, i, sample);
+        }
+
+        processor.processBlock (buffer, midi);
+        processor.getPostEqSpectrum().update();
+    }
+
+    auto& tap = processor.getPostEqSpectrum();
+    tap.update();
+
+    int tapPeakBin = 1;
+    float tapPeakDb = -200.0f;
+
+    for (int bin = 1; bin < tap.getNumBins(); ++bin)
+    {
+        const auto db = tap.getBinDecibels (bin);
+
+        if (db > tapPeakDb)
+        {
+            tapPeakDb = db;
+            tapPeakBin = bin;
+        }
+    }
+
+    const auto tapPeakHz = tap.getBinFrequency (tapPeakBin);
+    const bool tapOk = std::abs (tapPeakHz - (float) toneHz) <= 30.0f
+                       && tapPeakDb > -35.0f && tapPeakDb < -6.0f;
+
+    std::cout << "peakHz=" << peakHz << " peakDb=" << peakDb
+              << " silentDb=" << silentDb
+              << " bins=" << spectrum.getNumBins()
+              << " tapHz=" << tapPeakHz << " tapDb=" << tapPeakDb
+              << " " << ((toneOk && silenceOk && tapOk) ? "PASS" : "FAIL") << "\n";
+
+    return (toneOk && silenceOk && tapOk) ? 0 : 2;
+}
+
 int runPostEqTest()
 {
     constexpr double sampleRate = 48000.0;
@@ -3621,6 +3734,9 @@ int main (int argc, char** argv)
 
     if (argc > 1 && juce::String (argv[1]) == "--post-eq")
         return runPostEqTest();
+
+    if (argc > 1 && juce::String (argv[1]) == "--spectrum")
+        return runSpectrumTest();
 
     if (argc > 1 && juce::String (argv[1]) == "--post-eq-state")
         return runPostEqStateMigrationTest();

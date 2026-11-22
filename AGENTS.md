@@ -68,6 +68,7 @@ src/
   compressor.cpp
   multi_band_eq.cpp         three-band Pre-EQ
   post_amp_eq.cpp           eight-band Post-EQ
+  signal_spectrum.cpp       lock-free spectrum tap for the Post EQ graph
   ir_loader.cpp
   reverb_ir_loader.cpp      two parallel stereo Post FX reverb IRs with L/R Mix, tail Cutoff and local wet boost/cut
   modulation_effects.cpp
@@ -202,6 +203,7 @@ TEST=./build-standalone/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTes
 "$TEST" --ir-state
 "$TEST" --post-eq
 "$TEST" --post-eq-state
+"$TEST" --spectrum
 "$TEST" --dry-center
 "$TEST" --detector
 "$TEST" --detected-stage

@@ -67,7 +67,7 @@ Input
 |---|---|
 | **Pre FX** | Impersonator, Pitch, Gate, Acoustic Sim, Compressor, NAM Pedal, Pre-Amp EQ (the tuner stays in the editor header) |
 | **Amp** | NAM amp model, Power, Gain, Bass, Mid, Treble, Presence, Depth, Output |
-| **Post EQ** | Full-width 8-band graphical EQ with draggable nodes, per-band curve type, adjustable Q and high-pass/low-pass filters |
+| **Post EQ** | Full-width 8-band graphical EQ with draggable nodes, per-band curve type, adjustable Q, high-pass/low-pass filters, and a live spectrum of the post-EQ signal behind the curve |
 | **IR** | Two IR rows (filename screen, **LOAD**, arrows) plus one **Blend** knob and section bypass |
 | **Post FX** | Chorus, Flanger, Phaser, Delay, Reverb, Reverb IR (two IR rows + L/R Mix/Cutoff + boost/cut Master) |
 
@@ -428,6 +428,19 @@ Copy `NAMberry.vst3` to:
 
 Then rescan plugins in the DAW.
 
+### Prebuilt releases (CI)
+
+`.github/workflows/build.yml` builds both targets on every push to the mainline
+branch (`main`, or `master` on the current remote) on Ubuntu, and refreshes the
+rolling **latest** GitHub release with:
+
+- `NAMberry-linux-standalone.zip` — unzip and run the `NAMberry` binary.
+- `NAMberry-linux-vst3.zip` — copy `NAMberry.vst3` into `~/.vst3`.
+- `SHA256SUMS.txt` — checksums.
+
+The release is rebuilt in place, so the asset URLs stay stable. Pull requests and
+feature branches do not publish anything.
+
 ---
 
 ## Using NAMberry
@@ -652,6 +665,7 @@ cmake --build build --target NAMBerryOfflineTest NAMBerryUiSnapshot
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --ir-state
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --post-eq
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --post-eq-state
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --spectrum
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --reference
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --persist
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --dirs
@@ -692,6 +706,7 @@ What they cover:
 - `--ir-state`: verifies migration of legacy four-slot IR parameters to `irBlend`.
 - `--post-eq`: verifies the 8-band boost/cut, per-band curve types, HPF/LPF attenuation, bypass pass-through and the shared response calculation.
 - `--post-eq-state`: verifies version-5 migration of the old three-band post-EQ into the 8-band layout and version-6 migration that adds each band's curve type.
+- `--spectrum`: verifies the live Post EQ spectrum tap finds a 1 kHz tone in the correct bin at the expected level and decays to silence.
 - `--reference`: verifies 432/440 Hz reference behaviour.
 - `--persist`: restores selected amp, pedal and IR paths; expects local sample files and skips if they are missing.
 - `--dirs`: sets the amp, pedal and IR root directories.

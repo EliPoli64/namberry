@@ -12,6 +12,7 @@
 #include "namberry/ReverbIrLoader.h"
 #include "namberry/MultiBandEQ.h"
 #include "namberry/PostAmpEQ.h"
+#include "namberry/SignalSpectrum.h"
 #include "namberry/DropTuner.h"
 #include "namberry/DigitalCapo.h"
 #include "namberry/Compressor.h"
@@ -93,6 +94,10 @@ public:
     IrLoader* getIrLoader() { return irLoader_.get(); }
     ReverbIrLoader* getReverbIrLoader() { return reverbIrLoader_.get(); }
 
+    /// Live post-EQ signal tap drawn on the Post EQ graph. The editor calls
+    /// update() from its message-thread timer before reading the bins.
+    SignalSpectrum& getPostEqSpectrum() { return postEqSpectrum_; }
+
 private:
     void handleAsyncUpdate() override;
 
@@ -110,6 +115,7 @@ private:
     std::unique_ptr<ReverbIrLoader> reverbIrLoader_;
     std::unique_ptr<MultiBandEQ> preAmpEQ_;
     std::unique_ptr<PostAmpEQ> postAmpEQ_;
+    SignalSpectrum postEqSpectrum_;
     std::unique_ptr<PostEffects> postEffects_;
     std::unique_ptr<RoomSim> room_;
 

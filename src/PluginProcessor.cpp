@@ -893,6 +893,7 @@ void NAMBerryProcessor::prepareToPlay (double sampleRate, int maxSamplesPerBlock
     reverbIrLoader_->prepare(spec);
     preAmpEQ_->prepare(spec);
     postAmpEQ_->prepare(spec);
+    postEqSpectrum_.prepare (sampleRate);
     postEffects_->prepare (spec);
     room_->prepare (spec);
 
@@ -1111,6 +1112,10 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
 
         postAmpEQ_->processBlock(buffer, midiMessages);
     }
+
+    // Spectrum tap for the Post EQ graph: captures the shaped signal before
+    // the cabinet. pushBlock only copies samples into a lock-free FIFO.
+    postEqSpectrum_.pushBlock (buffer);
 
     // 9. IR Loader (two IRs, crossfaded by one blend control)
     {

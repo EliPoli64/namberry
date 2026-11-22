@@ -1,6 +1,7 @@
 #include "PluginEditor.h"
 
 #include "namberry/PostAmpEQ.h"
+#include "namberry/SignalSpectrum.h"
 
 #include <algorithm>
 #include <array>
@@ -1467,8 +1468,10 @@ class PostEqEditor : public juce::Component,
                      private juce::Timer
 {
 public:
-    PostEqEditor (APVTS& state, std::function<double()> sampleRateProvider)
-        : state_ (state), sampleRateProvider_ (std::move (sampleRateProvider)),
+    PostEqEditor (APVTS& state, SignalSpectrum& spectrum,
+                  std::function<double()> sampleRateProvider)
+        : state_ (state), spectrum_ (spectrum),
+          sampleRateProvider_ (std::move (sampleRateProvider)),
           boostKnob_ ("PostEqBoost", "BOOST", " dB", -24.0, 24.0, 0.1, 0.0),
           qKnob_ ("PostEqQ", "Q", {}, 0.1, 10.0, 0.01, 1.0)
     {
@@ -1590,6 +1593,11 @@ public:
             dragTarget_ = DragTarget::None;
             activeBand_ = -1;
         }
+        else
+        {
+            spectrum_.update();
+            spectrumRevision_ = spectrum_.getRevision();
+        }
     }
 
     void resized() override
@@ -1626,6 +1634,11 @@ public:
         auto buttonArea = controls.removeFromRight (176);
         flatButton_.setBounds (buttonArea.removeFromRight (56).reduced (2, 3));
         bypassButton_.setBounds (buttonArea.removeFromRight (112).reduced (2, 3));
+
+        // Refresh here too so the graph is populated on first paint even when
+        // the message loop has not ticked the timer yet (headless snapshots).
+        spectrum_.update();
+        spectrumRevision_ = spectrum_.getRevision();
     }
 
     void paint (juce::Graphics& g) override
@@ -1644,6 +1657,7 @@ public:
         drawFocusPanel (g);
         drawGrid (g);
         drawCutRegions (g);
+        drawSpectrum (g);
         drawCurve (g);
         drawPassHandles (g);
         drawNodes (g);
@@ -1979,6 +1993,17 @@ private:
             updateFocusControls();
             repaint();
         }
+
+        if (! isVisible())
+            return;
+
+        spectrum_.update();
+
+        if (spectrum_.getRevision() != spectrumRevision_)
+        {
+            spectrumRevision_ = spectrum_.getRevision();
+            repaint (plotArea_.getSmallestIntegerContainer().expanded (2));
+        }
     }
 
     juce::RangedAudioParameter* focusedGainParameter() const
@@ -2262,6 +2287,111 @@ private:
         g.fillRect (juce::Rectangle<float> (lowPassX, plotArea_.getY(),
                                             plotArea_.getRight() - lowPassX,
                                             plotArea_.getHeight()));
+    }
+
+    float spectrumDbToY (float db) const
+    {
+        const auto normalized = juce::jlimit (0.0f, 1.0f, (db + 72.0f) / 72.0f);
+        return plotArea_.getBottom() - normalized * plotArea_.getHeight();
+    }
+
+    /// Live magnitude trace of the audio on the Post EQ output, drawn behind
+    /// the response curve. It is intentionally unlabelled on the dB axis: the
+    /// graph's ±24 dB scale belongs to the EQ response, the trace is a meter.
+    void drawSpectrum (juce::Graphics& g)
+    {
+        if (! spectrum_.hasSignal())
+            return;
+
+        const int numBins = spectrum_.getNumBins();
+        const auto sampleRateHz = spectrum_.getSampleRate();
+
+        if (numBins < 4 || sampleRateHz <= 0.0)
+            return;
+
+        const auto binHz = sampleRateHz / (double) SignalSpectrum::kFftSize;
+        const int columns = juce::jlimit (2, 1600, (int) std::round (plotArea_.getWidth()));
+
+        // Sample the linear FFT bins at each log-spaced pixel column, then
+        // soften the result so low-frequency bins read as a curve instead of
+        // a staircase.
+        std::vector<float> levels ((size_t) columns, -100.0f);
+
+        for (int column = 0; column < columns; ++column)
+        {
+            const auto x = plotArea_.getX() + (float) column + 0.5f;
+            const auto frequency = (double) xToFrequency (x);
+            const auto position = frequency / binHz;
+
+            const int lowBin = juce::jlimit (1, numBins - 2, (int) std::floor (position));
+            const auto fraction = (float) juce::jlimit (0.0, 1.0, position - (double) lowBin);
+
+            const auto lowDb = spectrum_.getBinDecibels (lowBin);
+            const auto highDb = spectrum_.getBinDecibels (lowBin + 1);
+            levels[(size_t) column] = lowDb + (highDb - lowDb) * fraction;
+        }
+
+        const int radius = juce::jlimit (1, 12, columns / 110);
+        std::vector<float> smoothed ((size_t) columns, -100.0f);
+
+        for (int column = 0; column < columns; ++column)
+        {
+            float sum = 0.0f;
+            int count = 0;
+
+            for (int offset = -radius; offset <= radius; ++offset)
+            {
+                const int index = juce::jlimit (0, columns - 1, column + offset);
+                sum += levels[(size_t) index];
+                ++count;
+            }
+
+            smoothed[(size_t) column] = sum / (float) count;
+        }
+
+        juce::Path curve;
+        bool started = false;
+
+        for (int column = 0; column < columns; ++column)
+        {
+            const auto x = plotArea_.getX() + (float) column + 0.5f;
+            const auto y = spectrumDbToY (smoothed[(size_t) column]);
+
+            if (! started)
+            {
+                curve.startNewSubPath (x, y);
+                started = true;
+            }
+            else
+            {
+                curve.lineTo (x, y);
+            }
+        }
+
+        if (! started)
+            return;
+
+        juce::Path fill (curve);
+        fill.lineTo (plotArea_.getRight(), plotArea_.getBottom());
+        fill.lineTo (plotArea_.getX(), plotArea_.getBottom());
+        fill.closeSubPath();
+
+        const auto trace = juce::Colour (0xffe2e8f0);
+        g.setGradientFill (juce::ColourGradient (
+            trace.withAlpha (cachedBypassed_ ? 0.06f : 0.15f),
+            plotArea_.getX(), plotArea_.getY(),
+            trace.withAlpha (0.01f), plotArea_.getX(), plotArea_.getBottom(), false));
+        g.fillPath (fill);
+
+        g.setColour (trace.withAlpha (cachedBypassed_ ? 0.22f : 0.50f));
+        g.strokePath (curve, juce::PathStrokeType (1.3f, juce::PathStrokeType::curved,
+                                                   juce::PathStrokeType::rounded));
+
+        auto legend = juce::Rectangle<float> (plotArea_.getRight() - 104.0f,
+                                              plotArea_.getY() + 4.0f, 100.0f, 12.0f);
+        g.setColour (trace.withAlpha (cachedBypassed_ ? 0.25f : 0.55f));
+        g.setFont (juce::FontOptions (8.5f, juce::Font::bold));
+        g.drawText ("POST-EQ SIGNAL", legend, juce::Justification::centredRight);
     }
 
     void drawCurve (juce::Graphics& g)
@@ -2565,6 +2695,7 @@ private:
 
     //==========================================================================
     APVTS& state_;
+    SignalSpectrum& spectrum_;
     std::function<double()> sampleRateProvider_;
 
     FocusKnob boostKnob_;
@@ -2601,6 +2732,7 @@ private:
 
     PostAmpEQ::Settings cachedSettings_;
     bool cachedBypassed_ = false;
+    int spectrumRevision_ = 0;
 
     int selectedBand_ = 0;
     Pass selectedPass_ = Pass::None;
@@ -4267,7 +4399,8 @@ void NAMBerryEditor::buildUi()
                                   rackBody, rackAccent))
     {
         auto eq = std::make_unique<PostEqEditor> (
-            state, [this] { return processor_.getSampleRate(); });
+            state, processor_.getPostEqSpectrum(),
+            [this] { return processor_.getSampleRate(); });
         auto* rawEq = eq.get();
         ownedControls_.push_back (std::move (eq));
 

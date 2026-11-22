@@ -62,6 +62,7 @@ The editor should be organized into the following five sections, in this exact o
    - Draggable nodes for frequency and gain, mouse wheel for Q
    - Focused-band Boost and Q knobs that retarget to the selected band; the Q knob also follows the selected HPF/LPF
    - Adjustable high-pass and low-pass filters with draggable cutoff handles
+   - Live magnitude spectrum of the post-EQ signal drawn behind the response curve
    - Flat and bypass controls
 4. IR
    - 2 IR rows (filename screen, **LOAD**, arrows), one Blend knob, section bypass
@@ -93,6 +94,7 @@ A persistent bottom strip groups **Input Gain** (−24…+24 dB, default 0 dB), 
   - `NamPedalLoader` (second NAM model for pedal/preamp captures — not a waveshaper)
   - `MultiBandEQ` (3-band Low/Mid/High pre-amp EQ)
   - `PostAmpEQ` (8-band graphical post-amp EQ plus high-pass/low-pass)
+  - `SignalSpectrum` (lock-free post-EQ signal tap: audio thread copies samples into a FIFO, the editor runs the FFT and draws the live magnitude trace)
   - `NamModelLoader` (wraps `NeuralAmpModelerCore` / `NeuralAudio`)
   - `IrLoader` (2 slots, each with an `dsp::Convolution` instance, blended by one crossfade)
   - `ReverbIrLoader` (two parallel `dsp::Convolution` Post FX slots, each with a smoothed wet Mix and a message-thread tail Cutoff that trims the loaded IR)
