@@ -50,6 +50,7 @@ void ChorusEnsemble::prepare (const juce::dsp::ProcessSpec& spec)
     depthSmoothed_.reset (sampleRate_, 0.02);
     feedbackSmoothed_.reset (sampleRate_, 0.02);
     mixSmoothed_.reset (sampleRate_, 0.02);
+    stereoSmoothed_.reset (sampleRate_, 0.02);
 
     reset();
 }
@@ -72,6 +73,7 @@ void ChorusEnsemble::reset()
     depthSmoothed_.setCurrentAndTargetValue (depth_);
     feedbackSmoothed_.setCurrentAndTargetValue (feedback_);
     mixSmoothed_.setCurrentAndTargetValue (mix_);
+    stereoSmoothed_.setCurrentAndTargetValue (stereo_ ? 1.0f : 0.0f);
 }
 
 //==============================================================================
@@ -104,8 +106,16 @@ void ChorusEnsemble::setFeedbackPercent (float percent)
 
 void ChorusEnsemble::setMixPercent (float percent)
 {
-    mix_ = juce::jlimit (0.0f, 0.5f, percent * 0.01f);
+    // 0 % is dry, 50 % is the classic chorus blend and 100 % removes the dry
+    // signal entirely, which turns the ensemble into a three-voice vibrato.
+    mix_ = juce::jlimit (0.0f, 1.0f, percent * 0.01f);
     mixSmoothed_.setTargetValue (mix_);
+}
+
+void ChorusEnsemble::setStereo (bool stereo)
+{
+    stereo_ = stereo;
+    stereoSmoothed_.setTargetValue (stereo ? 1.0f : 0.0f);
 }
 
 //==============================================================================
@@ -128,6 +138,7 @@ void ChorusEnsemble::processBlock (juce::AudioBuffer<float>& buffer)
         const float depth = depthSmoothed_.getNextValue();
         const float feedback = feedbackSmoothed_.getNextValue();
         const float mix = mixSmoothed_.getNextValue();
+        const float stereoAmount = stereoSmoothed_.getNextValue();
 
         float slow[kNumVoices] {};
         float fast[kNumVoices] {};
@@ -172,20 +183,30 @@ void ChorusEnsemble::processBlock (juce::AudioBuffer<float>& buffer)
         lastWetMono_ = tapSum / static_cast<float> (kNumVoices);
 
         const float dryLeft = buffer.getSample (0, sample);
-        const float wetOutLeft = wetLeft * mix * kWetGain;
+        const float monoWet = 0.5f * (wetLeft + wetRight);
+
+        // The wet path is 2× at 50 % mix (the classic chorus blend). Above
+        // that, hold the wet level and only fade the dry out, so full wet is
+        // an honest vibrato at the same loudness instead of a 6 dB jump.
+        const float wetGain = mix <= 0.5f ? mix * kWetGain : 1.0f;
+
+        // Crossfade the ensemble spread to a centred mono wet path. The dry
+        // signal is mono-centred already, so "mono" collapses the whole effect.
+        const float wetOutLeft = (monoWet + (wetLeft - monoWet) * stereoAmount)
+                                 * wetGain;
+        const float wetOutRight = (monoWet + (wetRight - monoWet) * stereoAmount)
+                                  * wetGain;
 
         if (numChannels == 1)
         {
             buffer.setSample (0, sample,
-                              dryLeft * (1.0f - mix)
-                              + 0.5f * (wetLeft + wetRight) * mix * kWetGain);
+                              dryLeft * (1.0f - mix) + monoWet * wetGain);
         }
         else
         {
             const float dryRight = buffer.getSample (1, sample);
             buffer.setSample (0, sample, dryLeft * (1.0f - mix) + wetOutLeft);
-            buffer.setSample (1, sample,
-                              dryRight * (1.0f - mix) + wetRight * mix * kWetGain);
+            buffer.setSample (1, sample, dryRight * (1.0f - mix) + wetOutRight);
         }
     }
 }
