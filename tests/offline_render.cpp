@@ -13,6 +13,7 @@
 #include "namberry/RoomSim.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
+#include <juce_audio_formats/juce_audio_formats.h>
 
 #include <algorithm>
 #include <array>
@@ -21,6 +22,10 @@
 #include <tuple>
 
 namespace {
+
+juce::File writeTestReverbIr (double sampleRate,
+                              int tapSample = 16,
+                              const char* fileName = "namberry-reverb-ir-test.wav");
 
 float estimateFrequency (const std::vector<float>& samples, double sampleRate)
 {
@@ -888,6 +893,221 @@ int runReverbDryTest()
     return passed ? 0 : 2;
 }
 
+int runReverbIrTest()
+{
+    constexpr double sampleRate = 48000.0;
+    constexpr int blockSize = 512;
+
+    const auto leftFile = writeTestReverbIr (sampleRate, 16,
+                                             "namberry-reverb-ir-test-l.wav");
+    const auto rightFile = writeTestReverbIr (sampleRate, 32,
+                                              "namberry-reverb-ir-test-r.wav");
+
+    if (! leftFile.existsAsFile() || ! rightFile.existsAsFile())
+    {
+        std::cout << "reverb IR test FAIL: could not create test IRs\n";
+        return 2;
+    }
+
+    juce::dsp::ProcessSpec spec;
+    spec.sampleRate = sampleRate;
+    spec.maximumBlockSize = blockSize;
+    spec.numChannels = 2;
+
+    // Returns sample 0 (dry impulse) and the two known IR tap positions.
+    auto render = [&] (bool loadLeft, bool loadRight, bool bypass,
+                       float mixLeft, float mixRight, float levelDb = 0.0f)
+    {
+        namberry::ReverbIrLoader loader;
+        loader.prepare (spec);
+
+        if (loadLeft)
+            loader.loadIr (0, leftFile);
+        if (loadRight)
+            loader.loadIr (1, rightFile);
+
+        // Convolution IR swaps are queued; preparing again flushes them.
+        if (loadLeft || loadRight)
+            loader.prepare (spec);
+
+        loader.setBypass (bypass);
+        loader.setMix (0, mixLeft);
+        loader.setMix (1, mixRight);
+        loader.setLevelDb (levelDb);
+        loader.reset();
+
+        juce::AudioBuffer<float> buffer (2, blockSize);
+        juce::MidiBuffer midi;
+        buffer.clear();
+        buffer.setSample (0, 0, 0.5f);
+        buffer.setSample (1, 0, 0.5f);
+        loader.processBlock (buffer, midi);
+
+        return std::array<float, 3> { buffer.getSample (0, 0),
+                                      buffer.getSample (0, 16),
+                                      buffer.getSample (0, 32) };
+    };
+
+    const auto noIr = render (false, false, false, 1.0f, 1.0f);
+    const auto bypassed = render (true, true, true, 1.0f, 1.0f);
+    const auto dryOnly = render (true, true, false, 0.0f, 0.0f);
+    const auto leftOnly = render (true, false, false, 1.0f, 1.0f);
+    const auto rightOnly = render (false, true, false, 1.0f, 1.0f);
+    const auto leftFullOnly = render (true, false, false, 1.0f, 0.0f);
+    const auto both = render (true, true, false, 1.0f, 1.0f);
+    const auto halfLeft = render (true, false, false, 0.5f, 0.0f);
+    const auto boosted = render (true, false, false, 1.0f, 1.0f, 6.0f);
+    const auto cut = render (true, false, false, 1.0f, 1.0f, -6.0f);
+
+    auto isPassthrough = [] (const std::array<float, 3>& s)
+    {
+        return std::abs (s[0] - 0.5f) < 1.0e-6f
+            && std::abs (s[1]) < 1.0e-6f
+            && std::abs (s[2]) < 1.0e-6f;
+    };
+
+    const bool dryPassthrough = isPassthrough (noIr)
+                             && isPassthrough (bypassed)
+                             && isPassthrough (dryOnly);
+
+    const bool fullWet = std::abs (leftOnly[0]) < 1.0e-4f
+                      && std::abs (rightOnly[0]) < 1.0e-4f
+                      && std::abs (leftFullOnly[0]) < 1.0e-4f
+                      && std::abs (leftFullOnly[1]) > 0.01f
+                      && std::abs (both[0]) < 1.0e-4f;
+
+    const bool parallelMix = fullWet
+                          && std::abs (leftOnly[1]) > 0.01f
+                          && std::abs (rightOnly[2]) > 0.01f
+                          && std::abs (leftOnly[2]) < 1.0e-4f
+                          && std::abs (rightOnly[1]) < 1.0e-4f
+                          && std::abs (both[1] - leftOnly[1]) < 1.0e-4f
+                          && std::abs (both[2] - rightOnly[2]) < 1.0e-4f
+                          && std::abs (halfLeft[1] - 0.5f * leftOnly[1]) < 1.0e-3f;
+
+    // The pedal Master is a local wet boost/cut, not the global output level.
+    const bool levelBoostCut = std::abs (boosted[0]) < 1.0e-4f
+                            && std::abs (cut[0]) < 1.0e-4f
+                            && std::abs (boosted[1] - 2.0f * leftOnly[1]) < 1.0e-3f
+                            && std::abs (cut[1] - 0.5f * leftOnly[1]) < 1.0e-3f;
+
+    // A block larger than the prepared maximum must be processed in chunks
+    // without resizing scratch buffers on the audio thread.
+    namberry::ReverbIrLoader chunkedLoader;
+    chunkedLoader.prepare (spec);
+    chunkedLoader.loadIr (0, leftFile);
+    chunkedLoader.loadIr (1, rightFile);
+    chunkedLoader.prepare (spec);
+    chunkedLoader.setBypass (false);
+    chunkedLoader.setMix (0, 1.0f);
+    chunkedLoader.setMix (1, 1.0f);
+    chunkedLoader.reset();
+
+    juce::AudioBuffer<float> chunkedBuffer (2, blockSize * 2);
+    juce::MidiBuffer chunkedMidi;
+    chunkedBuffer.clear();
+    chunkedBuffer.setSample (0, 0, 0.5f);
+    chunkedBuffer.setSample (1, 0, 0.5f);
+    chunkedLoader.processBlock (chunkedBuffer, chunkedMidi);
+
+    bool chunkedFinite = true;
+    for (int ch = 0; ch < 2; ++ch)
+        for (int i = 0; i < chunkedBuffer.getNumSamples(); ++i)
+            chunkedFinite = chunkedFinite
+                         && std::isfinite (chunkedBuffer.getSample (ch, i));
+
+    const bool chunkedOk = chunkedFinite
+                        && std::abs (chunkedBuffer.getSample (0, 0)) < 1.0e-4f
+                        && std::abs (chunkedBuffer.getSample (0, 16)
+                                     - both[1]) < 1.0e-4f
+                        && std::abs (chunkedBuffer.getSample (0, 32)
+                                     - both[2]) < 1.0e-4f;
+
+    namberry::ReverbIrLoader metadata;
+    metadata.prepare (spec);
+    const bool loaded = metadata.loadIr (0, leftFile)
+                     && metadata.loadIr (1, rightFile)
+                     && metadata.isLoaded (0)
+                     && metadata.isLoaded (1)
+                     && metadata.getLoadedFile (0) == leftFile
+                     && metadata.getLoadedFile (1) == rightFile
+                     && metadata.getLoadedFileName (0) == leftFile.getFileName()
+                     && metadata.getLoadedFileName (1) == rightFile.getFileName();
+
+    // Cutoff trims the IR waveform itself. A short cutoff must remove a tap
+    // that a long cutoff preserves, with no clicks introduced into the dry path.
+    const auto longFile = writeTestReverbIr (sampleRate, 4800,
+                                             "namberry-reverb-ir-test-long.wav");
+    auto renderCutoff = [&] (float seconds)
+    {
+        namberry::ReverbIrLoader loader;
+        loader.prepare (spec);
+        loader.loadIr (0, longFile);
+        loader.prepare (spec);
+        loader.setBypass (false);
+        loader.setMix (0, 1.0f);
+        loader.reset();
+        loader.setCutoff (0, seconds);
+        loader.applyPendingCutoffChanges();
+
+        // Flush the queued IR swap after the reload.
+        loader.prepare (spec);
+        loader.reset();
+
+        juce::AudioBuffer<float> buffer (2, 8192);
+        juce::MidiBuffer midi;
+        buffer.clear();
+        buffer.setSample (0, 0, 0.5f);
+        buffer.setSample (1, 0, 0.5f);
+        loader.processBlock (buffer, midi);
+
+        float peak = 0.0f;
+        int peakIndex = 0;
+
+        for (int i = 1; i < buffer.getNumSamples(); ++i)
+        {
+            const float magnitude = std::abs (buffer.getSample (0, i));
+
+            if (magnitude > peak)
+            {
+                peak = magnitude;
+                peakIndex = i;
+            }
+        }
+
+        return std::array<float, 4> { buffer.getSample (0, 0),
+                                      buffer.getSample (0, 4800),
+                                      peak,
+                                      static_cast<float> (peakIndex) };
+    };
+
+    const auto cutoffLong = renderCutoff (3.0f);
+    const auto cutoffShort = renderCutoff (0.02f);
+    const bool cutoffWorks = longFile.existsAsFile()
+                          && std::abs (cutoffLong[0]) < 1.0e-4f
+                          && std::abs (cutoffLong[1]) > 0.01f
+                          && std::abs (cutoffShort[0]) < 1.0e-4f
+                          && std::abs (cutoffShort[1]) < 1.0e-4f;
+
+    const bool passed = dryPassthrough && parallelMix && levelBoostCut
+                     && chunkedOk && loaded && cutoffWorks;
+
+    std::cout << "reverb IR passthrough=" << dryPassthrough
+              << " parallel=" << parallelMix
+              << " L=" << leftOnly[1]
+              << " R=" << rightOnly[2]
+              << " both=" << both[1] << "/" << both[2]
+              << " chunked=" << chunkedOk
+              << " fullWet=" << fullWet
+              << " level=" << levelBoostCut
+              << " cutoff=" << cutoffWorks
+              << " peak=" << cutoffLong[2] << "@" << static_cast<int> (cutoffLong[3])
+              << " shortPeak=" << cutoffShort[2] << "@" << static_cast<int> (cutoffShort[3])
+              << " " << (passed ? "PASS" : "FAIL") << "\n";
+
+    return passed ? 0 : 2;
+}
+
 int runDelayFeedbackTest()
 {
     constexpr double sampleRate = 48000.0;
@@ -1170,6 +1390,41 @@ void makeRoomNoise (std::vector<float>& left,
     }
 }
 
+juce::File writeTestReverbIr (double sampleRate, int tapSample, const char* fileName)
+{
+    const juce::File file (juce::String ("/tmp/opencode/") + fileName);
+    file.deleteFile();
+    file.getParentDirectory().createDirectory();
+
+    // Long enough for the Cutoff test, where the tap is several thousand
+    // samples in. The impulse itself stays sparse for dry-level measurements.
+    constexpr int length = 16384;
+    juce::AudioBuffer<float> ir (2, length);
+    ir.clear();
+
+    // A single stereo impulse at a known tap. Keeping the IR free of tails
+    // makes it possible to tell the two parallel slots apart by tap position.
+    for (int ch = 0; ch < 2; ++ch)
+        ir.setSample (ch, tapSample, ch == 0 ? 1.0f : 0.8f);
+
+    // AudioFormatWriter takes ownership of the stream, so hand it a heap
+    // allocation rather than a stack FileOutputStream.
+    std::unique_ptr<juce::FileOutputStream> stream (file.createOutputStream());
+    juce::WavAudioFormat wav;
+
+    if (stream != nullptr && stream->openedOk())
+    {
+        if (auto writer = std::unique_ptr<juce::AudioFormatWriter> (
+                wav.createWriterFor (stream.release(), sampleRate, 2, 32,
+                                     juce::StringPairArray(), 0)))
+        {
+            writer->writeFromAudioSampleBuffer (ir, 0, ir.getNumSamples());
+        }
+    }
+
+    return file;
+}
+
 double stereoCorrelation (const RoomRender& render,
                           double sampleRate,
                           double startSeconds,
@@ -1412,6 +1667,123 @@ int runRoomTest()
               << " early=" << earlyEnergy << " late=" << lateEnergy
               << " lowWet=" << lowWet << " highWet=" << highWet
               << " dryRms=" << dryRms << " addedRms=" << addedRms
+              << " " << (passed ? "PASS" : "FAIL") << "\n";
+
+    return passed ? 0 : 2;
+}
+
+int runChorusEnsembleTest()
+{
+    constexpr double sampleRate = 48000.0;
+    constexpr int totalSamples = 48000;
+    constexpr int blockSize = 256;
+
+    std::vector<float> input (static_cast<size_t> (totalSamples));
+    juce::Random random (0x5eed);
+    float lowpass = 0.0f;
+
+    for (int i = 0; i < totalSamples; ++i)
+    {
+        lowpass += 0.35f * ((random.nextFloat() * 2.0f - 1.0f) - lowpass);
+        input[static_cast<size_t> (i)] = 0.4f * lowpass;
+    }
+
+    auto render = [&] (float depth)
+    {
+        namberry::PostEffects fx;
+        juce::dsp::ProcessSpec spec;
+        spec.sampleRate = sampleRate;
+        spec.maximumBlockSize = blockSize;
+        spec.numChannels = 2;
+        fx.prepare (spec);
+        fx.setBypass (false);
+        fx.setChorusBypass (false);
+        fx.setFlangerBypass (true);
+        fx.setPhaserBypass (true);
+        fx.setDelayBypass (true);
+        fx.setReverbBypass (true);
+        fx.setChorusRate (0.8f);
+        fx.setChorusDepth (depth);
+        fx.setChorusFeedback (0.0f);
+        fx.setChorusDelay (15.0f);
+        fx.setChorusMix (50.0f);
+
+        RoomRender result;
+        result.left.resize (static_cast<size_t> (totalSamples));
+        result.right.resize (static_cast<size_t> (totalSamples));
+
+        for (int offset = 0; offset < totalSamples; offset += blockSize)
+        {
+            const int count = juce::jmin (blockSize, totalSamples - offset);
+            juce::AudioBuffer<float> buffer (2, count);
+
+            for (int i = 0; i < count; ++i)
+            {
+                const float sample = input[static_cast<size_t> (offset + i)];
+                buffer.setSample (0, i, sample);
+                buffer.setSample (1, i, sample);
+            }
+
+            juce::MidiBuffer midi;
+            fx.processBlock (buffer, midi);
+
+            for (int i = 0; i < count; ++i)
+            {
+                result.left[static_cast<size_t> (offset + i)] = buffer.getSample (0, i);
+                result.right[static_cast<size_t> (offset + i)] = buffer.getSample (1, i);
+            }
+        }
+
+        return result;
+    };
+
+    auto wetOnly = [&] (const RoomRender& result)
+    {
+        RoomRender wet;
+        wet.left.resize (result.left.size());
+        wet.right.resize (result.right.size());
+
+        for (size_t i = 0; i < result.left.size(); ++i)
+        {
+            // Mix is 50 % and the wet gain is 2x, so dry is exactly half.
+            wet.left[i] = result.left[i] - 0.5f * input[i];
+            wet.right[i] = result.right[i] - 0.5f * input[i];
+        }
+
+        return wet;
+    };
+
+    const auto flat = wetOnly (render (0.0f));
+    const auto wide = wetOnly (render (100.0f));
+
+    const double flatCorrelation = stereoCorrelation (flat, sampleRate, 0.1, 0.9);
+    const double wideCorrelation = stereoCorrelation (wide, sampleRate, 0.1, 0.9);
+
+    double wetRms = 0.0;
+    int count = 0;
+    bool finite = true;
+
+    for (int i = static_cast<int> (sampleRate / 10); i < totalSamples - static_cast<int> (sampleRate / 10); ++i)
+    {
+        const float left = wide.left[static_cast<size_t> (i)];
+        const float right = wide.right[static_cast<size_t> (i)];
+        finite = finite && std::isfinite (left) && std::isfinite (right);
+        wetRms += 0.5 * (static_cast<double> (left) * left
+                         + static_cast<double> (right) * right);
+        ++count;
+    }
+
+    wetRms = std::sqrt (wetRms / juce::jmax (1, count));
+
+    const bool passed = finite
+                     && flatCorrelation > 0.95
+                     && wideCorrelation < 0.9
+                     && wideCorrelation < flatCorrelation - 0.1
+                     && wetRms > 1.0e-4;
+
+    std::cout << "chorus ensemble flat=" << flatCorrelation
+              << " wide=" << wideCorrelation
+              << " wetRms=" << wetRms
               << " " << (passed ? "PASS" : "FAIL") << "\n";
 
     return passed ? 0 : 2;
@@ -1887,6 +2259,139 @@ int runIrStateMigrationTest()
               << " both=" << blendBoth
               << " kept=" << keptBlend
               << " legacyRemoved=" << (migratedBoth ? "yes" : "no")
+              << " " << (passed ? "PASS" : "FAIL") << "\n";
+
+    return passed ? 0 : 2;
+}
+
+int runReverbIrStateTest()
+{
+    auto apply = [] (namberry::NAMBerryProcessor& processor,
+                     const juce::ValueTree& state)
+    {
+        std::unique_ptr<juce::XmlElement> xml (state.createXml());
+        juce::MemoryBlock block;
+        juce::AudioProcessor::copyXmlToBinary (*xml, block);
+        processor.setStateInformation (block.getData(), static_cast<int> (block.getSize()));
+    };
+
+    auto removeParameter = [] (juce::ValueTree& state, const juce::String& id)
+    {
+        for (int i = state.getNumChildren() - 1; i >= 0; --i)
+            if (state.getChild (i).getProperty ("id").toString() == id)
+                state.removeChild (i, nullptr);
+    };
+
+    auto hasParameter = [] (const juce::ValueTree& state, const juce::String& id)
+    {
+        return state.getChildWithProperty ("id", id).isValid();
+    };
+
+    // A v9 project has the single Mix and bypass; the Mix must feed both new
+    // parallel slots and the legacy parameter must be removed.
+    namberry::NAMBerryProcessor old;
+    auto oldState = old.getValueTreeState().copyState();
+    oldState.setProperty ("fxVersion", 9, nullptr);
+    removeParameter (oldState, "reverbIrLeftMix");
+    removeParameter (oldState, "reverbIrRightMix");
+    removeParameter (oldState, "reverbIrLeftCutoff");
+    removeParameter (oldState, "reverbIrRightCutoff");
+    removeParameter (oldState, "reverbIrLevel");
+
+    if (auto* bypass = old.getValueTreeState().getParameter ("reverbIrBypass"))
+        bypass->setValueNotifyingHost (0.0f);
+
+    oldState = old.getValueTreeState().copyState();
+    oldState.setProperty ("fxVersion", 9, nullptr);
+    removeParameter (oldState, "reverbIrLeftMix");
+    removeParameter (oldState, "reverbIrRightMix");
+    removeParameter (oldState, "reverbIrLeftCutoff");
+    removeParameter (oldState, "reverbIrRightCutoff");
+    removeParameter (oldState, "reverbIrLevel");
+
+    juce::ValueTree legacyMix ("PARAM");
+    legacyMix.setProperty ("id", "reverbIrMix", nullptr);
+    legacyMix.setProperty ("value", 0.6f, nullptr);
+    oldState.appendChild (legacyMix, nullptr);
+
+    namberry::NAMBerryProcessor migrated;
+    apply (migrated, oldState);
+
+    auto* migratedState = &migrated.getValueTreeState();
+    const float migratedBypass =
+        migratedState->getRawParameterValue ("reverbIrBypass")->load();
+    const float migratedLeft =
+        migratedState->getRawParameterValue ("reverbIrLeftMix")->load();
+    const float migratedRight =
+        migratedState->getRawParameterValue ("reverbIrRightMix")->load();
+    const float migratedLeftCutoff =
+        migratedState->getRawParameterValue ("reverbIrLeftCutoff")->load();
+    const float migratedRightCutoff =
+        migratedState->getRawParameterValue ("reverbIrRightCutoff")->load();
+    const float migratedLevel =
+        migratedState->getRawParameterValue ("reverbIrLevel")->load();
+    const int version = static_cast<int> (
+        migratedState->copyState().getProperty ("fxVersion", 0));
+    const bool legacyRemoved =
+        ! hasParameter (migratedState->copyState(), "reverbIrMix");
+
+    // A state that already carries both Mix knobs keeps the stored values.
+    namberry::NAMBerryProcessor current;
+    auto& params = current.getValueTreeState();
+
+    if (auto* parameter = params.getParameter ("reverbIrBypass"))
+        parameter->setValueNotifyingHost (0.0f);
+    if (auto* parameter = params.getParameter ("reverbIrLeftMix"))
+        parameter->setValueNotifyingHost (0.3f);
+    if (auto* parameter = params.getParameter ("reverbIrRightMix"))
+        parameter->setValueNotifyingHost (0.8f);
+    if (auto* parameter = params.getParameter ("reverbIrLeftCutoff"))
+        parameter->setValueNotifyingHost (parameter->convertTo0to1 (0.55f));
+    if (auto* parameter = params.getParameter ("reverbIrRightCutoff"))
+        parameter->setValueNotifyingHost (parameter->convertTo0to1 (1.20f));
+    if (auto* parameter = params.getParameter ("reverbIrLevel"))
+        parameter->setValueNotifyingHost (parameter->convertTo0to1 (-3.0f));
+
+    namberry::NAMBerryProcessor restored;
+    apply (restored, params.copyState());
+
+    auto* restoredState = &restored.getValueTreeState();
+    const float keptBypass =
+        restoredState->getRawParameterValue ("reverbIrBypass")->load();
+    const float keptLeft =
+        restoredState->getRawParameterValue ("reverbIrLeftMix")->load();
+    const float keptRight =
+        restoredState->getRawParameterValue ("reverbIrRightMix")->load();
+    const float keptLeftCutoff =
+        restoredState->getRawParameterValue ("reverbIrLeftCutoff")->load();
+    const float keptRightCutoff =
+        restoredState->getRawParameterValue ("reverbIrRightCutoff")->load();
+    const float keptLevel =
+        restoredState->getRawParameterValue ("reverbIrLevel")->load();
+
+    const bool passed = migratedBypass < 0.5f
+                     && std::abs (migratedLeft - 0.6f) < 1.0e-4f
+                     && std::abs (migratedRight - 0.6f) < 1.0e-4f
+                     && std::abs (migratedLeftCutoff - 3.0f) < 1.0e-4f
+                     && std::abs (migratedRightCutoff - 3.0f) < 1.0e-4f
+                     && std::abs (migratedLevel) < 1.0e-4f
+                     && version == 12
+                     && legacyRemoved
+                     && keptBypass < 0.5f
+                     && std::abs (keptLeft - 0.3f) < 1.0e-4f
+                     && std::abs (keptRight - 0.8f) < 1.0e-4f
+                     && std::abs (keptLeftCutoff - 0.55f) < 0.01f
+                     && std::abs (keptRightCutoff - 1.20f) < 0.01f
+                     && std::abs (keptLevel + 3.0f) < 0.01f;
+
+    std::cout << "reverb IR migration bypass=" << migratedBypass
+              << " L=" << migratedLeft
+              << " R=" << migratedRight
+              << " version=" << version
+              << " legacyRemoved=" << (legacyRemoved ? "yes" : "no")
+              << " cutoffs=" << migratedLeftCutoff << "/" << migratedRightCutoff
+              << " level=" << migratedLevel
+              << " kept=" << keptLeft << "/" << keptRight
               << " " << (passed ? "PASS" : "FAIL") << "\n";
 
     return passed ? 0 : 2;
@@ -2598,9 +3103,27 @@ int runPresetTest()
             parameter->setValueNotifyingHost (normalised);
     };
 
+    auto setCutoff = [&] (const juce::String& id, float seconds)
+    {
+        if (auto* parameter = sourceParams.getParameter (id))
+            parameter->setValueNotifyingHost (parameter->convertTo0to1 (seconds));
+    };
+
+    auto setLevel = [&] (const juce::String& id, float db)
+    {
+        if (auto* parameter = sourceParams.getParameter (id))
+            parameter->setValueNotifyingHost (parameter->convertTo0to1 (db));
+    };
+
     setParameter ("chorusMix", 1.0f);
     setParameter ("phaserStages", 1.0f);
     setParameter ("reverbDecay", 0.8f);
+    setParameter ("reverbIrBypass", 0.0f);
+    setParameter ("reverbIrLeftMix", 0.7f);
+    setParameter ("reverbIrRightMix", 0.3f);
+    setCutoff ("reverbIrLeftCutoff", 0.8f);
+    setCutoff ("reverbIrRightCutoff", 1.5f);
+    setLevel ("reverbIrLevel", -3.0f);
 
     const juce::File ampFile ("/home/elipoli/Downloads/amps/NAMs/1. BASS/DG ADAM/ADAM Clean.nam");
     const juce::File irFile ("/home/elipoli/Downloads/amps/IRs/cab Marshall 1960 celestion G12T75 sm57.wav");
@@ -2612,6 +3135,15 @@ int runPresetTest()
 
     if (haveIr)
         source.loadIr (0, irFile);
+
+    const juce::File reverbIrLeftFile = writeTestReverbIr (48000.0, 16,
+                                                           "namberry-reverb-ir-test-l.wav");
+    const juce::File reverbIrRightFile = writeTestReverbIr (48000.0, 32,
+                                                            "namberry-reverb-ir-test-r.wav");
+    const bool haveReverbIr = reverbIrLeftFile.existsAsFile()
+                           && reverbIrRightFile.existsAsFile()
+                           && source.loadReverbIr (0, reverbIrLeftFile)
+                           && source.loadReverbIr (1, reverbIrRightFile);
 
     const bool saved = source.savePreset (presetFile);
 
@@ -2625,14 +3157,39 @@ int runPresetTest()
     const float chorusMix = restoredParams.getRawParameterValue ("chorusMix")->load();
     const float phaserStages = restoredParams.getRawParameterValue ("phaserStages")->load();
     const float reverbDecay = restoredParams.getRawParameterValue ("reverbDecay")->load();
+    const float reverbIrBypass =
+        restoredParams.getRawParameterValue ("reverbIrBypass")->load();
+    const float reverbIrLeftMix =
+        restoredParams.getRawParameterValue ("reverbIrLeftMix")->load();
+    const float reverbIrRightMix =
+        restoredParams.getRawParameterValue ("reverbIrRightMix")->load();
+    const float reverbIrLeftCutoff =
+        restoredParams.getRawParameterValue ("reverbIrLeftCutoff")->load();
+    const float reverbIrRightCutoff =
+        restoredParams.getRawParameterValue ("reverbIrRightCutoff")->load();
+    const float reverbIrLevel =
+        restoredParams.getRawParameterValue ("reverbIrLevel")->load();
+
+    auto* reverbIrLoader = restored.getReverbIrLoader();
+    const bool reverbIrRestored = ! haveReverbIr
+        || (reverbIrLoader != nullptr
+            && reverbIrLoader->getLoadedFile (0) == reverbIrLeftFile
+            && reverbIrLoader->getLoadedFile (1) == reverbIrRightFile);
 
     const bool filesOk = (! haveAmp || restored.getNamModel()->hasModel())
-                      && (! haveIr || restored.getIrLoader()->isSlotLoaded (0));
+                      && (! haveIr || restored.getIrLoader()->isSlotLoaded (0))
+                      && reverbIrRestored;
 
     const bool passed = loaded && filesOk
                      && std::abs (chorusMix - 50.0f) < 0.01f
                      && std::abs (phaserStages - 12.0f) < 0.01f
-                     && std::abs (reverbDecay - 0.8f) < 0.01f;
+                     && std::abs (reverbDecay - 0.8f) < 0.01f
+                     && reverbIrBypass < 0.5f
+                     && std::abs (reverbIrLeftMix - 0.7f) < 0.01f
+                     && std::abs (reverbIrRightMix - 0.3f) < 0.01f
+                     && std::abs (reverbIrLeftCutoff - 0.8f) < 0.01f
+                     && std::abs (reverbIrRightCutoff - 1.5f) < 0.01f
+                     && std::abs (reverbIrLevel + 3.0f) < 0.01f;
 
     presetFile.deleteFile();
 
@@ -2642,6 +3199,11 @@ int runPresetTest()
               << " chorusMix=" << chorusMix
               << " phaserStages=" << phaserStages
               << " reverbDecay=" << reverbDecay
+              << " reverbIrBypass=" << reverbIrBypass
+              << " reverbIrL=" << reverbIrLeftMix
+              << " reverbIrR=" << reverbIrRightMix
+              << " cutoff=" << reverbIrLeftCutoff << "/" << reverbIrRightCutoff
+              << " level=" << reverbIrLevel
               << " " << (passed ? "PASS" : "FAIL") << "\n";
 
     return passed ? 0 : 2;
@@ -3007,6 +3569,10 @@ int main (int argc, char** argv)
 
     if (argc > 1 && juce::String (argv[1]) == "--reverb-dry")
         return runReverbDryTest();
+    if (argc > 1 && juce::String (argv[1]) == "--reverb-ir")
+        return runReverbIrTest();
+    if (argc > 1 && juce::String (argv[1]) == "--reverb-ir-state")
+        return runReverbIrStateTest();
 
     if (argc > 1 && juce::String (argv[1]) == "--delay-feedback")
         return runDelayFeedbackTest();
@@ -3019,6 +3585,9 @@ int main (int argc, char** argv)
 
     if (argc > 1 && juce::String (argv[1]) == "--room")
         return runRoomTest();
+
+    if (argc > 1 && juce::String (argv[1]) == "--chorus-ensemble")
+        return runChorusEnsembleTest();
 
     if (argc > 1 && juce::String (argv[1]) == "--modulation")
         return runModulationTest();

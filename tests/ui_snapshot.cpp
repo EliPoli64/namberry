@@ -294,6 +294,47 @@ int main (int argc, char** argv)
     if (findButton (editor, "LOAD") == nullptr)
         std::cerr << "FAIL: IR LOAD button not found\n";
 
+    // Post FX tab: both convolution reverb IR slots use the same file picker
+    // pattern as the cabinet loader, each with its own screen and folder.
+    tabBar->setCurrentTabIndex (4, false);
+    editor.resized();
+
+    for (int slot = 0; slot < 2; ++slot)
+    {
+        const auto screenName = "ReverbIrScreen" + juce::String (slot);
+        auto* screen = findChildByName (editor, screenName);
+
+        if (screen == nullptr)
+        {
+            std::cerr << "FAIL: " << screenName << " not found\n";
+            return 1;
+        }
+
+        if (! screen->isVisible() || screen->getWidth() < 40
+            || screen->getHeight() < 12)
+        {
+            std::cerr << "FAIL: " << screenName << " not laid out\n";
+            return 1;
+        }
+
+        leftClick (*screen, 4.0f, 4.0f);
+
+        if (findChildByName (editor, "FilePopup") == nullptr)
+        {
+            std::cerr << "FAIL: " << screenName
+                      << " did not open the file popup\n";
+            return 1;
+        }
+
+        dismissPopup (editor);
+    }
+
+    if (findButton (editor, "LOAD") == nullptr)
+    {
+        std::cerr << "FAIL: reverb IR LOAD button not found\n";
+        return 1;
+    }
+
     // Post EQ tab: drag band 1, change its Q with the wheel, then double-click
     // it back to 0 dB. This exercises the graphical editor without a screen.
     tabBar->setCurrentTabIndex (2, false);

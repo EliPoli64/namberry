@@ -167,8 +167,18 @@ public:
         const auto dir = juce::Point<float> (std::sin (angle), -std::cos (angle));
         const auto p1 = centre + dir * (radius * 0.20f);
         const auto p2 = centre + dir * (radius * 0.86f);
-        g.setColour (juce::Colour (0xfff4f4f5));
-        g.drawLine ({ p1, p2 }, 2.6f);
+        const bool accentKnob = static_cast<int> (
+            slider.getProperties().getWithDefault ("accentKnob", 0)) != 0;
+
+        if (accentKnob)
+        {
+            g.setColour (juce::Colour (kAccent).withAlpha (0.95f));
+            g.drawEllipse (skirt.expanded (3.0f), 2.4f);
+        }
+
+        g.setColour (accentKnob ? juce::Colour (kAccent)
+                                : juce::Colour (0xfff4f4f5));
+        g.drawLine ({ p1, p2 }, accentKnob ? 3.4f : 2.6f);
 
         if (slider.hasKeyboardFocus (true))
         {
@@ -733,6 +743,12 @@ public:
     {
         if (sliderAttachment_ != nullptr)
             slider_.setRange (slider_.getMinimum(), slider_.getMaximum(), step);
+    }
+
+    /// Highlights a control that is the primary way to shape this pedal.
+    void setAccentKnob()
+    {
+        slider_.getProperties().set ("accentKnob", 1);
     }
 
     void resized() override
@@ -3214,21 +3230,28 @@ private:
 };
 
 //==============================================================================
-/// One of the two IR pickers: an LCD screen that opens the folder popup, a
-/// Load button for the system file chooser, arrows and drag-and-drop.
+/// An IR picker row: an LCD screen that opens the folder popup, a Load button
+/// for the system file chooser, arrows and drag-and-drop. Used by both cabinet
+/// slots and the single-slot reverb IR pedal.
 class IrPickRow : public juce::Component,
                   public juce::FileDragAndDropTarget,
                   private juce::Timer
 {
 public:
-    IrPickRow (int slot, NAMBerryProcessor& processor)
-        : slot_ (slot), processor_ (processor)
+    IrPickRow (juce::String caption,
+               juce::String screenName,
+               std::function<bool (const juce::File&)> loader,
+               std::function<juce::File()> getRootDirectory,
+               std::function<juce::File()> getCurrentFile)
+        : caption_ (std::move (caption)),
+          loader_ (std::move (loader)),
+          getRootDirectory_ (std::move (getRootDirectory)),
+          getCurrentFile_ (std::move (getCurrentFile))
     {
         startTimer (250);
 
-        screen_ = std::make_unique<FileScreen> (
-            "IR " + juce::String (slot == 0 ? "A" : "B"), "No IR loaded");
-        screen_->setName ("IrScreen" + juce::String (slot));
+        screen_ = std::make_unique<FileScreen> (caption_, "No IR loaded");
+        screen_->setName (std::move (screenName));
         addAndMakeVisible (*screen_);
 
         addAndMakeVisible (loadButton_);
@@ -3298,9 +3321,11 @@ public:
     {
         auto r = getLocalBounds().reduced (6);
 
-        auto controls = r.removeFromRight (116);
-        loadButton_.setBounds (controls.removeFromTop (34));
-        controls.removeFromTop (4);
+        // Keep the filename screen as wide as possible; the file controls sit
+        // in a narrow strip so long IR names remain readable.
+        auto controls = r.removeFromRight (66);
+        loadButton_.setBounds (controls.removeFromTop (26));
+        controls.removeFromTop (3);
 
         auto left = controls.removeFromLeft (controls.getWidth() / 2);
         prevButton_.setBounds (left.withTrimmedRight (3));
@@ -3312,13 +3337,13 @@ public:
 private:
     void browse (int delta)
     {
-        auto* irLoader = processor_.getIrLoader();
-        const auto current = irLoader != nullptr ? irLoader->getLoadedFile (slot_)
-                                                 : juce::File();
-
+        const auto current = getCurrentFile_ != nullptr ? getCurrentFile_()
+                                                        : juce::File();
+        const auto root = getRootDirectory_ != nullptr ? getRootDirectory_()
+                                                       : juce::File();
         const auto directory = current.existsAsFile()
             ? current.getParentDirectory()
-            : processor_.getIrDirectory();
+            : root;
 
         const auto files = listMatchingFiles (
             directory, juce::StringArray { ".wav", ".aif", ".aiff" });
@@ -3338,7 +3363,7 @@ private:
 
     bool load (const juce::File& file)
     {
-        if (processor_.loadIr (slot_, file))
+        if (loader_ != nullptr && loader_ (file))
         {
             refreshDisplay();
             return true;
@@ -3354,14 +3379,16 @@ private:
 
     void refreshDisplay()
     {
-        if (auto* irLoader = processor_.getIrLoader())
-            screen_->setFileName (irLoader->getLoadedFileName (slot_));
+        if (getCurrentFile_ != nullptr)
+            screen_->setFileName (getCurrentFile_().getFileName());
     }
 
     void timerCallback() override { refreshDisplay(); }
 
-    int slot_;
-    NAMBerryProcessor& processor_;
+    juce::String caption_;
+    std::function<bool (const juce::File&)> loader_;
+    std::function<juce::File()> getRootDirectory_;
+    std::function<juce::File()> getCurrentFile_;
     std::unique_ptr<FileScreen> screen_;
     juce::TextButton prevButton_, loadButton_, nextButton_;
     std::function<void()> onLoad_;
@@ -3944,6 +3971,7 @@ void NAMBerryEditor::buildUi()
     const juce::Colour phaserBody  (0xff831843), phaserAccent  (0xfff472b6);
     const juce::Colour delayBody   (0xff713f12), delayAccent   (0xfffacc15);
     const juce::Colour reverbBody  (0xff1e3a5f), reverbAccent  (0xff93c5fd);
+    const juce::Colour reverbIrBody (0xff153a4a), reverbIrAccent (0xff67e8f9);
 
     // 1. Pre FX -------------------------------------------------------------
     // The tuner sits permanently in the editor header, so the pedalboard keeps
@@ -4191,7 +4219,20 @@ void NAMBerryEditor::buildUi()
 
         for (int slot = 0; slot < IrLoader::kNumSlots; ++slot)
         {
-            auto row = std::make_unique<IrPickRow> (slot, processor_);
+            auto row = std::make_unique<IrPickRow> (
+                "IR " + juce::String (slot == 0 ? "A" : "B"),
+                "IrScreen" + juce::String (slot),
+                [this, slot] (const juce::File& file)
+                {
+                    return processor_.loadIr (slot, file);
+                },
+                [this] { return processor_.getIrDirectory(); },
+                [this, slot]
+                {
+                    auto* loader = processor_.getIrLoader();
+                    return loader != nullptr ? loader->getLoadedFile (slot)
+                                             : juce::File();
+                });
             auto* rawRow = row.get();
 
             const auto picker = makePicker (
@@ -4284,6 +4325,84 @@ void NAMBerryEditor::buildUi()
         reverb->addItem (makeControl ("reverbDecay", "Decay"));
         reverb->addItem (makeControl ("reverbWidth", "Width"));
         reverb->setFooter (makeFootswitch ("reverbBypass", reverbAccent), 82);
+    }
+
+    // Convolution reverb: two full stereo IRs in parallel, each with its own
+    // Mix and tail Cutoff. The rows use the same file picker as the cabinet
+    // loader, with a longer filename screen. Master mirrors the global level.
+    if (auto* reverbIr = makePanel (4, "REVERB IR", UnitStyle::Pedal, 3, 330,
+                                    reverbIrBody, reverbIrAccent))
+    {
+        reverbIr->setRowsFirst (true);
+        reverbIr->setItemCellHeight (72);
+
+        for (int slot = 0; slot < ReverbIrLoader::kNumSlots; ++slot)
+        {
+            const juce::String side = slot == 0 ? "L" : "R";
+
+            auto row = std::make_unique<IrPickRow> (
+                "REVERB IR " + side,
+                "ReverbIrScreen" + juce::String (slot),
+                [this, slot] (const juce::File& file)
+                {
+                    return processor_.loadReverbIr (slot, file);
+                },
+                [this, slot] { return processor_.getReverbIrDirectory (slot); },
+                [this, slot]
+                {
+                    auto* loader = processor_.getReverbIrLoader();
+                    return loader != nullptr ? loader->getLoadedFile (slot)
+                                             : juce::File();
+                });
+            auto* rawRow = row.get();
+
+            const auto picker = makePicker (
+                "Choose a reverb IR (" + side + ")",
+                juce::StringArray { ".wav", ".aif", ".aiff" },
+                [this, slot]
+                {
+                    auto* loader = processor_.getReverbIrLoader();
+                    const auto current = loader != nullptr
+                        ? loader->getLoadedFile (slot)
+                        : juce::File();
+
+                    return folderOf (current,
+                                     processor_.getReverbIrDirectory (slot));
+                },
+                [this, slot] (const juce::File& directory)
+                {
+                    processor_.setReverbIrDirectory (slot, directory);
+                },
+                [rawRow] (const juce::File& file) { return rawRow->loadFile (file); });
+
+            rawRow->setOnOpenPopup (picker.openPopup);
+            rawRow->setOnLoad (picker.openLoad);
+
+            ownedControls_.push_back (std::move (row));
+            reverbIr->addRow (rawRow, 66);
+        }
+
+        auto addReverbIrControl = [this, reverbIr, &makeControl] (const char* id,
+                                                    const char* label,
+                                                    bool accent = false)
+        {
+            auto* control = makeControl (id, label);
+
+            if (accent)
+            {
+                control->setAccentKnob();
+                control->setLabelFontSize (12.0f);
+            }
+
+            reverbIr->addItem (control);
+        };
+
+        addReverbIrControl ("reverbIrLeftMix", "Mix  L", true);
+        addReverbIrControl ("reverbIrLeftCutoff", "Cutoff L");
+        addReverbIrControl ("reverbIrLevel", "Master");
+        addReverbIrControl ("reverbIrRightMix", "Mix  R", true);
+        addReverbIrControl ("reverbIrRightCutoff", "Cutoff R");
+        reverbIr->setFooter (makeFootswitch ("reverbIrBypass", reverbIrAccent), 82);
     }
 
     layoutContent();

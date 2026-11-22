@@ -349,6 +349,54 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
         "reverbWidth", "Reverb Width",
         juce::NormalisableRange<float>(0.0f, 1.0f, 0.001f), 0.7f));
 
+    // ---- Convolution reverb IR (separate Post FX pedal) ----
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        "reverbIrBypass", "Reverb IR Bypass", true));
+    const auto makeReverbIrMix = [] (const char* id, const char* name)
+    {
+        return std::make_unique<juce::AudioParameterFloat> (
+            id, name,
+            juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.25f,
+            juce::AudioParameterFloatAttributes()
+                .withStringFromValueFunction ([] (float value, int)
+                {
+                    return juce::String (juce::roundToInt (value * 100.0f)) + "%";
+                }));
+    };
+
+    params.push_back (makeReverbIrMix ("reverbIrLeftMix", "Reverb IR L Mix"));
+    params.push_back (makeReverbIrMix ("reverbIrRightMix", "Reverb IR R Mix"));
+
+    const auto makeReverbIrCutoff = [] (const char* id, const char* name)
+    {
+        return std::make_unique<juce::AudioParameterFloat> (
+            id, name,
+            juce::NormalisableRange<float> (0.05f, 3.0f, 0.01f),
+            namberry::ReverbIrLoader::kDefaultCutoffSeconds,
+            juce::AudioParameterFloatAttributes()
+                .withLabel ("s")
+                .withStringFromValueFunction ([] (float value, int)
+                {
+                    return juce::String (value, 2) + " s";
+                }));
+    };
+
+    params.push_back (makeReverbIrCutoff ("reverbIrLeftCutoff", "Reverb IR L Cutoff"));
+    params.push_back (makeReverbIrCutoff ("reverbIrRightCutoff", "Reverb IR R Cutoff"));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        "reverbIrLevel", "Reverb IR Level",
+        juce::NormalisableRange<float> (
+            namberry::ReverbIrLoader::kMinLevelDb,
+            namberry::ReverbIrLoader::kMaxLevelDb, 0.5f),
+        namberry::ReverbIrLoader::kDefaultLevelDb,
+        juce::AudioParameterFloatAttributes()
+            .withLabel ("dB")
+            .withStringFromValueFunction ([] (float value, int)
+            {
+                return juce::String (value > 0.0f ? "+" : "")
+                     + juce::String (value, 1) + " dB";
+            })));
+
     // ---- Room (short dark ambience at the very end of the chain) ----
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "roomAmount", "Room",
@@ -380,7 +428,7 @@ namespace {
 constexpr int kPostFxStateVersion = 3;
 constexpr int kIrStateVersion = 4;
 constexpr int kPostEqStateVersion = 6;
-constexpr int kFxStateVersion = 8;
+constexpr int kFxStateVersion = 12;
 
 juce::ValueTree findParameterState (const juce::ValueTree& state, const juce::String& id)
 {
@@ -469,6 +517,51 @@ void migrateRoomState (juce::ValueTree& state)
             state.removeChild (child, nullptr);
     }
 
+    state.setProperty ("fxVersion", 8, nullptr);
+}
+
+void migrateReverbIrState (juce::ValueTree& state)
+{
+    // Version 9 adds the post-FX convolution reverb pedal. Older projects keep
+    // their sound: the new pedal starts bypassed with a modest wet mix.
+    addParameterIfMissing (state, "reverbIrBypass", 1.0f);
+    addParameterIfMissing (state, "reverbIrMix", 0.25f);
+    state.setProperty ("fxVersion", 9, nullptr);
+}
+
+void migrateReverbIrStereoState (juce::ValueTree& state)
+{
+    // Version 10 splits the single reverb IR into two parallel stereo slots.
+    // The old Mix becomes both channel Mix values so an existing project keeps
+    // the same wet level in each channel; there is no Blend crossfade.
+    const float legacyMix = parameterValue (state, "reverbIrMix", 0.25f);
+
+    addParameterIfMissing (state, "reverbIrLeftMix", legacyMix);
+    addParameterIfMissing (state, "reverbIrRightMix", legacyMix);
+
+    if (auto child = findParameterState (state, "reverbIrMix"); child.isValid())
+        state.removeChild (child, nullptr);
+
+    state.setProperty ("fxVersion", 10, nullptr);
+}
+
+void migrateReverbIrCutoffState (juce::ValueTree& state)
+{
+    // Version 11 gives each parallel slot a tail-length Cutoff. Default to the
+    // maximum so existing projects keep their full IR tails.
+    addParameterIfMissing (state, "reverbIrLeftCutoff",
+                           namberry::ReverbIrLoader::kDefaultCutoffSeconds);
+    addParameterIfMissing (state, "reverbIrRightCutoff",
+                           namberry::ReverbIrLoader::kDefaultCutoffSeconds);
+    state.setProperty ("fxVersion", 11, nullptr);
+}
+
+void migrateReverbIrLevelState (juce::ValueTree& state)
+{
+    // Version 12 replaces the pedal's link to global Master with a local
+    // wet-output boost/cut. Unity gain preserves existing project levels.
+    addParameterIfMissing (state, "reverbIrLevel",
+                           namberry::ReverbIrLoader::kDefaultLevelDb);
     state.setProperty ("fxVersion", kFxStateVersion, nullptr);
 }
 
@@ -741,6 +834,12 @@ NAMBerryProcessor::NAMBerryProcessor()
     postFxParams_.reverbMix = cacheFx ("reverbMix");
     postFxParams_.reverbDecay = cacheFx ("reverbDecay");
     postFxParams_.reverbWidth = cacheFx ("reverbWidth");
+    postFxParams_.reverbIrBypass = cacheFx ("reverbIrBypass");
+    postFxParams_.reverbIrLeftMix = cacheFx ("reverbIrLeftMix");
+    postFxParams_.reverbIrRightMix = cacheFx ("reverbIrRightMix");
+    postFxParams_.reverbIrLeftCutoff = cacheFx ("reverbIrLeftCutoff");
+    postFxParams_.reverbIrRightCutoff = cacheFx ("reverbIrRightCutoff");
+    postFxParams_.reverbIrLevel = cacheFx ("reverbIrLevel");
 
     // Instantiate all DSP modules
     dropTuner_ = std::make_unique<DropTuner>();
@@ -752,6 +851,7 @@ NAMBerryProcessor::NAMBerryProcessor()
     namModel_ = std::make_unique<NamModelLoader>();
     namPedal_ = std::make_unique<NamModelLoader>();
     irLoader_ = std::make_unique<IrLoader>();
+    reverbIrLoader_ = std::make_unique<ReverbIrLoader>();
     preAmpEQ_ = std::make_unique<MultiBandEQ>();
     postAmpEQ_ = std::make_unique<PostAmpEQ>();
     postEffects_ = std::make_unique<PostEffects>();
@@ -786,6 +886,7 @@ void NAMBerryProcessor::prepareToPlay (double sampleRate, int maxSamplesPerBlock
     namModel_->prepare(spec);
     namPedal_->prepare(spec);
     irLoader_->prepare(spec);
+    reverbIrLoader_->prepare(spec);
     preAmpEQ_->prepare(spec);
     postAmpEQ_->prepare(spec);
     postEffects_->prepare (spec);
@@ -811,7 +912,7 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     // Signal chain order (see spec.md §3.1):
     // Input → Tuner (detect) → Impersonator → Pitch (capo/drop) → NoiseGate →
     // Acoustic Sim → Compressor → NAM Pedal → Pre-Amp EQ → NAM Amp →
-    // Post-Amp EQ → IR Loader → Post FX → Room → Master
+    // Post-Amp EQ → IR Loader → Post FX → Reverb IR → Room → Master
     //==============================================================================
 
     const bool preFxBypassed = apvts_.getRawParameterValue("preFxBypass")->load() > 0.5f;
@@ -1059,7 +1160,35 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         postEffects_->processBlock(buffer, midiMessages);
     }
 
-    // 11. Room. A short dark ambience tail at the end of the chain, before the
+    // 11. Convolution reverb IR pedal. Two full stereo IRs run in parallel as
+    // wet sends; the highest Mix crossfades the dry signal out. The whole Post
+    // FX tab bypass also shuts this stage off.
+    {
+        const auto& fx = postFxParams_;
+        const auto value = [] (const std::atomic<float>* parameter)
+        {
+            return parameter != nullptr ? parameter->load() : 0.0f;
+        };
+
+        reverbIrLoader_->setBypass (value (fx.bypass) > 0.5f
+            || value (fx.reverbIrBypass) > 0.5f);
+        reverbIrLoader_->setMix (0, value (fx.reverbIrLeftMix));
+        reverbIrLoader_->setMix (1, value (fx.reverbIrRightMix));
+        reverbIrLoader_->setLevelDb (value (fx.reverbIrLevel));
+
+        // Cutoff rewrites the IR waveform, so only the atomic is stored here;
+        // the actual file reload happens on the message thread.
+        const bool cutoffChanged =
+            reverbIrLoader_->setCutoff (0, value (fx.reverbIrLeftCutoff))
+            || reverbIrLoader_->setCutoff (1, value (fx.reverbIrRightCutoff));
+
+        if (cutoffChanged)
+            triggerAsyncUpdate();
+
+        reverbIrLoader_->processBlock (buffer, midiMessages);
+    }
+
+    // 12. Room. A short dark ambience tail at the end of the chain, before the
     // fixed master trim. The raw parameter is cached with the other FX values
     // so nothing constructs parameter IDs on the audio thread.
     {
@@ -1069,7 +1198,7 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         room_->processBlock (buffer);
     }
 
-    // 12. Master output. A fixed +6 dB trim makes the plugin sit at a more
+    // 13. Master output. A fixed +6 dB trim makes the plugin sit at a more
     // useful level without changing the saved Master value.
     {
         const float gainDb = apvts_.getRawParameterValue("masterOutput")->load();
@@ -1133,6 +1262,7 @@ void NAMBerryProcessor::syncAcousticSimChainState()
 void NAMBerryProcessor::handleAsyncUpdate()
 {
     syncAcousticSimChainState();
+    reverbIrLoader_->applyPendingCutoffChanges();
 
     const int latency = pendingLatencySamples_.load();
 
@@ -1198,8 +1328,20 @@ void NAMBerryProcessor::setStateInformation (const void* data, int sizeInBytes)
             if (version < 7)
                 migrateStereoImagerState (state);
 
-            if (version < kFxStateVersion)
+            if (version < 8)
                 migrateRoomState (state);
+
+            if (version < 9)
+                migrateReverbIrState (state);
+
+            if (version < 10)
+                migrateReverbIrStereoState (state);
+
+            if (version < 11)
+                migrateReverbIrCutoffState (state);
+
+            if (version < kFxStateVersion)
+                migrateReverbIrLevelState (state);
 
             apvts_.replaceState (state);
 
@@ -1257,6 +1399,20 @@ bool NAMBerryProcessor::loadIr (int slot, const juce::File& file)
     return loaded;
 }
 
+bool NAMBerryProcessor::loadReverbIr (int slot, const juce::File& file)
+{
+    const bool loaded = reverbIrLoader_->loadIr (slot, file);
+
+    if (loaded && settings_ != nullptr)
+    {
+        const juce::String key = slot == 0 ? "reverbIrLeftPath" : "reverbIrRightPath";
+        settings_->setValue (key, file.getFullPathName());
+        settings_->saveIfNeeded();
+    }
+
+    return loaded;
+}
+
 //==============================================================================
 bool NAMBerryProcessor::savePreset (const juce::File& file)
 {
@@ -1290,6 +1446,13 @@ bool NAMBerryProcessor::savePreset (const juce::File& file)
         for (int slot = 0; slot < IrLoader::kNumSlots; ++slot)
             addFile (("ir" + juce::String (slot)).toRawUTF8(),
                      irLoader_->getLoadedFile (slot));
+
+    if (reverbIrLoader_ != nullptr)
+        for (int slot = 0; slot < ReverbIrLoader::kNumSlots; ++slot)
+        {
+            const juce::String attribute = slot == 0 ? "reverbIrLeft" : "reverbIrRight";
+            addFile (attribute.toRawUTF8(), reverbIrLoader_->getLoadedFile (slot));
+        }
 
     if (! root->writeTo (target))
         return false;
@@ -1340,6 +1503,20 @@ bool NAMBerryProcessor::loadPreset (const juce::File& file)
             const auto attribute = "ir" + juce::String (slot);
             loadFile (attribute.toRawUTF8(),
                       [this, slot] (const juce::File& f) { return loadIr (slot, f); });
+        }
+
+        for (int slot = 0; slot < ReverbIrLoader::kNumSlots; ++slot)
+        {
+            // A v9 preset stored one reverb IR; load it into the left slot.
+            juce::String attribute = slot == 0 ? "reverbIrLeft" : "reverbIrRight";
+            if (slot == 0 && ! files->hasAttribute (attribute))
+                attribute = "reverbIr";
+
+            loadFile (attribute.toRawUTF8(),
+                      [this, slot] (const juce::File& f)
+                      {
+                          return loadReverbIr (slot, f);
+                      });
         }
     }
 
@@ -1426,6 +1603,29 @@ void NAMBerryProcessor::restoreSavedFiles()
                 irLoader_->loadIr (slot, file);
         }
     }
+
+    if (reverbIrLoader_ != nullptr)
+    {
+        for (int slot = 0; slot < ReverbIrLoader::kNumSlots; ++slot)
+        {
+            if (reverbIrLoader_->isLoaded (slot))
+                continue;
+
+            juce::String key = slot == 0 ? "reverbIrLeftPath" : "reverbIrRightPath";
+            auto path = settings_->getValue (key);
+
+            if (slot == 0 && path.isEmpty())
+                path = settings_->getValue ("reverbIrPath");
+
+            if (path.isEmpty())
+                continue;
+
+            const juce::File file (path);
+
+            if (file.existsAsFile())
+                reverbIrLoader_->loadIr (slot, file);
+        }
+    }
 }
 
 //==============================================================================
@@ -1503,6 +1703,45 @@ void NAMBerryProcessor::setIrDirectory (const juce::File& directory)
     if (settings_ != nullptr && directory.isDirectory())
     {
         settings_->setValue ("lastIrDirectory", directory.getFullPathName());
+        settings_->saveIfNeeded();
+    }
+}
+
+juce::File NAMBerryProcessor::getReverbIrDirectory (int slot) const
+{
+    if (settings_ != nullptr)
+    {
+        const juce::String key = slot == 0
+            ? "lastReverbIrLeftDirectory"
+            : "lastReverbIrRightDirectory";
+
+        for (const auto& pathKey : { key, juce::String ("lastReverbIrDirectory") })
+        {
+            const auto path = settings_->getValue (pathKey);
+
+            if (path.isEmpty())
+                continue;
+
+            const juce::File directory (path);
+
+            if (directory.isDirectory())
+                return directory;
+        }
+    }
+
+    // Until the user picks a reverb folder, start where cabinet IRs live.
+    return getIrDirectory();
+}
+
+void NAMBerryProcessor::setReverbIrDirectory (int slot, const juce::File& directory)
+{
+    if (settings_ != nullptr && directory.isDirectory())
+    {
+        const juce::String key = slot == 0
+            ? "lastReverbIrLeftDirectory"
+            : "lastReverbIrRightDirectory";
+
+        settings_->setValue (key, directory.getFullPathName());
         settings_->saveIfNeeded();
     }
 }

@@ -9,6 +9,7 @@
 #include <optional>
 #include "namberry/NamModelLoader.h"
 #include "namberry/IrLoader.h"
+#include "namberry/ReverbIrLoader.h"
 #include "namberry/MultiBandEQ.h"
 #include "namberry/PostAmpEQ.h"
 #include "namberry/DropTuner.h"
@@ -62,6 +63,7 @@ public:
     bool loadNamModel (const juce::File& file);
     bool loadNamPedalModel (const juce::File& file);
     bool loadIr (int slot, const juce::File& file);
+    bool loadReverbIr (int slot, const juce::File& file);
 
     // Last-used folders, stored separately for amps, pedals and IR files.
     juce::File getNamDirectory() const;
@@ -70,6 +72,8 @@ public:
     void setPedalDirectory (const juce::File& directory);
     juce::File getIrDirectory() const;
     void setIrDirectory (const juce::File& directory);
+    juce::File getReverbIrDirectory (int slot) const;
+    void setReverbIrDirectory (int slot, const juce::File& directory);
 
     // Preset save/load: parameter state plus the current amp, pedal and IR paths.
     bool savePreset (const juce::File& file);
@@ -87,6 +91,7 @@ public:
     NamModelLoader* getNamModel() { return namModel_.get(); }
     NamModelLoader* getNamPedal() { return namPedal_.get(); }
     IrLoader* getIrLoader() { return irLoader_.get(); }
+    ReverbIrLoader* getReverbIrLoader() { return reverbIrLoader_.get(); }
 
 private:
     void handleAsyncUpdate() override;
@@ -102,6 +107,7 @@ private:
     std::unique_ptr<NamModelLoader> namModel_;
     std::unique_ptr<NamModelLoader> namPedal_;
     std::unique_ptr<IrLoader> irLoader_;
+    std::unique_ptr<ReverbIrLoader> reverbIrLoader_;
     std::unique_ptr<MultiBandEQ> preAmpEQ_;
     std::unique_ptr<PostAmpEQ> postAmpEQ_;
     std::unique_ptr<PostEffects> postEffects_;
@@ -171,6 +177,12 @@ private:
         std::atomic<float>* reverbMix = nullptr;
         std::atomic<float>* reverbDecay = nullptr;
         std::atomic<float>* reverbWidth = nullptr;
+        std::atomic<float>* reverbIrBypass = nullptr;
+        std::atomic<float>* reverbIrLeftMix = nullptr;
+        std::atomic<float>* reverbIrRightMix = nullptr;
+        std::atomic<float>* reverbIrLeftCutoff = nullptr;
+        std::atomic<float>* reverbIrRightCutoff = nullptr;
+        std::atomic<float>* reverbIrLevel = nullptr;
     };
 
     CachedPostFxParams postFxParams_;

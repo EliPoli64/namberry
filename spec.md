@@ -33,7 +33,7 @@
 Input → Tuner (detect) → Impersonator (pickup shaper) → Pitch (capo/drop) → Noise Gate → Acoustic Sim → Compressor → NAM Pedal/Preamp → Pre-Amp EQ →
 NAM Amp Loader (Gain, Bass, Mid, Treble, Presence, Depth, Output) →
 Post-Amp EQ (8-band graphical) → IR Loader (IR 1 / IR 2 + Blend) →
-Post Effects (Chorus/Flanger/Phaser/Delay/Reverb) → Room (short dark ambience) → Master (+6 dB fixed trim) → Output
+Post Effects (Chorus/Flanger/Phaser/Delay/Reverb) → Reverb IR (two parallel stereo convolution slots with independent Mix, tail Cutoff and a local wet boost/cut Master) → Room (short dark ambience) → Master (+6 dB fixed trim) → Output
 ```
 
 ### 3.2 UI Section Order
@@ -71,6 +71,7 @@ The editor should be organized into the following five sections, in this exact o
    - Phaser
    - Delay
    - Reverb
+   - Reverb IR (two long IR filename rows + L/R Mix and Cutoff, accented Mix knobs, local boost/cut Master, styled as a footswitchable pedal)
 
 This order keeps the pedal before the amp, keeps all pre-amp shaping before the core amp model, and preserves the clear signal-flow layout the plugin UI should reflect.
 
@@ -94,8 +95,9 @@ A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and alwa
   - `PostAmpEQ` (8-band graphical post-amp EQ plus high-pass/low-pass)
   - `NamModelLoader` (wraps `NeuralAmpModelerCore` / `NeuralAudio`)
   - `IrLoader` (2 slots, each with an `dsp::Convolution` instance, blended by one crossfade)
+  - `ReverbIrLoader` (two parallel `dsp::Convolution` Post FX slots, each with a smoothed wet Mix and a message-thread tail Cutoff that trims the loaded IR)
   - `ModulationLfo` (shared sine/triangle LFO)
-  - `ModulatedDelay` (chorus/flanger delay core with feedback)
+  - `ChorusEnsemble` (three-voice stereo chorus) and `ModulatedDelay` (flanger delay core with feedback)
   - `Phaser` (selectable 4/8/12-stage all-pass cascade)
   - `RoomSim` (two short, offset filtered delays with low feedback and a single amount control)
   - `Delay` (ping-pong stereo or centred mono, with feedback, mix, time)
@@ -164,10 +166,10 @@ A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and alwa
 - **Goal**: Provide three independent, footswitchable modulation pedals with the parameter ranges from `fx-spec.md`.
 - **Implementation**:
   - A shared `ModulationLfo` class provides sine and triangle modulation with smoothed rate and optional per-channel phase offset.
-  - **Chorus**: A stereo modulated delay using a sine LFO with the right channel offset by 180°. Controls: Rate 0.1–5 Hz (0.8), Depth 0–100 % (50), Feedback 0–70 % (15), Delay 5–30 ms (15), Mix 0–50 % (50).
+  - **Chorus**: A Boss-style three-voice stereo ensemble. One mono delay buffer is read at three taps with 0°/120°/240° LFO phases panned left/centre/right. Each voice sums a slow sine LFO (the Rate knob) with a faster shallow sine (6× Rate, clamped to 2–8 Hz). Controls: Rate 0.1–5 Hz (0.8), Depth 0–100 % (50), Feedback 0–70 % (15), Delay 5–30 ms (15), Mix 0–50 % (50).
   - **Flanger**: A shorter stereo delay using a triangle LFO and a signed feedback path. Controls: Rate 0.05–10 Hz (0.4), Depth 0–100 % (60), Manual 0.5–10 ms (2), Feedback −95…+95 % (40), Mix 0–50 % (50).
   - **Phaser**: Cascaded first-order all-pass stages with a sine LFO sweeping around 600 Hz by up to ±1.5 octaves at full depth. Controls: Rate 0.05–8 Hz (0.5), Depth 0–100 % (70), Feedback 0–90 % (30), Stages 4/8/12 (8), Mix 0–50 % (50).
-  - The mix range ends at the old 50 % maximum; the wet path gets a 2× boost so maximum mix is both capped and louder. Chorus and flanger use fractional delay lines with feedback and dry/wet mixing; the phaser uses 4, 8 or 12 all-pass stages and feedback.
+  - The mix range ends at the old 50 % maximum; the wet path gets a 2× boost so maximum mix is both capped and louder. Chorus uses Lagrange3rd fractional delay taps with a 120 Hz high-pass, a 5.5 kHz low-pass and gentle saturation for a BBD-like wet voice; flanger uses a linear fractional delay line with feedback. The phaser uses 4, 8 or 12 all-pass stages and feedback.
   - Each effect has its own bypass footswitch and resets its delay/filter state when bypassed.
 
 ### 4.7 Delay
@@ -190,7 +192,7 @@ A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and alwa
 
 ### 4.9 Reverb
 - **Goal**: Add ambience.
-- **Implementation**: Use JUCE's `juce::Reverb` (algorithmic) for a lightweight, real-time-safe reverb. Parameters: Room Size, Damping, Wet, Dry, Width. Compensate for JUCE's internal 2× dry and 3× wet scaling so the dry guitar stays at unity instead of getting louder when reverb is mixed in.
+- **Implementation**: Use JUCE's `juce::Reverb` (algorithmic) for a lightweight, real-time-safe reverb. Parameters: Room Size, Damping, Wet, Dry, Width. Compensate for JUCE's internal 2× dry and 3× wet scaling so the dry guitar stays at unity instead of getting louder when reverb is mixed in. The separate convolution-based `ReverbIrLoader` is described in §4.15.
 
 ### 4.10 DropTuner
 - **Goal**: Detect the input pitch for display.
@@ -221,7 +223,7 @@ A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and alwa
 ### 4.12 Preset save/load
 - **Goal**: Let users store and recall the complete rig without depending on the host’s project state.
 - **Implementation**:
-  - Presets use a `.namberrypreset` XML file with a `PARAMETERS` child containing the full `AudioProcessorValueTreeState` and a `FILES` child containing the current amp, pedal and both IR paths.
+  - Presets use a `.namberrypreset` XML file with a `PARAMETERS` child containing the full `AudioProcessorValueTreeState` and a `FILES` child containing the current amp, pedal, both cabinet IR paths and both reverb IR paths. A v9 preset with one `reverbIr` path loads into the left slot.
   - Loading applies the parameter state first, then loads any referenced model/IR files that still exist.
   - Missing files do not prevent the parameter state from being applied; the UI reports that the preset was only partially restored.
   - The default preset folder is `NAMBerry/Presets` in the user application-data directory; the last-used folder is remembered in `NAMBerry.settings`.
@@ -251,6 +253,19 @@ A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and alwa
 - **Defaults**: Top 60 %, Body 65 %, Piezo 20 %. Changing a default only affects new instances; saved DAW state and presets keep their stored values.
 - **Auto-off of distortion/EQ/IR**: Engaging the pedal force-bypasses the NAM Pedal, NAM Amp, Pre-EQ, Post-EQ and IR Loader by flipping their bypass parameters (so the UI reflects it), and disengaging restores each stage the sim switched off — unless the user changed it while the sim was on. A loaded preset is treated as ground truth.
 - **Controls**: Mode (Standard/Jumbo/Enhanced/Piezo), Top, Body, Piezo, Level, bypass footswitch. The pedal starts bypassed.
+
+### 4.15 Reverb IR Loader (Post FX pedal)
+- **Goal**: Offer convolution reverb from two user-supplied WAV/AIFF stereo IRs on the Post FX pedalboard, independent of the algorithmic Reverb and the cabinet IR loader.
+- **Placement**: After `PostEffects` and before `RoomSim`; the whole Post FX tab bypass also bypasses this stage.
+- **Implementation**:
+  - `ReverbIrLoader` owns two parallel `juce::dsp::Convolution` slots, each with `Stereo::yes`, `Trim::no` and `Normalise::yes`. On the message thread it reads the IR file, applies the Cutoff fade, and hands an `AudioBuffer` to Convolution, which swaps it in without blocking playback. JUCE trimming is disabled so the IR's pre-delay is preserved; mono files are expanded to stereo.
+  - Both slots read the same dry block. Each wet result is scaled by its own smoothed Mix gain. A separate smoothed dry gain is `1 - max(Mix L, Mix R)`, so any Mix at 100 % removes the dry signal entirely while the two IRs still sound in parallel; there is no Blend knob. All scratch buffers are sized in `prepare()`; the audio thread only reads cached raw APVTS atomics and calls `getNextValue()` on those gains.
+  - The Master knob is a local wet-output boost/cut in dB, stored as a linear gain and folded into each slot's smoothed Mix gain. It never changes the global Master Output parameter and does not touch the dry path.
+  - Cutoff is a tail-length trim, not a tone filter. The audio thread only stores the new seconds value and triggers the processor's async update; `applyPendingCutoffChanges()` then rereads the file on the message thread, cosine-fades the last 50 ms before the cutoff and zeroes the rest. No file I/O or buffer allocation happens in `processBlock()`.
+  - With no IR loaded, both Mix knobs at 0 %, or while bypassed the stage is an exact passthrough. Engaging bypass clears both convolution tails so stale reverb cannot leak through. `reset()` also snaps the Mix gains without unloading the IRs.
+  - The editor reuses the cabinet loader's filename screen, folder popup, **LOAD** button, arrows and drag-and-drop, but gives the screen more width by narrowing the file controls. It presents two rows in a `UnitStyle::Pedal` with accented **Mix L** / **Mix R** knobs, **Cutoff L** / **Cutoff R** knobs, a **Master** knob bound to `reverbIrLevel` for a local wet boost/cut, and a shared bypass footswitch.
+  - Each slot has its own last-used folder (`lastReverbIrLeftDirectory` / `lastReverbIrRightDirectory`) and persisted path (`reverbIrLeftPath` / `reverbIrRightPath`), separate from the cabinet IRs. Presets store them as the `FILES` attributes `reverbIrLeft` / `reverbIrRight`; missing files warn without discarding parameter state. A v9 preset's single `reverbIr` path loads into the left slot.
+- **Parameters**: `reverbIrBypass` (default on), `reverbIrLeftMix` and `reverbIrRightMix` (0–100 %, default 25 %), `reverbIrLeftCutoff` and `reverbIrRightCutoff` (0.05–3 s, default 3 s), and `reverbIrLevel` (-24 to +12 dB, default 0 dB). State version 9 added the single `reverbIrMix`; version 10 replaces it with the two slot Mix parameters and seeds both from the old value. Version 11 adds the two Cutoff parameters with the maximum default. Version 12 replaces the pedal's global-Master link with the local Level parameter at unity gain.
 
 ---
 
@@ -303,10 +318,11 @@ Artifacts: `.vst3` (all), `.component` (AU, macOS), `.aaxplugin` (if SDK availab
 - [x] Implement `NoiseGate`.
 
 ### Phase 4: Time-Based & Modulation FX (Weeks 7–8)
-- [x] Implement shared `ModulationLfo` and `ModulatedDelay` chorus/flanger.
+- [x] Implement shared `ModulationLfo`, three-voice `ChorusEnsemble` and `ModulatedDelay` flanger.
 - [x] Implement 4/8/12-stage all-pass `Phaser`.
 - [x] Implement `Delay` (ping-pong stereo / centred mono circular buffers).
 - [x] Integrate `juce::Reverb`.
+- [x] Implement the separate `ReverbIrLoader` Post FX pedal with two parallel stereo IR slots, independent L/R Mix and tail Cutoff, accented Mix knobs, a local wet boost/cut Master control and v12 migration.
 - [x] Implement `RoomSim` (Room 0–100 %; default 0 %; two short low-feedback delays; v8 migration from Image Mix).
 
 ### Phase 5: UI & State Management (Weeks 9–10)
@@ -314,10 +330,10 @@ Artifacts: `.vst3` (all), `.component` (AU, macOS), `.aaxplugin` (if SDK availab
 - [x] Bind all parameters to `AudioProcessorValueTreeState`.
 - [x] Implement preset save/load.
 - [x] Add file drag-and-drop for `.nam` and `.wav` IR files.
-- [x] Add tap-away filename popups (tap a screen → folder list, touch elsewhere → close) with separate amp, pedal and IR starting folders, plus a **LOAD** button per loader.
-- [x] Add previous/next arrows to the amp, pedal and IR fields to step through matching files in the current directory.
+- [x] Add tap-away filename popups (tap a screen → folder list, touch elsewhere → close) with separate amp, pedal, cabinet IR and both reverb IR starting folders, plus a **LOAD** button per loader.
+- [x] Add previous/next arrows to the amp, pedal, cabinet IR and both reverb IR fields to step through matching files in the current directory.
 - [x] Remember the folder left in as the next starting folder for each loader (no `SET ROOT...` button).
-- [x] Persist the selected amp model, pedal model and both IR slot files.
+- [x] Persist the selected amp model, pedal model, both cabinet IR slot files and both reverb IR slot files.
 - [x] Clear the delay feedback tail when the delay is switched off.
 
 ### Phase 6: Build, Test, & Release (Weeks 11–12)

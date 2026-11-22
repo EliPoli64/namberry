@@ -69,7 +69,9 @@ src/
   multi_band_eq.cpp         three-band Pre-EQ
   post_amp_eq.cpp           eight-band Post-EQ
   ir_loader.cpp
+  reverb_ir_loader.cpp      two parallel stereo Post FX reverb IRs with L/R Mix, tail Cutoff and local wet boost/cut
   modulation_effects.cpp
+  chorus_ensemble.cpp       three-voice stereo chorus
   post_effects.cpp
   room_sim.cpp
   directory_browser.cpp     legacy, compiled but not reachable from UI
@@ -180,9 +182,12 @@ TEST=./build-standalone/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTes
 "$TEST"                     # dry/effect-chain smoke test
 "$TEST" --reference
 "$TEST" --reverb-dry
+"$TEST" --reverb-ir
+"$TEST" --reverb-ir-state
 "$TEST" --delay-feedback
 "$TEST" --delay-reset
 "$TEST" --delay-ping-pong
+"$TEST" --chorus-ensemble
 "$TEST" --room
 "$TEST" --modulation
 "$TEST" --fx-state
@@ -266,6 +271,7 @@ Input
   -> Post-Amp EQ
   -> IR Loader (2 IRs + Blend)
   -> Post FX (Chorus / Flanger / Phaser / Image / Delay / Reverb)
+  -> Reverb IR (two parallel stereo IR slots, independent L/R Mix and tail Cutoff)
   -> Master Output
 ```
 
@@ -355,7 +361,7 @@ Current state versions in `PluginProcessor.cpp`:
 constexpr int kPostFxStateVersion = 3;
 constexpr int kIrStateVersion = 4;
 constexpr int kPostEqStateVersion = 6;
-constexpr int kFxStateVersion = 8;
+constexpr int kFxStateVersion = 12;
 ```
 
 `getStateInformation()` writes `fxVersion`; `setStateInformation()` runs the

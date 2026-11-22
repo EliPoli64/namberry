@@ -3,14 +3,16 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_dsp/juce_dsp.h>
 
+#include "namberry/ChorusEnsemble.h"
 #include "namberry/ModulationEffects.h"
 
 namespace namberry {
 
 /// Post-amp effects: Chorus, Flanger, Phaser, Delay and Reverb.
 ///
-/// The three modulation pedals use a shared custom LFO/delay framework; Delay
-/// and Reverb use JUCE DSP. The Room stage lives after this class.
+/// Chorus is a three-voice ensemble; Flanger and Phaser share the custom LFO
+/// framework. Delay and Reverb use JUCE DSP. The Room stage lives after this
+/// class.
 class PostEffects
 {
 public:
@@ -117,7 +119,7 @@ private:
     float reverbDecay_ = 0.5f;
     float reverbWidth_ = 0.7f;
 
-    ModulatedDelay chorus_ { 40.0f, ModulationLfo::Waveform::sine, 0.5f, 5.0f };
+    ChorusEnsemble chorus_;
     ModulatedDelay flanger_ { 10.0f, ModulationLfo::Waveform::triangle, 0.0f, 2.0f };
     Phaser phaser_;
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> delayLine_;

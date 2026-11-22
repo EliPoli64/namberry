@@ -54,12 +54,14 @@ target_sources(NAMBerry PRIVATE
     src/impersonator.cpp
     src/acoustic_sim.cpp
     src/ir_loader.cpp
+    src/reverb_ir_loader.cpp
     src/multi_band_eq.cpp
     src/post_amp_eq.cpp
     src/drop_tuner.cpp
     src/digital_capo.cpp
     src/pitch_shifter.cpp
     src/modulation_effects.cpp
+    src/chorus_ensemble.cpp
     src/compressor.cpp
     src/noise_gate.cpp
     src/post_effects.cpp
