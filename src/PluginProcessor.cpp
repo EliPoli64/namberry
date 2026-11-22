@@ -46,7 +46,7 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
         juce::NormalisableRange<float>(0.1f, 1000.0f, 0.1f), 1.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "gateRelease", "Gate Release",
-        juce::NormalisableRange<float>(0.1f, 2000.0f, 0.1f), 100.0f));
+        juce::NormalisableRange<float>(0.1f, 2000.0f, 0.1f), 20.0f));
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         "gateBypass", "Gate Bypass", false));
 
@@ -245,6 +245,12 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
         "masterOutput", "Master Output",
         juce::NormalisableRange<float>(-60.0f, 6.0f, 0.1f), 0.0f));
 
+    // ---- Input gain ----
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "inputGain", "Input Gain",
+        juce::NormalisableRange<float>(-24.0f, 24.0f, 0.1f), 0.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("dB")));
+
     // ---- UI preference: reduced motion ----
     // ---- Section bypass (right-click tab icons) ----
     params.push_back(std::make_unique<juce::AudioParameterBool>(
@@ -374,7 +380,6 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
             juce::NormalisableRange<float> (0.05f, 3.0f, 0.01f),
             namberry::ReverbIrLoader::kDefaultCutoffSeconds,
             juce::AudioParameterFloatAttributes()
-                .withLabel ("s")
                 .withStringFromValueFunction ([] (float value, int)
                 {
                     return juce::String (value, 2) + " s";
@@ -390,7 +395,6 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
             namberry::ReverbIrLoader::kMaxLevelDb, 0.5f),
         namberry::ReverbIrLoader::kDefaultLevelDb,
         juce::AudioParameterFloatAttributes()
-            .withLabel ("dB")
             .withStringFromValueFunction ([] (float value, int)
             {
                 return juce::String (value > 0.0f ? "+" : "")
@@ -907,6 +911,12 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     // Clear unused output channels
     for (auto i = getTotalNumInputChannels(); i < getTotalNumOutputChannels(); ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
+
+    // Input gain (unity by default, so this is a no-op unless the user turns it up).
+    {
+        const float inputGain = apvts_.getRawParameterValue ("inputGain")->load();
+        buffer.applyGain (juce::Decibels::decibelsToGain (inputGain));
+    }
 
     //==============================================================================
     // Signal chain order (see spec.md §3.1):

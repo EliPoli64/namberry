@@ -203,25 +203,43 @@ int main (int argc, char** argv)
         if (tab == 1)
         {
             auto* screen = findChildByName (editor, "AmpScreen");
-            auto* panel = screen != nullptr ? screen->getParentComponent() : nullptr;
+            auto* header = screen != nullptr ? screen->getParentComponent() : nullptr;
 
-            if (panel == nullptr)
+            if (header == nullptr)
             {
                 std::cerr << "FAIL: amp model screen not found\n";
                 return 1;
             }
 
-            const auto cabinet = panel->getLocalBounds().toFloat().reduced (3.0f);
-            const auto grille = cabinet.reduced (12.0f)
-                                    .withTrimmedTop (160.0f)
-                                    .withTrimmedBottom (14.0f);
-            const int expectedCentre = juce::roundToInt (grille.getCentreY());
-            const int actualCentre = screen->getBounds().getCentreY();
+            // The amp screen is centred inside the header row, with the
+            // previous/next arrows flanking it on either side.
+            const int expectedCentre = header->getLocalBounds().getCentreX();
+            const int actualCentre = screen->getBounds().getCentreX();
 
             if (std::abs (actualCentre - expectedCentre) > 2)
             {
-                std::cerr << "FAIL: amp model screen not centred on grille "
+                std::cerr << "FAIL: amp model screen not centred in header "
                           << actualCentre << " vs " << expectedCentre << "\n";
+                return 1;
+            }
+
+            bool foundPrev = false, foundNext = false;
+
+            for (int i = 0; i < header->getNumChildComponents(); ++i)
+            {
+                if (auto* button = dynamic_cast<juce::Button*> (header->getChildComponent (i)))
+                {
+                    if (button->getButtonText() == "<" && button->getRight() <= screen->getX())
+                        foundPrev = true;
+                    else if (button->getButtonText() == ">"
+                             && button->getX() >= screen->getRight())
+                        foundNext = true;
+                }
+            }
+
+            if (! foundPrev || ! foundNext)
+            {
+                std::cerr << "FAIL: amp seek arrows not flanking the screen\n";
                 return 1;
             }
         }

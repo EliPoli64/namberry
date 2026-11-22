@@ -55,6 +55,7 @@ private:
     juce::Component* headerTuner_ = nullptr;
     juce::TabbedButtonBar tabBar_;
     std::unique_ptr<juce::Component> bottomKnobs_;
+    std::unique_ptr<juce::Component> inputGainKnob_;
 
     juce::ToggleButton reducedMotionButton_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> reducedMotionAttachment_;

@@ -32,6 +32,7 @@ This document describes the visual language and interaction model for the **NAMb
 - A rectangular amp body with a perforated grille pattern.
 - The preamp tone controls are represented as top-mounted knobs.
 - Gain, Bass, Mid, Treble, Presence, Depth, and Output are laid out in a compact horizontal band.
+- A wide model display is centred on the grille, with previous/next arrows flanking it and the **LOAD** button underneath.
 - The bypass switch sits as the amp’s footswitch below the control row.
 - The overall composition is intentionally similar to a hardware amp front panel: wide dark body, bright metal details, and white labeling that feels premium and tactile.
 

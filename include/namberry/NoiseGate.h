@@ -22,7 +22,7 @@ public:
     void setBypass (bool bypassed) { bypass_ = bypassed; }
     bool isBypassed() const { return bypass_; }
 
-    struct Params { float thresholdDb = -60.0f; float attackMs = 1.0f; float releaseMs = 100.0f; bool bypass = false; };
+    struct Params { float thresholdDb = -60.0f; float attackMs = 1.0f; float releaseMs = 20.0f; bool bypass = false; };
     Params getParams() const { return { thresholdDb_, attackMs_, releaseMs_, bypass_ }; }
     void setParams (const Params& p);
 

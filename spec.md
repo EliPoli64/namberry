@@ -30,7 +30,7 @@
 ### 3.1 Signal Flow (Stereo Path)
 
 ```
-Input → Tuner (detect) → Impersonator (pickup shaper) → Pitch (capo/drop) → Noise Gate → Acoustic Sim → Compressor → NAM Pedal/Preamp → Pre-Amp EQ →
+Input → Input Gain (−24…+24 dB, default 0 dB) → Tuner (detect) → Impersonator (pickup shaper) → Pitch (capo/drop) → Noise Gate → Acoustic Sim → Compressor → NAM Pedal/Preamp → Pre-Amp EQ →
 NAM Amp Loader (Gain, Bass, Mid, Treble, Presence, Depth, Output) →
 Post-Amp EQ (8-band graphical) → IR Loader (IR 1 / IR 2 + Blend) →
 Post Effects (Chorus/Flanger/Phaser/Delay/Reverb) → Reverb IR (two parallel stereo convolution slots with independent Mix, tail Cutoff and a local wet boost/cut Master) → Room (short dark ambience) → Master (+6 dB fixed trim) → Output
@@ -77,7 +77,7 @@ This order keeps the pedal before the amp, keeps all pre-amp shaping before the 
 
 Each tab uses a hardware icon (pedal, amp, EQ, speaker, sparkle) with a small label. Right-click any tab to bypass that section; the icon dims and shows a red LED while bypassed.
 
-A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and always exposes the Room amount and master Output knobs.
+A persistent bottom strip always exposes **Input Gain** on the far left (−24…+24 dB, default 0 dB), the tab buttons in the middle, and **Room** / **Master** (master Output) on the far right.
 
 ### 3.2 Class Structure (High-Level)
 
@@ -88,7 +88,7 @@ A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and alwa
 - `NAMBerryEditor` (AudioProcessorEditor)
   - Layouts all knobs, sliders, and file loaders.
 - **DSP Modules** (Each as a separate class derived from `juce::dsp::ProcessorBase` or similar):
-  - `NoiseGate`
+  - `NoiseGate` (default release 20 ms; threshold, attack and bypass are also exposed)
   - `Compressor` (multi-band or single-band with sidechain)
   - `NamPedalLoader` (second NAM model for pedal/preamp captures — not a waveshaper)
   - `MultiBandEQ` (3-band Low/Mid/High pre-amp EQ)
@@ -188,7 +188,7 @@ A persistent **ROOM / MASTER** strip sits beside the bottom tab buttons and alwa
   - **Room** (0–100 %, default 0 %) fades the wet path and increases feedback. 0 % is an exact passthrough; stale delay state is cleared when the room is turned back on.
   - All delay lines and filters are allocated in `prepare()` and cleared by `reset()`; the parameter is read from a cached raw APVTS atomic on the audio thread.
   - The parameter is `roomAmount`. State version 8 migrates `imageMix` (or older `roomBlend`) to `roomAmount`, removes `imageWidth`, `imageMix`, `roomSize`, `roomBlend` and `roomBypass`, and adds `delayPingPong` with a default-on value for older states.
-- **Controls**: Room lives in the persistent bottom strip beside the tabs; Reverb is unchanged.
+- **Controls**: Room lives in the persistent bottom strip on the far right, beside the master Output; Reverb is unchanged. Input Gain sits on the far left of the same strip.
 
 ### 4.9 Reverb
 - **Goal**: Add ambience.

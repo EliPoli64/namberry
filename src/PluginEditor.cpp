@@ -272,6 +272,13 @@ public:
                                                 (float) label.getHeight() * 0.85f));
     }
 
+    int getTabButtonBestWidth (juce::TabBarButton&, int tabDepth) override
+    {
+        // Uniform 160 px tab pitch: enough room for the icon above a readable
+        // label without stretching the bar across the whole window.
+        return tabDepth + 96;
+    }
+
     void drawTabButton (juce::TabBarButton& button, juce::Graphics& g,
                         bool isMouseOver, bool isMouseDown) override
     {
@@ -297,10 +304,10 @@ public:
         g.drawRoundedRectangle (bounds, 5.0f, front ? 1.6f : 1.0f);
 
         auto content = bounds.reduced (7.0f, 4.0f);
-        auto iconArea = content.removeFromTop (27.0f);
-        auto textArea = content.removeFromTop (12.0f);
+        auto iconArea = content.removeFromTop (34.0f);
+        auto textArea = content.removeFromTop (16.0f);
 
-        auto iconColour = front ? juce::Colours::white : juce::Colour (kTextDim);
+        auto iconColour = front ? juce::Colours::white : juce::Colour (kText);
         if (bypassed)
             iconColour = iconColour.withAlpha (0.30f);
 
@@ -310,61 +317,84 @@ public:
 
         if (text == "Pre FX")
         {
-            auto pedal = iconArea.withSizeKeepingCentre (16.0f, 21.0f);
+            auto pedal = iconArea.withSizeKeepingCentre (19.0f, 26.0f);
             g.drawRoundedRectangle (pedal, 2.0f, 1.3f);
-            g.fillEllipse (pedal.getCentreX() - 5.0f, pedal.getY() + 3.0f, 3.2f, 3.2f);
-            g.fillEllipse (pedal.getCentreX() + 1.8f, pedal.getY() + 3.0f, 3.2f, 3.2f);
-            g.drawEllipse (pedal.getCentreX() - 3.0f, pedal.getBottom() - 7.0f,
-                           6.0f, 4.0f, 1.1f);
+            g.fillEllipse (pedal.getCentreX() - 6.0f, pedal.getY() + 4.0f, 3.8f, 3.8f);
+            g.fillEllipse (pedal.getCentreX() + 2.2f, pedal.getY() + 4.0f, 3.8f, 3.8f);
+            g.drawEllipse (pedal.getCentreX() - 3.5f, pedal.getBottom() - 8.0f,
+                           7.0f, 5.0f, 1.1f);
         }
         else if (text == "Amp")
         {
-            auto head = iconArea.withSizeKeepingCentre (24.0f, 15.0f);
+            auto head = iconArea.withSizeKeepingCentre (29.0f, 18.0f);
             g.drawRoundedRectangle (head, 2.0f, 1.3f);
-            g.drawHorizontalLine ((int) (head.getY() + 3.0f),
-                                  head.getX() + 3.0f, head.getRight() - 3.0f);
+            g.drawHorizontalLine ((int) (head.getY() + 3.5f),
+                                  head.getX() + 3.5f, head.getRight() - 3.5f);
             for (int i = 0; i < 3; ++i)
-                g.fillEllipse (head.getX() + 5.0f + i * 5.0f,
-                               head.getY() + 6.0f, 2.6f, 2.6f);
-            g.drawRect (head.getX() + 3.0f, head.getBottom() - 4.0f,
-                        head.getWidth() - 6.0f, 2.0f, 0.8f);
+                g.fillEllipse (head.getX() + 6.0f + i * 6.0f,
+                               head.getY() + 7.0f, 3.1f, 3.1f);
+            g.drawRect (head.getX() + 3.5f, head.getBottom() - 5.0f,
+                        head.getWidth() - 7.0f, 2.4f, 0.8f);
         }
         else if (text == "Post EQ")
         {
-            const float xs[] = { -7.0f, 0.0f, 7.0f };
-            const float ys[] = { -7.0f, 5.0f, -2.0f };
+            const float xs[] = { -8.5f, 0.0f, 8.5f };
+            const float ys[] = { -8.0f, 6.0f, -2.5f };
             for (int i = 0; i < 3; ++i)
             {
                 const float x = iconArea.getCentreX() + xs[i];
                 g.drawVerticalLine ((int) x, iconArea.getY() + 2.0f,
                                     iconArea.getBottom() - 2.0f);
-                g.fillEllipse (x - 2.5f, iconArea.getCentreY() + ys[i], 5.0f, 5.0f);
+                g.fillEllipse (x - 3.0f, iconArea.getCentreY() + ys[i], 6.0f, 6.0f);
             }
         }
         else if (text == "IR")
         {
-            auto cab = iconArea.withSizeKeepingCentre (20.0f, 23.0f);
+            auto cab = iconArea.withSizeKeepingCentre (24.0f, 28.0f);
             g.drawRoundedRectangle (cab, 2.0f, 1.3f);
-            const auto cone = cab.reduced (4.0f, 4.0f);
+            const auto cone = cab.reduced (4.5f, 4.5f);
             g.drawEllipse (cone, 1.2f);
-            g.fillEllipse (cone.getCentreX() - 2.0f, cone.getCentreY() - 2.0f,
-                           4.0f, 4.0f);
+            g.fillEllipse (cone.getCentreX() - 2.5f, cone.getCentreY() - 2.5f,
+                           5.0f, 5.0f);
         }
         else
         {
-            juce::Path sparkle;
-            sparkle.addStar (iconArea.getCentre(), 4, 3.0f, 9.0f, 0.0f);
-            g.fillPath (sparkle);
-            g.fillEllipse (iconArea.getRight() - 6.0f, iconArea.getY() + 3.0f, 3.0f, 3.0f);
-            g.fillEllipse (iconArea.getX() + 2.0f, iconArea.getBottom() - 6.0f, 2.5f, 2.5f);
+            juce::Path spiral;
+            const auto centre = iconArea.getCentre();
+            const float maxRadius = juce::jmin (iconArea.getWidth(), iconArea.getHeight()) * 0.42f;
+            float angle = 0.0f;
+            float radius = 1.5f;
+            bool started = false;
+
+            while (radius < maxRadius)
+            {
+                const auto p = centre + juce::Point<float> (std::sin (angle) * radius,
+                                                            -std::cos (angle) * radius);
+
+                if (! started)
+                {
+                    spiral.startNewSubPath (p);
+                    started = true;
+                }
+                else
+                {
+                    spiral.lineTo (p);
+                }
+
+                angle += 0.95f;
+                radius += 0.8f;
+            }
+
+            g.setColour (iconColour);
+            g.strokePath (spiral, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved));
         }
 
-        auto textColour = front ? juce::Colours::white : juce::Colour (kTextDim);
+        auto textColour = front ? juce::Colours::white : juce::Colour (kText);
         if (bypassed)
             textColour = textColour.withAlpha (0.35f);
 
         g.setColour (textColour);
-        g.setFont (juce::FontOptions (8.5f, juce::Font::bold));
+        g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
         g.drawFittedText (text, textArea.toNearestInt(),
                           juce::Justification::centred, 1);
 
@@ -528,6 +558,8 @@ public:
     {
         reference_ = std::make_unique<ReferenceField> (state, "tuningReference", "Ref Hz");
         addAndMakeVisible (*reference_);
+
+        reducedMotionParam_ = state.getRawParameterValue ("reducedMotion");
     }
 
     void setState (float cents, const juce::String& note, float referenceHz)
@@ -618,37 +650,56 @@ public:
         }
 
         // Moving strobe bands: they settle around the centre pointer when the
-        // note is in tune.
-        const float bandOffset = displayCents_ * 1.35f;
-        for (int band = -8; band <= 8; ++band)
+        // note is in tune. Skipped in Reduced Motion / Performance mode to save
+        // a little paint CPU each frame.
+        if (reducedMotionParam_ == nullptr || reducedMotionParam_->load() <= 0.5f)
         {
-            const float x = centreX + band * 11.0f + bandOffset;
+            const float bandOffset = displayCents_ * 1.35f;
+            for (int band = -8; band <= 8; ++band)
+            {
+                const float x = centreX + band * 11.0f + bandOffset;
 
-            if (x < inner.getX() || x > inner.getRight())
-                continue;
+                if (x < inner.getX() || x > inner.getRight())
+                    continue;
 
-            g.setColour (tuning.withAlpha (hasNote_ ? 0.55f : 0.15f));
-            g.drawVerticalLine ((int) std::round (x), trackY - 10.0f, trackY + 10.0f);
+                g.setColour (tuning.withAlpha (hasNote_ ? 0.55f : 0.15f));
+                g.drawVerticalLine ((int) std::round (x), trackY - 10.0f, trackY + 10.0f);
+            }
         }
 
         const float needleX = juce::jlimit (static_cast<float> (inner.getX()),
                                             static_cast<float> (inner.getRight()),
                                             centreX + (targetCents_ / 50.0f) * halfWidth);
         g.setColour (tuning);
-        g.drawVerticalLine ((int) std::round (needleX), trackY - 12.0f, trackY + 12.0f);
+        // Thicker current-pitch needle (a thin filled rect rather than a 1px line).
+        g.fillRect (needleX - 1.5f, trackY - 12.0f, 3.0f, 24.0f);
 
-        juce::Path pointer;
-        pointer.addTriangle (centreX - 4.0f, inner.getBottom() - 8.0f,
-                             centreX + 4.0f, inner.getBottom() - 8.0f,
-                             centreX, inner.getBottom() - 1.0f);
+        // Two arrows that face into the centre line, one from the top and one
+        // from the bottom. The old single arrow pointed down and away from the
+        // line; these point inward so they bracket the needle.
+        juce::Path topArrow;
+        topArrow.addTriangle (centreX - 4.0f, inner.getY() + 1.0f,
+                              centreX + 4.0f, inner.getY() + 1.0f,
+                              centreX, inner.getY() + 8.0f);
+        juce::Path bottomArrow;
+        bottomArrow.addTriangle (centreX - 4.0f, inner.getBottom() - 1.0f,
+                                 centreX + 4.0f, inner.getBottom() - 1.0f,
+                                 centreX, inner.getBottom() - 8.0f);
         g.setColour (juce::Colour (0xfff4f4f5));
-        g.fillPath (pointer);
+        g.fillPath (topArrow);
+        g.fillPath (bottomArrow);
 
         g.setColour (juce::Colour (kTextDim));
         g.setFont (juce::FontOptions (8.0f, juce::Font::bold));
-        g.drawText ("-50", inner.removeFromLeft (20), juce::Justification::centredLeft);
-        g.drawText ("0", inner.withSizeKeepingCentre (20, 10), juce::Justification::centred);
-        g.drawText ("+50", inner.removeFromRight (24), juce::Justification::centredRight);
+        const float labelY = inner.getBottom() - 11.0f;
+        g.drawText ("-50", juce::Rectangle<float> (inner.getX(), labelY, 20.0f, 10.0f),
+                    juce::Justification::centredLeft);
+        // The "0" stays centred on the needle/arrow pair regardless of the
+        // left/right trims used for "-50" and "+50" above.
+        g.drawText ("0", juce::Rectangle<float> (centreX - 10.0f, labelY, 20.0f, 10.0f),
+                    juce::Justification::centred);
+        g.drawText ("+50", juce::Rectangle<float> (inner.getRight() - 24.0f, labelY, 24.0f, 10.0f),
+                    juce::Justification::centredRight);
     }
 
 private:
@@ -667,6 +718,7 @@ private:
     }
 
     std::unique_ptr<ReferenceField> reference_;
+    const std::atomic<float>* reducedMotionParam_ = nullptr;
     float targetCents_ = 0.0f;
     float displayCents_ = 0.0f;
     float referenceHz_ = 440.0f;
@@ -783,48 +835,33 @@ class BottomKnobs : public juce::Component
 public:
     explicit BottomKnobs (APVTS& state)
     {
-        addAndMakeVisible (title_);
-        title_.setText ("ROOM / MASTER", juce::dontSendNotification);
-        title_.setJustificationType (juce::Justification::centred);
-        title_.setFont (juce::FontOptions (9.0f, juce::Font::bold));
-        title_.setColour (juce::Label::textColourId, juce::Colour (kAccent));
-
         roomKnob_ = std::make_unique<ParamControl> (state, "roomAmount", "Room");
-        outputKnob_ = std::make_unique<ParamControl> (state, "masterOutput", "Output");
+        outputKnob_ = std::make_unique<ParamControl> (state, "masterOutput", "Master");
         addAndMakeVisible (*roomKnob_);
         addAndMakeVisible (*outputKnob_);
     }
 
-    int getPreferredHeight() const { return 108; }
+    int getPreferredHeight() const { return ParamControl::cellHeight; }
 
     void paint (juce::Graphics& g) override
     {
         auto bounds = getLocalBounds().toFloat().reduced (1.0f);
-
         g.setColour (juce::Colour (0xff26262b));
         g.fillRoundedRectangle (bounds, 7.0f);
         g.setColour (juce::Colour (0xff0c0c0e));
         g.drawRoundedRectangle (bounds, 7.0f, 1.2f);
-        g.setColour (juce::Colour (kAccent).withAlpha (0.8f));
-        g.fillRect (bounds.getX() + 10.0f, bounds.getY() + 1.0f,
-                    bounds.getWidth() - 20.0f, 2.0f);
     }
 
     void resized() override
     {
-        auto r = getLocalBounds().reduced (6);
-        title_.setBounds (r.removeFromTop (14));
-
+        auto r = getLocalBounds().reduced (4, 2);
         constexpr int cellWidth = ParamControl::cellWidth;
-        auto controls = r.removeFromTop (84)
-                         .withSizeKeepingCentre (cellWidth * 2, 84);
-
+        auto controls = r.withSizeKeepingCentre (cellWidth * 2, r.getHeight());
         roomKnob_->setBounds (controls.removeFromLeft (cellWidth));
         outputKnob_->setBounds (controls.removeFromLeft (cellWidth));
     }
 
 private:
-    juce::Label title_;
     std::unique_ptr<ParamControl> roomKnob_;
     std::unique_ptr<ParamControl> outputKnob_;
 
@@ -996,49 +1033,24 @@ private:
 };
 
 //==============================================================================
-/// Compact amp-model browse button that sits on the amp faceplate next to Power.
+/// Compact amp-model browse button that sits under the grille screen.
 class AmpBrowseButton : public juce::Component,
                         public juce::FileDragAndDropTarget
 {
 public:
     AmpBrowseButton (std::function<void()> onClick,
-                     std::function<void()> onPrevious,
-                     std::function<void()> onNext,
                      std::function<void (const juce::File&)> onFileDropped)
         : onFileDropped_ (std::move (onFileDropped))
     {
-        addAndMakeVisible (label_);
-        label_.setText ("AMP MODEL", juce::dontSendNotification);
-        label_.setJustificationType (juce::Justification::centred);
-        label_.setFont (juce::FontOptions (8.5f, juce::Font::bold));
-        label_.setColour (juce::Label::textColourId, juce::Colour (0xff3a2f18));
-
         addAndMakeVisible (button_);
         button_.setButtonText ("LOAD");
         button_.setTooltip ("Choose a NAM amp model from disk");
         button_.onClick = std::move (onClick);
-
-        addAndMakeVisible (prevButton_);
-        prevButton_.setButtonText ("<");
-        prevButton_.setTooltip ("Previous .nam file in this folder");
-        prevButton_.onClick = std::move (onPrevious);
-
-        addAndMakeVisible (nextButton_);
-        nextButton_.setButtonText (">");
-        nextButton_.setTooltip ("Next .nam file in this folder");
-        nextButton_.onClick = std::move (onNext);
     }
 
     void resized() override
     {
-        auto r = getLocalBounds();
-        label_.setBounds (r.removeFromTop (16));
-        button_.setBounds (r.removeFromTop (44).withSizeKeepingCentre (68, 38));
-
-        // Inset the step buttons so they sit clearly inside the faceplate.
-        auto arrows = r.removeFromTop (24).reduced (6, 1);
-        prevButton_.setBounds (arrows.removeFromLeft (33));
-        nextButton_.setBounds (arrows.removeFromRight (33));
+        button_.setBounds (getLocalBounds().withSizeKeepingCentre (86, 34));
     }
 
     bool isInterestedInFileDrag (const juce::StringArray& files) override
@@ -1078,9 +1090,7 @@ public:
 
 private:
     std::function<void (const juce::File&)> onFileDropped_;
-    juce::Label label_;
     juce::TextButton button_;
-    juce::TextButton prevButton_, nextButton_;
     bool dragOver_ = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AmpBrowseButton)
@@ -1622,12 +1632,6 @@ public:
     {
         if (screenArea_.isEmpty() || plotArea_.isEmpty())
             return;
-
-        // Selected-band / filter readout.
-        g.setColour (juce::Colour (kText));
-        g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
-        g.drawFittedText (statusText(), topArea_.withTrimmedRight (180),
-                          juce::Justification::centredLeft, 1, 0.85f);
 
         // Recessed screen.
         g.setGradientFill (juce::ColourGradient (
@@ -2188,16 +2192,9 @@ private:
         g.fillRoundedRectangle (area.getX() + 8.0f, area.getY() + 2.0f,
                                 area.getWidth() - 16.0f, 2.0f, 1.0f);
 
-        auto title = focusTitleArea_.toFloat();
-        auto caption = title.removeFromTop (12.0f);
-
-        g.setColour (juce::Colour (kTextDim).withAlpha (0.72f));
-        g.setFont (juce::FontOptions (7.5f, juce::Font::bold));
-        g.drawText ("FOCUS", caption, juce::Justification::centred);
-
         g.setColour (focusColour());
         g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
-        g.drawText (focusTitle(), title, juce::Justification::centred);
+        g.drawText (focusTitle(), focusTitleArea_.toFloat(), juce::Justification::centred);
     }
 
     void drawGrid (juce::Graphics& g)
@@ -2333,7 +2330,12 @@ private:
         const auto frequency = isHighPass
             ? cachedSettings_.highPassFrequency
             : cachedSettings_.lowPassFrequency;
-        const auto x = frequencyToX (frequency);
+        // Clamp the position the same way passHandleBounds does so the vertical
+        // line runs through the centre of the HPF/LPF label rectangle, even
+        // when the filter is at the edge of the plot (fully disabled).
+        const auto x = juce::jlimit (plotArea_.getX() + 15.0f,
+                                     plotArea_.getRight() - 15.0f,
+                                     frequencyToX (frequency));
         const auto selected = selectedPass_ == pass;
 
         g.setColour (juce::Colour (0xff93c5fd).withAlpha (
@@ -2686,14 +2688,7 @@ public:
             case UnitStyle::RackUnit: paintRack (g, bounds); break;
         }
 
-        if (style_ == UnitStyle::AmpHead)
-        {
-            g.setColour (juce::Colour (0xff3a2f18));
-            g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
-            g.drawText (title_, juce::Rectangle<int> (22, 8, 160, 26),
-                        juce::Justification::centredLeft);
-        }
-        else if (style_ == UnitStyle::RackUnit)
+        if (style_ == UnitStyle::RackUnit)
         {
             g.setColour (accentColour_);
             g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
@@ -2735,18 +2730,22 @@ public:
             auto layoutItems = [&] (int startY)
             {
                 for (int row = 0; row < gridRows; ++row)
-                    for (int col = 0; col < columns_; ++col)
-                    {
-                        const int index = row * columns_ + col;
-                        if (index >= count)
-                            break;
+                {
+                    const int rowStart = row * columns_;
+                    const int rowCount = juce::jmin (columns_, count - rowStart);
+                    const int rowWidth = rowCount * ParamControl::cellWidth;
+                    const int rowGx = gx + (gridWidth - rowWidth) / 2;
 
+                    for (int col = 0; col < rowCount; ++col)
+                    {
+                        const int index = rowStart + col;
                         items_[(size_t) index]->setBounds (
-                            gx + col * ParamControl::cellWidth,
+                            rowGx + col * ParamControl::cellWidth,
                             startY + row * cellHeight,
                             ParamControl::cellWidth,
                             cellHeight);
                     }
+                }
 
                 return startY + gridRows * cellHeight + 6;
             };
@@ -2832,8 +2831,14 @@ public:
 
                 if (style_ == UnitStyle::AmpHead)
                 {
-                    rowW = juce::jmin (rowW, 460);
-                    rowX = r.getX() + (r.getWidth() - rowW) / 2;
+                    // Keep the header row centred on the painted grille and
+                    // let the model screen run nearly the full cloth width.
+                    const auto cabinet = getLocalBounds().toFloat().reduced (3.0f);
+                    const auto grille = cabinet.reduced (12.0f)
+                                            .withTrimmedTop (160.0f)
+                                            .withTrimmedBottom (14.0f);
+                    rowW = juce::jmin (rowW, (int) grille.getWidth() - 56, 780);
+                    rowX = juce::roundToInt (grille.getCentreX()) - rowW / 2;
                 }
 
                 const int height = rowIndex < heights.size()
@@ -2922,8 +2927,9 @@ private:
 
         g.setColour (juce::Colour (0xfff4f4f5));
         g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
+        // Shrink long titles (e.g. "IMPERSONATOR") so they always fit the plate.
         g.drawFittedText (title_, plate.toNearestInt(),
-                          juce::Justification::centred, 1);
+                          juce::Justification::centred, 1, 0.5f);
 
         drawScrew (g, b.getX() + 11.0f, b.getY() + 11.0f, 3.5f);
         drawScrew (g, b.getRight() - 11.0f, b.getY() + 11.0f, 3.5f);
@@ -2967,11 +2973,6 @@ private:
             g.drawLine (grille.getX() + 6.0f, y, grille.getRight() - 6.0f, y, 0.7f);
         g.setColour (juce::Colour (0xff2a2a2f));
         g.drawRoundedRectangle (grille, 7.0f, 1.2f);
-
-        g.setColour (juce::Colour (0xffe6dfcd));
-        g.setFont (juce::FontOptions (22.0f, juce::Font::bold));
-        g.drawFittedText ("NAMBERRY", grille.toNearestInt(),
-                          juce::Justification::centred, 1);
 
         g.setColour (juce::Colour (0xff25e07a));
         g.fillEllipse (b.getRight() - 34.0f, b.getY() + 18.0f, 7.0f, 7.0f);
@@ -3151,11 +3152,6 @@ public:
         g.fillRoundedRectangle (bounds, 6.0f);
         g.setColour (juce::Colour (dragOver_ ? kAccent : kPanelLine));
         g.drawRoundedRectangle (bounds, 6.0f, dragOver_ ? 2.0f : 1.0f);
-
-        g.setColour (juce::Colour (kAccent));
-        g.setFont (juce::FontOptions (9.0f, juce::Font::bold));
-        g.drawText (caption_, bounds.toNearestInt().removeFromTop (13),
-                    juce::Justification::centred);
     }
 
     void resized() override
@@ -3169,10 +3165,14 @@ public:
         loadButton_.setBounds (r.removeFromTop (34));
         r.removeFromTop (4);
 
-        auto arrows = r;
-        auto left = arrows.removeFromLeft (arrows.getWidth() / 2);
-        prevButton_.setBounds (left.withTrimmedRight (3));
-        nextButton_.setBounds (arrows.withTrimmedLeft (3));
+        // Slim arrow buttons beside the load button.
+        const int arrowWidth = 28;
+        const int gap = 6;
+        const int pairWidth = arrowWidth * 2 + gap;
+        auto arrows = r.withSizeKeepingCentre (pairWidth, r.getHeight());
+        prevButton_.setBounds (arrows.removeFromLeft (arrowWidth));
+        arrows.removeFromLeft (gap);
+        nextButton_.setBounds (arrows.removeFromLeft (arrowWidth));
     }
 
 private:
@@ -3417,6 +3417,65 @@ private:
     juce::Component* item_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (CenteredRow)
+};
+
+/// Top row of the amp head: the wide "current amp" screen centred on the
+/// grille cloth with the previous/next arrows flanking it and the load button
+/// tucked underneath.
+class AmpHeaderRow : public juce::Component
+{
+public:
+    AmpHeaderRow (juce::Component& screen, juce::Component& browse,
+                  std::function<void()> onPrevious, std::function<void()> onNext)
+        : screen_ (screen), browse_ (browse)
+    {
+        addAndMakeVisible (screen_);
+        addAndMakeVisible (browse_);
+
+        addAndMakeVisible (prevButton_);
+        prevButton_.setButtonText ("<");
+        prevButton_.setTooltip ("Previous .nam file in this folder");
+        prevButton_.onClick = std::move (onPrevious);
+
+        addAndMakeVisible (nextButton_);
+        nextButton_.setButtonText (">");
+        nextButton_.setTooltip ("Next .nam file in this folder");
+        nextButton_.onClick = std::move (onNext);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds();
+
+        auto loadRow = r.removeFromBottom (36);
+        browse_.setBounds (loadRow.withSizeKeepingCentre (110, 34));
+        r.removeFromBottom (8);
+
+        layout (r);
+    }
+
+private:
+    void layout (juce::Rectangle<int> r)
+    {
+        const int arrowW = juce::jmin (48, juce::jmax (34, r.getWidth() / 12));
+        const int gap = 10;
+        const int buttonH = juce::jmin (44, r.getHeight());
+
+        prevButton_.setBounds (r.getX(), r.getCentreY() - buttonH / 2, arrowW, buttonH);
+        nextButton_.setBounds (r.getRight() - arrowW, r.getCentreY() - buttonH / 2,
+                               arrowW, buttonH);
+
+        const int screenX = r.getX() + arrowW + gap;
+        screen_.setBounds (screenX, r.getY(),
+                           juce::jmax (0, r.getRight() - arrowW - gap - screenX),
+                           r.getHeight());
+    }
+
+    juce::Component& screen_;
+    juce::Component& browse_;
+    juce::TextButton prevButton_, nextButton_;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AmpHeaderRow)
 };
 
 } // namespace
@@ -3747,6 +3806,10 @@ NAMBerryEditor::NAMBerryEditor (NAMBerryProcessor& p)
 
     bottomKnobs_ = std::make_unique<BottomKnobs> (processor_.getValueTreeState());
     addAndMakeVisible (*bottomKnobs_);
+
+    inputGainKnob_ = std::make_unique<ParamControl> (processor_.getValueTreeState(),
+                                                     "inputGain", "In");
+    addAndMakeVisible (*inputGainKnob_);
 
     setResizable (true, true);
     setResizeLimits (1000, 600, 4000, 1000);
@@ -4091,7 +4154,7 @@ void NAMBerryEditor::buildUi()
     }
 
     // 2. Amp ----------------------------------------------------------------
-    if (auto* amp = makePanel (1, "AMP", UnitStyle::AmpHead, 9, 760,
+    if (auto* amp = makePanel (1, "AMP", UnitStyle::AmpHead, 8, 760,
                                ampBody, ampAccent))
     {
         auto addAmpControl = [&] (const juce::String& id, const juce::String& text,
@@ -4154,8 +4217,6 @@ void NAMBerryEditor::buildUi()
 
         auto browse = std::make_unique<AmpBrowseButton> (
             [ampPicker] { ampPicker.openLoad(); },
-            [stepAmp] { stepAmp (-1); },
-            [stepAmp] { stepAmp (1); },
             [this] (const juce::File& file)
             {
                 if (! processor_.loadNamModel (file))
@@ -4164,7 +4225,8 @@ void NAMBerryEditor::buildUi()
         auto* rawBrowse = browse.get();
         ownedControls_.push_back (std::move (browse));
 
-        amp->addItem (rawBrowse);
+        // The load button and arrows live in the header row next to the amp
+        // screen (see AmpHeaderRow below), not in the knob grid.
 
         amp->addItem (addAmpControl ("ampBypass", "Power", ParamControl::Kind::Toggle, true));
         amp->addItem (addAmpControl ("ampGain", "Gain"));
@@ -4177,7 +4239,7 @@ void NAMBerryEditor::buildUi()
 
         // The grille screen is the amp's file picker: tapping it lists the
         // folder next to the loaded model.
-        auto display = std::make_unique<FileScreen> ("CURRENT AMP", "No model loaded");
+        auto display = std::make_unique<FileScreen> ("", "No model loaded");
         display->setName ("AmpScreen");
         auto* rawDisplay = display.get();
         rawDisplay->setOnOpenPopup (ampPicker.openPopup);
@@ -4192,7 +4254,12 @@ void NAMBerryEditor::buildUi()
                 rawDisplay->setFileName (loader->getLoadedFileName());
         });
 
-        amp->addRow (rawDisplay, 92);
+        auto header = std::make_unique<AmpHeaderRow> (*rawDisplay, *rawBrowse,
+                                                     [stepAmp] { stepAmp (-1); },
+                                                     [stepAmp] { stepAmp (1); });
+        auto* rawHeader = header.get();
+        ownedControls_.push_back (std::move (header));
+        amp->addRow (rawHeader, 136);
     }
 
     // 3. Post EQ rack --------------------------------------------------------
@@ -4637,17 +4704,18 @@ void NAMBerryEditor::resized()
         headerTuner_->setBounds (tunerArea);
 
     constexpr int bottomHeight = 112;
-    constexpr int knobsWidth = 176;
-    constexpr int knobsHeight = 108;
+    constexpr int knobHeight = ParamControl::cellHeight;
+    constexpr int knobWidth = ParamControl::cellWidth;
+    constexpr int tabHeight = 64;
     constexpr int tabGap = 12;
 
     auto tabArea = r.removeFromBottom (bottomHeight);
-    const int maxTabWidth = juce::jmax (240, tabArea.getWidth() - knobsWidth - tabGap - 16);
+    const int bottomY = tabArea.getBottom();
+    const int knobY = bottomY - bottomHeight + (bottomHeight - knobHeight) / 2;
+    const int tabY  = bottomY - bottomHeight + (bottomHeight - tabHeight) / 2;
 
-    // Lay the bar out at a generous width once, measure the natural button
-    // group, then shrink the bar to that width and place the room/master
-    // knobs immediately to its right.
-    tabBar_.setBounds (tabArea.withSizeKeepingCentre (juce::jmin (maxTabWidth, 760), 48));
+    // Measure the tab bar's natural width at a generous width first.
+    tabBar_.setBounds (tabArea.withSizeKeepingCentre (juce::jmin (tabArea.getWidth(), 900), tabHeight));
 
     int minX = tabBar_.getWidth();
     int maxRight = 0;
@@ -4661,21 +4729,27 @@ void NAMBerryEditor::resized()
             }
 
     const int naturalWidth = juce::jmax (0, maxRight - minX);
-    const int barWidth = naturalWidth > 0
-        ? juce::jmax (240, juce::jmin (maxTabWidth, naturalWidth))
-        : juce::jmin (maxTabWidth, 760);
+    const auto strip = tabArea.reduced (8, 0);
+    const int knobsWidth = knobWidth * 2 + tabGap;
+    const int fixedWidth = knobWidth + knobsWidth + tabGap * 2;
+    const int barWidth = juce::jlimit (
+        240, juce::jmax (240, strip.getWidth() - fixedWidth),
+        naturalWidth > 0 ? naturalWidth : 660);
 
-    const int totalWidth = barWidth + tabGap + knobsWidth;
-    const int startX = tabArea.getX()
-        + juce::jmax (0, (tabArea.getWidth() - totalWidth) / 2);
-    const int bottomY = tabArea.getBottom();
+    // Input gain, the tab buttons and Room/Master form one centred group so
+    // the knobs sit right beside the bar instead of at the window edges.
+    const int groupWidth = fixedWidth + barWidth;
+    const int groupX = strip.getX() + juce::jmax (0, (strip.getWidth() - groupWidth) / 2);
+    const int barX = groupX + knobWidth + tabGap;
 
-    tabBar_.setBounds (startX, bottomY - 48, barWidth, 48);
+    if (inputGainKnob_ != nullptr)
+        inputGainKnob_->setBounds (groupX, knobY, knobWidth, knobHeight);
+
+    tabBar_.setBounds (barX, tabY, barWidth, tabHeight);
 
     if (bottomKnobs_ != nullptr)
-        bottomKnobs_->setBounds (startX + barWidth + tabGap,
-                                 bottomY - knobsHeight,
-                                 knobsWidth, knobsHeight);
+        bottomKnobs_->setBounds (barX + barWidth + tabGap, knobY,
+                                 knobsWidth, knobHeight);
 
     viewport_.setBounds (r.reduced (4, 2));
     layoutContent();

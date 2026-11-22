@@ -27,9 +27,11 @@ if [[ -d "${SYSR}/usr/include" ]]; then
     echo "Using local sysroot at ${SYSR}"
     export CPATH="${SYSR}/usr/include:${SYSR}/usr/include/freetype2${CPATH:+:${CPATH}}"
     export LIBRARY_PATH="${SYSR}/usr/lib64${LIBRARY_PATH:+:${LIBRARY_PATH}}"
-    export LD_LIBRARY_PATH="${SYSR}/usr/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
     export PKG_CONFIG_SYSROOT_DIR="${SYSR}"
     export PKG_CONFIG_PATH="/tmp/pc:${SYSR}/usr/lib64/pkgconfig:${SYSR}/usr/share/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+    # NOTE: do not export LD_LIBRARY_PATH here. The sysroot is only needed for
+    # compile/link/pkg-config; forcing the build tools to load its libraries
+    # at runtime (e.g. a Flatpak runtime) causes ABI crashes.
 fi
 
 cmake -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE="${CONFIG}"

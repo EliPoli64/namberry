@@ -43,6 +43,7 @@ The chain runs left to right through the five editor tabs:
 
 ```
 Input
+  → Input Gain (−24…+24 dB)
   → Tuner (detection only)
   → Impersonator (pickup shaper)
   → Pitch (capo / drop tune)
@@ -72,7 +73,7 @@ Input
 
 Each tab shows a hardware icon (pedal, amp, EQ, speaker, sparkle). **Right-click any tab** to bypass that whole section; the icon dims and shows a red LED while bypassed.
 
-The bottom strip beside the tabs always exposes **Room** and **Output** (master volume). NAMBerry applies a fixed +6 dB output trim in addition to the saved Master value. The header contains the **Reduced Motion** preference and the **PRESET** menu.
+The bottom strip always exposes **Input Gain** (−24…+24 dB, default 0 dB) on the far left, the tab buttons in the middle, and **Room** and **Master** (master volume) on the far right. NAMBerry applies a fixed +6 dB output trim in addition to the saved Master value. The header contains the **Reduced Motion** preference and the **PRESET** menu.
 
 ---
 
@@ -529,7 +530,7 @@ The pitch stage uses a real-time Rubber Band engine when `librubberband` is avai
 
 ### Gate and compressor
 
-- **Gate**: threshold, attack, release, bypass.
+- **Gate**: threshold, attack, release, bypass. Default release is **20 ms**.
 - **Compressor**: threshold, ratio, attack, release, makeup, Tight, bypass. Tight derives the detector from a low-passed sidechain. Automatic makeup gain is applied on top of the Makeup control, so lowering the threshold or raising the ratio produces obvious compression without simply lowering the level. Defaults are −24 dB threshold, 8:1 ratio, 5 ms attack and 120 ms release.
 
 ### Acoustic sim
