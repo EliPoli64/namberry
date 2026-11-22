@@ -55,7 +55,7 @@ Input
   → NAM Amp
   → Post-Amp EQ
   → IR Loader (2 IRs + Blend)
-  → Post FX (Chorus / Flanger / Phaser / Delay / Reverb)
+  → Post FX (Chorus / Vibrato / Flanger / Phaser / Delay / Reverb)
   → Reverb IR (two parallel stereo IRs with L/R Mix + tail Cutoff, and a local boost/cut Master)
   → Room (short dark ambience)
   → Master Output
@@ -69,11 +69,11 @@ Input
 | **Amp** | NAM amp model, Power, Gain, Bass, Mid, Treble, Presence, Depth, Output |
 | **Post EQ** | Full-width 8-band graphical EQ with draggable nodes, per-band curve type, adjustable Q, high-pass/low-pass filters, and a live spectrum of the post-EQ signal behind the curve |
 | **IR** | Two IR rows (filename screen, **LOAD**, arrows) plus one **Blend** knob and section bypass |
-| **Post FX** | Chorus, Flanger, Phaser, Delay, Reverb, Reverb IR (two IR rows + L/R Mix/Cutoff + boost/cut Master) |
+| **Post FX** | Chorus / Vibrato, Flanger, Phaser, Delay, Reverb, Reverb IR (two IR rows + L/R Mix/Cutoff + boost/cut Master) |
 
 Each tab shows a hardware icon (pedal, amp, EQ, speaker, sparkle). **Right-click any tab** to bypass that whole section; the icon dims and shows a red LED while bypassed.
 
-The bottom strip exposes **Input Gain** (−24…+24 dB, default 0 dB), the tab buttons, and **Room** and **Master** (master volume) as one centred group, with the knobs sitting immediately beside the tab bar rather than at the window edges. NAMBerry applies a fixed +6 dB output trim in addition to the saved Master value. The header contains the **Reduced Motion** preference and the **PRESET** menu.
+The bottom strip exposes **Input Gain** (−24…+24 dB, default 0 dB), the tab buttons, and **Room** and **Master** (master volume) as one centred group, with the knobs sitting immediately beside the tab bar rather than at the window edges. NAMBerry applies a fixed +6 dB output trim in addition to the saved Master value. The header contains the **Performance** toggle and the **PRESET** menu.
 
 ---
 
@@ -190,10 +190,10 @@ Engaging the pedal also force-bypasses the **NAM Pedal, NAM Amp, Pre-EQ, Post-EQ
 
 `PostEffects` combines custom modulation DSP with JUCE effects:
 
-- a custom three-voice `ChorusEnsemble`: 120°-spread sine voices, a slow wide LFO plus a fast shallow LFO, 5–30 ms centre delay, stereo panning, BBD-style wet filtering, feedback and mix,
+- a custom three-voice `ChorusEnsemble`: 120°-spread sine voices, a slow wide LFO plus a fast shallow LFO, 5–30 ms centre delay, stereo panning, a mono/stereo switch, BBD-style wet filtering, feedback and a 0–100 % mix (100 % is pure vibrato with no dry),
 - a custom `ModulatedDelay` for flanger: triangle LFO, 0.5–10 ms manual delay, signed feedback and mix,
 - a custom `Phaser` with 4/8/12 first-order all-pass stages, sine LFO and feedback,
-- `juce::dsp::DelayLine` with feedback and mix; echoes alternate left/right in Ping-Pong mode or stay centred in Mono mode,
+- `juce::dsp::DelayLine` with feedback, mix, a tone tilt and tape-style fuzz on the repeats; echoes alternate left/right in Ping-Pong mode or stay centred in Mono mode,
 - `juce::dsp::Reverb`.
 
 The flanger uses the shared modulated-delay core; the chorus uses its own three-voice ensemble core. All three modulation effects share the LFO and parameter-smoothing framework, but use different delay structures and filter topologies.
@@ -202,7 +202,7 @@ The separate `ReverbIrLoader` pedal described above runs after `PostEffects`, so
 
 A separate `RoomSim` stage runs after `ReverbIrLoader` and before the master trim. It feeds a mono-derived guitar signal into two slightly offset, dark-filtered short delays (28 ms left, 34 ms right). Feedback is deliberately low (3–15 %), so the delays repeat the guitar once or twice and die away almost immediately instead of becoming a tail. **Room** ranges from 0–100 %: 0 % is an exact passthrough and the default, while higher values fade the wet signal in to a maximum of 0.8 (about -2 dB) and gently increase feedback. The wet path is high-passed at 120 Hz and low-passed at 6 kHz, the dry path stays at unity, and stale tails are discarded when the room is turned back on.
 
-Switching the delay off or changing between Ping-Pong and Mono clears its delay lines, so old feedback cannot reappear in the wrong mode. Bypassing the whole post-FX block also clears the delay buffer.
+Switching the delay off or changing between Ping-Pong and Mono clears its delay lines, so old feedback cannot reappear in the wrong mode. Bypassing the whole post-FX block also clears the delay buffer. The **Tone** knob tilts the repeats from dark (negative) through neutral to bright (positive), and **Fuzz** adds tape-like saturation; both are smoothed and shape the delay-line input, so the character compounds on every repeat.
 
 ### File management and persistence
 
@@ -219,7 +219,7 @@ Switching the delay off or changing between Ping-Pong and Mono clears its delay 
   - Linux: `~/.config/NAMBerry/NAMBerry.settings`
   - macOS/Windows: under the standard user application-data directory, in `NAMBerry/NAMBerry.settings`.
 
-DAW project state stores all parameter values through `AudioProcessorValueTreeState`; the model/IR paths and starting folders live in the per-user settings file. Existing projects with the old 0–1 modulation ranges are migrated once to the new percentage values when loaded, and projects from the four-slot IR era are converted to the two-IR Blend model once (the legacy `irMix`/`irPan`/`irPhase` parameters are dropped and `irBlend` is derived from which slots were up). Version 8 state migrates the old `imageMix` value to `roomAmount`, drops `imageWidth`/`imageMix` and the older room parameters, and defaults the new `delayPingPong` toggle on. Version 9 added `reverbIrBypass` (on) and a single `reverbIrMix`. Version 10 replaces that Mix with `reverbIrLeftMix` and `reverbIrRightMix`, seeded from the old value so older projects keep their wet level. Version 11 adds `reverbIrLeftCutoff` and `reverbIrRightCutoff`, defaulting to 3 s so existing IR tails are unchanged. Version 12 replaces the pedal's global-Master link with `reverbIrLevel` (default 0 dB) so the knob is a local wet boost/cut.
+DAW project state stores all parameter values through `AudioProcessorValueTreeState`; the model/IR paths and starting folders live in the per-user settings file. Existing projects with the old 0–1 modulation ranges are migrated once to the new percentage values when loaded, and projects from the four-slot IR era are converted to the two-IR Blend model once (the legacy `irMix`/`irPan`/`irPhase` parameters are dropped and `irBlend` is derived from which slots were up). Version 8 state migrates the old `imageMix` value to `roomAmount`, drops `imageWidth`/`imageMix` and the older room parameters, and defaults the new `delayPingPong` toggle on. Version 9 added `reverbIrBypass` (on) and a single `reverbIrMix`. Version 10 replaces that Mix with `reverbIrLeftMix` and `reverbIrRightMix`, seeded from the old value so older projects keep their wet level. Version 11 adds `reverbIrLeftCutoff` and `reverbIrRightCutoff`, defaulting to 3 s so existing IR tails are unchanged. Version 12 replaces the pedal's global-Master link with `reverbIrLevel` (default 0 dB) so the knob is a local wet boost/cut. Version 13 adds the chorus **Stereo** switch (on by default), and version 14 adds the delay **Tone** and **Fuzz** knobs (both 0 by default).
 
 ### UI
 
@@ -230,7 +230,7 @@ The editor is JUCE-native and hardware-inspired:
 - pedal enclosures, an amp head and rack units,
 - large 48 px hardware controls (the browser list is desktop-sized),
 - footswitch LEDs show **active** (not bypassed) state,
-- the Reduced Motion preference disables the hover-glow animation,
+- the Performance toggle stops the hover-glow animation, the live Post EQ spectrum and the remaining decorative timers,
 - a numeric reference field for the tuner.
 
 At the default 1280×640 editor size, all pedals on every tab fit without horizontal scrolling; narrower windows still use the scrollable viewport.
@@ -565,7 +565,7 @@ Engaging the pedal automatically switches the NAM Pedal, NAM Amp, Pre-EQ, Post-E
 
 The Pre-EQ has three bands: low shelf, mid peak, high shelf with frequency, gain and Q, plus a **Volume** trim in its footer (−12…+12 dB, up to +12 dB of boost).
 
-The Post-EQ is a full-width **8-band graphical EQ**. Drag a node horizontally to change frequency and vertically to change gain; use the mouse wheel for Q. Double-click a node to reset its gain, or right-click for reset options. A fixed pair of **Boost** and **Q** knobs on the right retargets to whichever band or filter is focused. For HPF/LPF, the Q knob adjusts the filter Q and Boost is inactive. The **Flat** button zeroes all gains and resets the filters.
+The Post-EQ is a full-width **8-band graphical EQ**. Drag a node horizontally to change frequency and vertically to change gain; use the mouse wheel for Q. A label above the graph names the focused band and its frequency (or the focused HPF/LPF). Double-click a node to disable that band: its gain flattens to 0 dB and the node turns into a hollow outline marked **OFF**. Double-click the hollow node again to restore the previous gain. Right-click for reset options. A fixed pair of **Boost** and **Q** knobs on the right retargets to whichever band or filter is focused. For HPF/LPF, the Q knob adjusts the filter Q and Boost is inactive. The **Flat** button zeroes all gains and resets the filters.
 
 Every point has its own selectable curve type in the focus strip above the knobs: **Low Pass** (low shelf), **High Pass** (high shelf) or **Band** (peaking bell). All three types use the Boost knob for boost/cut, so the type changes the shape rather than muting the control. The default curves are Low Pass on band 1, Band on bands 2–7 and High Pass on band 8. The Post-EQ also has a separate 12 dB/octave high-pass and low-pass filter (defaults 20 Hz and 20 kHz), with draggable cutoff handles on the graph and adjustable Q.
 
@@ -585,20 +585,20 @@ The two IRs are gained so they always sum to unity, so the cabinet level stays c
 
 ### Post FX
 
-- Chorus: rate, depth, feedback, delay, mix, bypass. It uses a Boss-style three-voice stereo ensemble with a slow wide LFO, a fast shallow LFO, 120° voice phases and BBD-style wet tone shaping. Mix tops out at 50 %, which is the old maximum, with a 2× wet boost.
+- Chorus: rate, depth, feedback, delay, mix, a **Stereo** switch and bypass. It uses a Boss-style three-voice stereo ensemble with a slow wide LFO, a fast shallow LFO, 120° voice phases and BBD-style wet tone shaping. Mix now runs 0–100 %: 50 % is the classic chorus blend, and 100 % removes the dry signal for a pure three-voice vibrato without a level jump. **Stereo** spreads the voices across the field; turning it off folds them to mono.
 - Flanger: rate, depth, manual, feedback, mix, bypass. Mix tops out at 50 %, with a 2× wet boost.
 - Phaser: rate, depth, feedback, stages, mix, bypass. Mix tops out at 50 %, with a 2× wet boost.
 - Room: **Room** in the bottom strip. 0 % is an exact passthrough and the default; higher values add a short, dark stereo tail without changing the dry level. There is no separate bypass.
-- Delay: mix, time, feedback, Ping-Pong/Mono toggle, bypass. Ping-Pong bounces the echoes between left and right; Mono keeps them centred. Feedback is 0–10: 0 is one repeat and 10 is an almost endless tail.
+- Delay: mix, time, feedback, **Tone**, **Fuzz**, Ping-Pong/Mono toggle, bypass. Ping-Pong bounces the echoes between left and right; Mono keeps them centred. Feedback is 0–10: 0 is one repeat and 10 is an almost endless tail. Tone tilts the repeats between dark and bright at 0 % (neutral); Fuzz drives them into tape-like saturation at 100 %.
 - Reverb: mix, decay, width, bypass. Its dry level is normalized so increasing reverb never boosts the dry guitar.
 - Reverb IR: two long filename rows (L and R), each with **LOAD**, arrows and drag-and-drop, plus accented **Mix L** / **Mix R**, **Cutoff L** / **Cutoff R**, a **Master** knob that boosts or cuts the wet output locally (-24 to +12 dB), and one bypass footswitch. The stereo IRs run in parallel as wet sends; each Mix sets its send level and crossfades the dry guitar out, with 100 % giving no dry signal and 0 % in both slots giving an exact passthrough. Cutoff fades that slot's IR tail after the chosen time. The pedal starts bypassed and each slot keeps its own last-used folder.
 - Master **Output** is in the bottom strip beside the tabs.
 
 Use **Room** in the bottom strip to add a little ambience; there is no separate room bypass. Switching the delay off discards its feedback tail.
 
-### Reduced Motion
+### Performance mode
 
-The header toggle disables the panel hover-glow animation for users who prefer reduced motion. It is saved with the plugin state.
+The header **Performance** toggle makes the editor lighter: it snaps the panel hover-glow animation instead of animating it, stops the decorative section timers, skips the live Post EQ spectrum FFT and its repaints, skips the audio-thread spectrum tap, and draws the tuner without the moving strobe bands. Audio quality is unchanged. The setting is saved with the plugin state.
 
 ### Presets
 
@@ -648,6 +648,7 @@ cmake --build build --target NAMBerryOfflineTest NAMBerryUiSnapshot
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --delay-feedback
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --delay-reset
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --delay-ping-pong
+./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --delay-character
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --chorus-ensemble
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --reverb-dry
 ./build/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTest --reverb-ir
@@ -692,10 +693,11 @@ What they cover:
 - `--dry-center`: verifies both channels are identical when fully dry.
 - `--delay-reset`: verifies the delay tail is discarded on bypass.
 - `--delay-ping-pong`: verifies alternating left/right echoes, feedback repeats, and centred Mono mode.
-- `--chorus-ensemble`: verifies that three-voice modulation is centred at 0 % depth and stereo-decorrelated at full depth.
+- `--delay-character`: verifies the Tone tilt darkens/brightens the repeats and Fuzz adds harmonics without excessive level.
+- `--chorus-ensemble`: verifies that three-voice modulation is centred at 0 % depth and stereo-decorrelated at full depth, that 100 % mix removes the dry signal, that the full-wet level stays bounded, and that the Stereo switch folds the wet path to mono.
 - `--room`: verifies passthrough, short-delay timing and low-feedback decay, stereo decorrelation from a mono source, dark and audible wet level, odd block sizes, sample-rate robustness and stale-tail clearing.
 - `--modulation`: verifies finite chorus, flanger and phaser output, all phaser stage counts, and bypass.
-- `--fx-state`: verifies migration of old post-FX parameter ranges/defaults.
+- `--fx-state`: verifies migration of old post-FX parameter ranges/defaults, that the version-13 chorus stereo switch defaults to on for old projects and persists when saved off, and that the version-14 delay Tone/Fuzz defaults to 0.
 - `--preset`: verifies preset save/load, including amp, cabinet IR and both reverb IR file paths.
 - `--compressor`: verifies gain reduction, automatic makeup gain and bypass.
 - `--impersonator`: verifies both pickup-direction EQ curves, manual Level and bypass.
@@ -719,8 +721,8 @@ What they cover:
 ```
 
 The snapshot run also drives a Post EQ drag, wheel-Q change, double-click
-reset, the focused-band Boost/Q knobs and the curve-type switch, and fails if
-the parameters do not follow.
+disable/re-enable, the focused-band Boost/Q knobs and the curve-type switch,
+and fails if the parameters do not follow.
 
 Writes:
 

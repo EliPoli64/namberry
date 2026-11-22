@@ -189,6 +189,7 @@ TEST=./build-standalone/NAMBerryOfflineTest_artefacts/Release/NAMBerryOfflineTes
 "$TEST" --delay-feedback
 "$TEST" --delay-reset
 "$TEST" --delay-ping-pong
+"$TEST" --delay-character
 "$TEST" --chorus-ensemble
 "$TEST" --room
 "$TEST" --modulation
@@ -364,7 +365,7 @@ Current state versions in `PluginProcessor.cpp`:
 constexpr int kPostFxStateVersion = 3;
 constexpr int kIrStateVersion = 4;
 constexpr int kPostEqStateVersion = 6;
-constexpr int kFxStateVersion = 12;
+constexpr int kFxStateVersion = 14;
 ```
 
 `getStateInformation()` writes `fxVersion`; `setStateInformation()` runs the
@@ -390,7 +391,7 @@ The editor is `src/PluginEditor.cpp` (large, JUCE-native). It uses:
 - `SectionPanel` rack/pedal/amp containers
 - APVTS `SliderAttachment` / `ButtonAttachment` for standard controls
 - custom graphical editors that cache settings and poll at ~30 Hz
-- the `Reduced Motion` preference for hover animation
+- the `Performance` toggle (parameter ID `reducedMotion`) that stops decorative timers, the live spectrum and the tuner strobe
 
 Guidelines:
 
@@ -409,8 +410,8 @@ Guidelines:
 - The UI snapshot depends on layout geometry. When you change panel margins,
   the Post EQ focus strip, or graph bounds, update the coordinate calculations
   in the test.
-- Keep `Reduced Motion` behavior: animations should be disabled or minimized
-  when the preference is on.
+- Keep `Performance` mode behavior: animations, the Post EQ spectrum and
+  decorative timers should stop when the preference is on.
 - The Post EQ is a special full-width graphical panel with draggable nodes,
   HPF/LPF handles, a response curve, and a focused-band Boost/Q knob pair.
   Preserve its interaction model and its test coverage.
