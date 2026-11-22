@@ -43,6 +43,7 @@ public:
     void setChorusDepth (float value);
     void setChorusFeedback (float value);
     void setChorusDelay (float value);
+    void setChorusStereo (bool value);
     void setChorusBypass (bool value)
     {
         if (value && ! chorusBypass_)
@@ -81,6 +82,8 @@ public:
     void setDelayTimeMs (float value);
     void setDelayFeedback (float value);
     void setDelayPingPong (bool value);
+    void setDelayTone (float value);
+    void setDelayFuzz (float value);
     void setDelayBypass (bool value)
     {
         if (value != delayBypass_)
@@ -113,6 +116,8 @@ private:
     float delayMix_ = 0.25f;
     float delayTimeMs_ = 200.0f;
     float delayFeedback_ = 0.4f;
+    float delayTone_ = 0.0f;
+    float delayFuzz_ = 0.0f;
 
     bool reverbBypass_ = true;
     float reverbMix_ = 0.2f;
@@ -123,7 +128,10 @@ private:
     ModulatedDelay flanger_ { 10.0f, ModulationLfo::Waveform::triangle, 0.0f, 2.0f };
     Phaser phaser_;
     juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear> delayLine_;
+    juce::dsp::FirstOrderTPTFilter<float> delayToneFilter_;
     juce::dsp::Reverb reverb_;
+    juce::SmoothedValue<float> delayToneSmoothed_;
+    juce::SmoothedValue<float> delayFuzzSmoothed_;
 
     float maxDelaySamples_ = 1.0f;
 };

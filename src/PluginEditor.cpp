@@ -1469,9 +1469,11 @@ class PostEqEditor : public juce::Component,
 {
 public:
     PostEqEditor (APVTS& state, SignalSpectrum& spectrum,
-                  std::function<double()> sampleRateProvider)
+                  std::function<double()> sampleRateProvider,
+                  std::function<bool()> performanceMode)
         : state_ (state), spectrum_ (spectrum),
           sampleRateProvider_ (std::move (sampleRateProvider)),
+          performanceMode_ (std::move (performanceMode)),
           boostKnob_ ("PostEqBoost", "BOOST", " dB", -24.0, 24.0, 0.1, 0.0),
           qKnob_ ("PostEqQ", "Q", {}, 0.1, 10.0, 0.01, 1.0)
     {
@@ -1637,8 +1639,11 @@ public:
 
         // Refresh here too so the graph is populated on first paint even when
         // the message loop has not ticked the timer yet (headless snapshots).
-        spectrum_.update();
-        spectrumRevision_ = spectrum_.getRevision();
+        if (! isPerformanceMode())
+        {
+            spectrum_.update();
+            spectrumRevision_ = spectrum_.getRevision();
+        }
     }
 
     void paint (juce::Graphics& g) override
@@ -1654,6 +1659,7 @@ public:
         g.setColour (juce::Colour (0xff1d3438));
         g.drawRoundedRectangle (screenArea_, 6.0f, 1.2f);
 
+        drawStatusLine (g);
         drawFocusPanel (g);
         drawGrid (g);
         drawCutRegions (g);
@@ -1673,7 +1679,7 @@ public:
 
         g.setColour (juce::Colour (kTextDim).withAlpha (0.82f));
         g.setFont (juce::FontOptions (9.5f, juce::Font::bold));
-        g.drawFittedText ("DRAG: FREQ / GAIN    WHEEL: Q    DOUBLE-CLICK: RESET    RIGHT-CLICK: MENU    KNOBS + TYPE: FOCUSED BAND / FILTER",
+        g.drawFittedText ("DRAG: FREQ / GAIN    WHEEL: Q    DOUBLE-CLICK: DISABLE BAND    RIGHT-CLICK: MENU    KNOBS + TYPE: FOCUSED BAND / FILTER",
                           hintArea_, juce::Justification::centredLeft, 1, 0.85f);
     }
 
@@ -1820,10 +1826,7 @@ public:
 
         if (band >= 0)
         {
-            beginGesture (bandGainParams_[(size_t) band]);
-            setParameterValue (bandGainParams_[(size_t) band], 0.0f);
-            endGesture (bandGainParams_[(size_t) band]);
-            updateCache();
+            toggleBandEnabled (band);
             return;
         }
 
@@ -1997,6 +2000,10 @@ private:
         if (! isVisible())
             return;
 
+        // Performance mode skips the FFT and the spectrum repaint entirely.
+        if (isPerformanceMode())
+            return;
+
         spectrum_.update();
 
         if (spectrum_.getRevision() != spectrumRevision_)
@@ -2128,6 +2135,11 @@ private:
         return rate > 0.0 ? rate : 48000.0;
     }
 
+    bool isPerformanceMode() const
+    {
+        return performanceMode_ != nullptr && performanceMode_();
+    }
+
     float frequencyToX (float frequency) const
     {
         const auto clamped = juce::jlimit (20.0f, 20000.0f, frequency);
@@ -2199,6 +2211,32 @@ private:
     }
 
     //==========================================================================
+    void drawStatusLine (juce::Graphics& g)
+    {
+        auto area = topArea_.withTrimmedRight (188);
+
+        if (area.isEmpty())
+            return;
+
+        const bool hasSelection = selectedBand_ >= 0 || selectedPass_ != Pass::None;
+        auto colour = hasSelection ? focusColour() : juce::Colour (kTextDim);
+
+        if (cachedBypassed_)
+            colour = colour.withAlpha (0.55f);
+
+        if (hasSelection)
+        {
+            g.setColour (colour.withAlpha (0.9f));
+            g.fillEllipse ((float) area.getX() + 1.0f,
+                           (float) area.getCentreY() - 4.0f, 8.0f, 8.0f);
+        }
+
+        g.setColour (colour);
+        g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+        g.drawFittedText (selectionText(), area.withTrimmedLeft (16),
+                          juce::Justification::centredLeft, 1, 0.8f);
+    }
+
     void drawFocusPanel (juce::Graphics& g)
     {
         const auto area = focusArea_.toFloat();
@@ -2491,11 +2529,14 @@ private:
             const bool selected = selectedBand_ == band;
             const bool hovered = hoverBand_ == band;
             const auto colour = bandColour (band);
+            const bool disabled = bandIsDisabled (cachedSettings_.bands[(size_t) band]);
             const float radius = selected ? 11.5f : (hovered ? 10.5f : 9.0f);
 
             if (selected || hovered)
             {
-                g.setColour (colour.withAlpha (selected ? 0.18f : 0.11f));
+                const auto alpha = disabled ? (selected ? 0.09f : 0.05f)
+                                            : (selected ? 0.18f : 0.11f);
+                g.setColour (colour.withAlpha (alpha));
                 g.fillEllipse (juce::Rectangle<float> (radius * 3.0f, radius * 3.0f)
                                    .withCentre (centre));
             }
@@ -2504,16 +2545,30 @@ private:
             g.fillEllipse (juce::Rectangle<float> (radius * 2.0f, radius * 2.0f)
                                .withCentre (centre).translated (0.0f, 1.5f));
 
-            g.setColour (cachedBypassed_ ? colour.withAlpha (0.35f) : colour);
-            g.fillEllipse (juce::Rectangle<float> (radius * 2.0f, radius * 2.0f)
-                               .withCentre (centre));
+            if (disabled)
+            {
+                // Hollow node: the band is at 0 dB and does not affect the sound.
+                g.setColour (juce::Colour (0xff14161a));
+                g.fillEllipse (juce::Rectangle<float> (radius * 2.0f, radius * 2.0f)
+                                   .withCentre (centre));
+                g.setColour (colour.withAlpha (cachedBypassed_ ? 0.22f : 0.55f));
+                g.drawEllipse (juce::Rectangle<float> (radius * 2.0f, radius * 2.0f)
+                                   .withCentre (centre), selected ? 2.0f : 1.3f);
+            }
+            else
+            {
+                g.setColour (cachedBypassed_ ? colour.withAlpha (0.35f) : colour);
+                g.fillEllipse (juce::Rectangle<float> (radius * 2.0f, radius * 2.0f)
+                                   .withCentre (centre));
 
-            g.setColour (selected ? juce::Colours::white.withAlpha (0.92f)
-                                  : juce::Colours::black.withAlpha (0.45f));
-            g.drawEllipse (juce::Rectangle<float> (radius * 2.0f, radius * 2.0f)
-                               .withCentre (centre), selected ? 2.0f : 1.0f);
+                g.setColour (selected ? juce::Colours::white.withAlpha (0.92f)
+                                      : juce::Colours::black.withAlpha (0.45f));
+                g.drawEllipse (juce::Rectangle<float> (radius * 2.0f, radius * 2.0f)
+                                   .withCentre (centre), selected ? 2.0f : 1.0f);
+            }
 
-            g.setColour (juce::Colour (0xff111113));
+            g.setColour (disabled ? colour.withAlpha (cachedBypassed_ ? 0.35f : 0.80f)
+                                  : juce::Colour (0xff111113));
             g.setFont (juce::FontOptions (9.0f, juce::Font::bold));
             g.drawText (juce::String (band + 1),
                         juce::Rectangle<float> (radius * 2.0f, radius * 2.0f)
@@ -2542,49 +2597,71 @@ private:
         return juce::String (juce::roundToInt (frequency)) + " Hz";
     }
 
-    static juce::String formatGain (float gainDb)
-    {
-        return (gainDb >= 0.0f ? "+" : "") + juce::String (gainDb, 1) + " dB";
-    }
-
-    static juce::String formatQ (float q)
-    {
-        return juce::String (q, 2);
-    }
-
-    static const char* bandTypeName (PostAmpEQ::BandType type)
-    {
-        switch (type)
-        {
-            case PostAmpEQ::BandType::LowPass:  return "LOW PASS";
-            case PostAmpEQ::BandType::HighPass: return "HIGH PASS";
-            case PostAmpEQ::BandType::Band:
-            default:                            return "BAND";
-        }
-    }
-
-    juce::String statusText() const
+    juce::String selectionText() const
     {
         if (selectedPass_ == Pass::HighPass)
-            return "HPF  ·  " + formatFrequency (cachedSettings_.highPassFrequency)
-                   + "  ·  Q " + formatQ (cachedSettings_.highPassQ);
+            return "HPF  ·  " + formatFrequency (cachedSettings_.highPassFrequency);
 
         if (selectedPass_ == Pass::LowPass)
-            return "LPF  ·  " + formatFrequency (cachedSettings_.lowPassFrequency)
-                   + "  ·  Q " + formatQ (cachedSettings_.lowPassQ);
+            return "LPF  ·  " + formatFrequency (cachedSettings_.lowPassFrequency);
 
         if (selectedBand_ >= 0)
         {
             const auto& band = cachedSettings_.bands[(size_t) selectedBand_];
+            auto text = "BAND " + juce::String (selectedBand_ + 1)
+                        + "  ·  " + formatFrequency (band.frequency);
 
-            return "BAND " + juce::String (selectedBand_ + 1) + "  "
-                   + bandTypeName (band.type)
-                   + "  ·  " + formatFrequency (band.frequency)
-                   + "  ·  " + formatGain (band.gainDb)
-                   + "  ·  Q " + formatQ (band.q);
+            if (bandIsDisabled (band))
+                text << "  ·  OFF";
+
+            return text;
         }
 
-        return "8-BAND GRAPHIC EQ  ·  drag a node to shape the response";
+        return "8-BAND GRAPHIC EQ";
+    }
+
+    static bool bandIsDisabled (const PostAmpEQ::BandParams& band)
+    {
+        // The DSP has no per-band bypass: a flat gain is exactly an inactive
+        // band, so "disabled" is derived from the gain and survives reloads.
+        return std::abs (band.gainDb) < 0.05f;
+    }
+
+    void toggleBandEnabled (int band)
+    {
+        const auto index = (size_t) band;
+        auto* gainParameter = bandGainParams_[index];
+
+        if (gainParameter == nullptr)
+            return;
+
+        float target = 0.0f;
+
+        if (bandIsDisabled (cachedSettings_.bands[index]))
+        {
+            // Re-enable only when a previous non-flat gain is remembered.
+            if (std::abs (previousGains_[index]) < 0.05f)
+            {
+                selectedBand_ = band;
+                selectedPass_ = Pass::None;
+                updateCache();
+                return;
+            }
+
+            target = previousGains_[index];
+        }
+        else
+        {
+            previousGains_[index] = cachedSettings_.bands[index].gainDb;
+        }
+
+        beginGesture (gainParameter);
+        setParameterValue (gainParameter, target);
+        endGesture (gainParameter);
+
+        selectedBand_ = band;
+        selectedPass_ = Pass::None;
+        updateCache();
     }
 
     void showContextMenu (int band, Pass pass)
@@ -2697,6 +2774,7 @@ private:
     APVTS& state_;
     SignalSpectrum& spectrum_;
     std::function<double()> sampleRateProvider_;
+    std::function<bool()> performanceMode_;
 
     FocusKnob boostKnob_;
     FocusKnob qKnob_;
@@ -2733,6 +2811,7 @@ private:
     PostAmpEQ::Settings cachedSettings_;
     bool cachedBypassed_ = false;
     int spectrumRevision_ = 0;
+    std::array<float, PostAmpEQ::kNumBands> previousGains_ {};
 
     int selectedBand_ = 0;
     Pass selectedPass_ = Pass::None;
@@ -2765,6 +2844,24 @@ public:
     {
         items_.push_back (item);
         addAndMakeVisible (item);
+    }
+
+    /// Performance mode stops the decorative hover timer; the glow snaps to
+    /// the final state instead of animating.
+    void setPerformanceMode (bool enabled)
+    {
+        if (performanceMode_ == enabled)
+            return;
+
+        performanceMode_ = enabled;
+        highlight_ = hovered_ ? 1.0f : 0.0f;
+
+        if (enabled)
+            stopTimer();
+        else
+            startTimerHz (30);
+
+        repaint();
     }
 
     void addRow (juce::Component* row, int height)
@@ -3185,6 +3282,7 @@ private:
     juce::Colour bodyColour_;
     juce::Colour accentColour_;
     std::function<bool()> reducedMotion_;
+    bool performanceMode_ = false;
     std::vector<juce::Component*> items_;
     std::vector<RowSpec> rows_;
     juce::Component* footer_ = nullptr;
@@ -3915,9 +4013,12 @@ NAMBerryEditor::NAMBerryEditor (NAMBerryProcessor& p)
     setLookAndFeel (lnf_.get());
 
     addAndMakeVisible (reducedMotionButton_);
-    reducedMotionButton_.setButtonText ("Reduced Motion");
+    reducedMotionButton_.setButtonText ("Performance");
+    reducedMotionButton_.setTooltip ("Performance mode: stops UI animations and the live spectrum to save CPU");
     reducedMotionAttachment_ = std::make_unique<APVTS::ButtonAttachment> (
         processor_.getValueTreeState(), "reducedMotion", reducedMotionButton_);
+    performanceParam_ = processor_.getValueTreeState()
+                            .getRawParameterValue ("reducedMotion");
 
     addAndMakeVisible (presetButton_);
     presetButton_.setButtonText ("PRESET");
@@ -3935,6 +4036,13 @@ NAMBerryEditor::NAMBerryEditor (NAMBerryProcessor& p)
     addAndMakeVisible (viewport_);
 
     buildUi();
+
+    performanceMode_ = performanceParam_ != nullptr && performanceParam_->load() > 0.5f;
+
+    if (performanceMode_)
+        for (auto* panel : allPanels_)
+            if (auto* section = dynamic_cast<SectionPanel*> (panel))
+                section->setPerformanceMode (true);
 
     bottomKnobs_ = std::make_unique<BottomKnobs> (processor_.getValueTreeState());
     addAndMakeVisible (*bottomKnobs_);
@@ -4400,7 +4508,7 @@ void NAMBerryEditor::buildUi()
     {
         auto eq = std::make_unique<PostEqEditor> (
             state, processor_.getPostEqSpectrum(),
-            [this] { return processor_.getSampleRate(); });
+            [this] { return processor_.getSampleRate(); }, reduced);
         auto* rawEq = eq.get();
         ownedControls_.push_back (std::move (eq));
 
@@ -4471,7 +4579,7 @@ void NAMBerryEditor::buildUi()
     }
 
     // 5. Post FX pedals ------------------------------------------------------
-    if (auto* chorus = makePanel (4, "CHORUS", UnitStyle::Pedal, 2, 0,
+    if (auto* chorus = makePanel (4, "CHORUS / VIBRATO", UnitStyle::Pedal, 2, 0,
                                   chorusBody, chorusAccent))
     {
         chorus->addItem (makeControl ("chorusRate", "Rate"));
@@ -4479,6 +4587,7 @@ void NAMBerryEditor::buildUi()
         chorus->addItem (makeControl ("chorusFeedback", "Feedback"));
         chorus->addItem (makeControl ("chorusDelay", "Delay"));
         chorus->addItem (makeControl ("chorusMix", "Mix"));
+        chorus->addItem (makeControl ("chorusStereo", "Stereo", ParamControl::Kind::Toggle));
         chorus->setFooter (makeFootswitch ("chorusBypass", chorusAccent), 82);
     }
 
@@ -4515,6 +4624,8 @@ void NAMBerryEditor::buildUi()
         delay->addItem (makeControl ("delayTimeMs", "Time"));
         delay->addItem (makeControl ("delayFeedback", "Feedback"));
         delay->addItem (makeControl ("delayPingPong", "Ping-Pong", ParamControl::Kind::Toggle));
+        delay->addItem (makeControl ("delayTone", "Tone"));
+        delay->addItem (makeControl ("delayFuzz", "Fuzz"));
         delay->setFooter (makeFootswitch ("delayBypass", delayAccent), 82);
     }
 
@@ -4990,8 +5101,25 @@ void NAMBerryEditor::updateTabVisuals()
     }
 }
 
+void NAMBerryEditor::applyPerformanceMode (bool enabled)
+{
+    if (performanceMode_ == enabled)
+        return;
+
+    performanceMode_ = enabled;
+
+    for (auto* panel : allPanels_)
+        if (auto* section = dynamic_cast<SectionPanel*> (panel))
+            section->setPerformanceMode (enabled);
+
+    repaint();
+}
+
 void NAMBerryEditor::timerCallback()
 {
+    if (performanceParam_ != nullptr)
+        applyPerformanceMode (performanceParam_->load() > 0.5f);
+
     if (tunerUpdater_)
         tunerUpdater_();
 

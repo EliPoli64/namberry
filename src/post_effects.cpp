@@ -21,6 +21,16 @@ void PostEffects::prepare (const juce::dsp::ProcessSpec& spec)
     delayLine_.setMaximumDelayInSamples (static_cast<int> (maxDelaySamples_));
     delayLine_.prepare (spec);
 
+    auto toneSpec = spec;
+    toneSpec.numChannels = 2;
+    delayToneFilter_.prepare (toneSpec);
+    delayToneFilter_.setType (juce::dsp::FirstOrderTPTFilterType::lowpass);
+    delayToneFilter_.setCutoffFrequency (juce::jmin (800.0f,
+                                                     static_cast<float> (spec.sampleRate * 0.45)));
+
+    delayToneSmoothed_.reset (spec.sampleRate, 0.02);
+    delayFuzzSmoothed_.reset (spec.sampleRate, 0.02);
+
     reverb_.prepare (spec);
 
     updateReverb();
@@ -34,6 +44,9 @@ void PostEffects::reset()
     flanger_.reset();
     phaser_.reset();
     delayLine_.reset();
+    delayToneFilter_.reset();
+    delayToneSmoothed_.setCurrentAndTargetValue (delayTone_);
+    delayFuzzSmoothed_.setCurrentAndTargetValue (delayFuzz_);
     reverb_.reset();
 }
 
@@ -43,6 +56,7 @@ void PostEffects::setChorusRate (float value)     { chorus_.setRate (juce::jlimi
 void PostEffects::setChorusDepth (float value)    { chorus_.setDepthPercent (value); }
 void PostEffects::setChorusFeedback (float value) { chorus_.setFeedbackPercent (value); }
 void PostEffects::setChorusDelay (float value)    { chorus_.setBaseDelayMs (value); }
+void PostEffects::setChorusStereo (bool value)    { chorus_.setStereo (value); }
 
 void PostEffects::setFlangerMix (float value)      { flanger_.setMixPercent (value); }
 void PostEffects::setFlangerRate (float value)     { flanger_.setRate (juce::jlimit (0.05f, 10.0f, value)); }
@@ -75,6 +89,18 @@ void PostEffects::setDelayPingPong (bool value)
     // Cross-fed left/right state is meaningless in the other mode.
     delayPingPong_ = value;
     delayLine_.reset();
+}
+
+void PostEffects::setDelayTone (float value)
+{
+    delayTone_ = juce::jlimit (-1.0f, 1.0f, value * 0.01f);
+    delayToneSmoothed_.setTargetValue (delayTone_);
+}
+
+void PostEffects::setDelayFuzz (float value)
+{
+    delayFuzz_ = clamp01 (value * 0.01f);
+    delayFuzzSmoothed_.setTargetValue (delayFuzz_);
 }
 
 void PostEffects::setReverbMix (float value)   { reverbMix_ = clamp01 (value); updateReverb(); }
@@ -120,7 +146,10 @@ void PostEffects::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
         phaser_.processBlock (buffer);
 
     // Feedback delay. Ping-pong folds the input to mono and bounces the echo
-    // between left and right; mono mode keeps a single centred repeat.
+    // between left and right; mono mode keeps a single centred repeat. Tone
+    // tilts the repeats between dark and bright, fuzz adds tape-like
+    // saturation. Both are shaped on the delay-line input so every repeat
+    // compounds the character.
     if (! delayBypass_)
     {
         const float delaySamples = juce::jlimit (1.0f, maxDelaySamples_ - 2.0f,
@@ -129,6 +158,28 @@ void PostEffects::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
 
         for (int i = 0; i < numSamples; ++i)
         {
+            const float tone = delayToneSmoothed_.getNextValue();
+            const float fuzz = delayFuzzSmoothed_.getNextValue();
+
+            // Negative tone keeps the lows, positive keeps the highs; 0 is flat.
+            const float lowGain = 1.0f - juce::jmax (0.0f, tone);
+            const float highGain = 1.0f + juce::jmin (0.0f, tone);
+
+            const float drive = 1.0f + fuzz * 5.0f;
+            const float driveComp = 1.0f / drive;
+
+            auto shape = [fuzz, drive, driveComp] (float x)
+            {
+                const float saturated = std::tanh (x * drive) * driveComp;
+                return x + fuzz * (saturated - x);
+            };
+
+            auto toneShape = [this, lowGain, highGain] (int channel, float x)
+            {
+                const float low = delayToneFilter_.processSample (channel, x);
+                return low * lowGain + (x - low) * highGain;
+            };
+
             float mono = 0.0f;
             for (int ch = 0; ch < numChannels; ++ch)
                 mono += buffer.getSample (ch, i);
@@ -143,8 +194,8 @@ void PostEffects::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
                 // Right repeats the previous left echo; left receives the mono
                 // input plus the right echo scaled by feedback. One feedback
                 // gain is applied per round trip (two delay times).
-                delayLine_.pushSample (0, mono + rightTap * delayFeedback_);
-                delayLine_.pushSample (1, leftTap);
+                delayLine_.pushSample (0, toneShape (0, shape (mono + rightTap * delayFeedback_)));
+                delayLine_.pushSample (1, toneShape (1, shape (leftTap)));
 
                 for (int ch = 0; ch < numChannels; ++ch)
                 {
@@ -156,7 +207,7 @@ void PostEffects::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
             else
             {
                 const float tap = delayLine_.popSample (0, delaySamples, true);
-                delayLine_.pushSample (0, mono + tap * delayFeedback_);
+                delayLine_.pushSample (0, toneShape (0, shape (mono + tap * delayFeedback_)));
 
                 for (int ch = 0; ch < numChannels; ++ch)
                 {

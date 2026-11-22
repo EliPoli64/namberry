@@ -388,12 +388,12 @@ int main (int argc, char** argv)
 
         dragLeft (*graph,
                   { xForFrequency (63.0f), yForGain (0.0f) },
-                  { xForFrequency (1000.0f), yForGain (6.0f) });
+                  { xForFrequency (850.0f), yForGain (6.0f) });
 
         const auto draggedFrequency = value ("postEqBand0Freq");
         const auto draggedGain = value ("postEqBand0Gain");
 
-        if (std::abs (draggedFrequency - 1000.0f) > 2.0f
+        if (std::abs (draggedFrequency - 850.0f) > 2.0f
             || std::abs (draggedGain - 6.0f) > 0.15f)
         {
             std::cerr << "FAIL: post EQ drag freq=" << draggedFrequency
@@ -417,8 +417,22 @@ int main (int argc, char** argv)
 
         if (std::abs (resetGain) > 0.05f)
         {
-            std::cerr << "FAIL: post EQ double-click did not reset gain: "
+            std::cerr << "FAIL: post EQ double-click did not disable the band: "
                       << resetGain << "\n";
+            interactionOk = false;
+        }
+
+        // A second double-click on the hollow node re-enables the band and
+        // restores its previous gain.
+        const juce::Point<float> disabledNode { xForFrequency (draggedFrequency),
+                                                yForGain (0.0f) };
+        doubleClick (*graph, disabledNode);
+        const auto reEnabledGain = value ("postEqBand0Gain");
+
+        if (std::abs (reEnabledGain - 6.0f) > 0.15f)
+        {
+            std::cerr << "FAIL: post EQ double-click did not re-enable the band: "
+                      << reEnabledGain << "\n";
             interactionOk = false;
         }
 

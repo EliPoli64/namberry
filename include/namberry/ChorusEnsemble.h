@@ -16,7 +16,8 @@ namespace namberry {
 /// phase-spread by 120 degrees and panned across the stereo field. The wet path
 /// is high-passed and low-passed before a mild soft clip to emulate BBD tone
 /// shaping. Existing chorus parameters map to Rate, Depth, Feedback, Delay and
-/// Mix; the ensemble layout itself is fixed and needs no new state.
+/// Mix; the ensemble layout itself is fixed and needs no new state. Mix can go
+/// to 100 % for a dry-less vibrato, and the wet spread can collapse to mono.
 class ChorusEnsemble
 {
 public:
@@ -29,6 +30,7 @@ public:
     void setDepthPercent (float percent);
     void setFeedbackPercent (float percent);
     void setMixPercent (float percent);
+    void setStereo (bool stereo);
 
 private:
     static constexpr int kNumVoices = 3;
@@ -53,11 +55,13 @@ private:
     juce::SmoothedValue<float> depthSmoothed_;
     juce::SmoothedValue<float> feedbackSmoothed_;
     juce::SmoothedValue<float> mixSmoothed_;
+    juce::SmoothedValue<float> stereoSmoothed_;
 
     float baseDelayMs_ = 15.0f;
     float depth_ = 0.5f;
     float feedback_ = 0.15f;
     float mix_ = 0.5f;
+    bool stereo_ = true;
     float lastWetMono_ = 0.0f;
 };
 

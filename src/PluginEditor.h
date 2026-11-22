@@ -43,6 +43,8 @@ private:
                           const juce::String& wildcard,
                           std::function<void (const juce::File&)> onFileChosen);
 
+    void applyPerformanceMode (bool enabled);
+
     void showPresetMenu();
     void savePresetAs();
     void loadPresetFromFile();
@@ -59,6 +61,8 @@ private:
 
     juce::ToggleButton reducedMotionButton_;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> reducedMotionAttachment_;
+    std::atomic<float>* performanceParam_ = nullptr;
+    bool performanceMode_ = false;
     juce::TextButton presetButton_;
     std::unique_ptr<juce::FileChooser> presetChooser_;
     std::unique_ptr<juce::FileChooser> fileChooser_;

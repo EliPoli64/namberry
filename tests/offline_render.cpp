@@ -1168,6 +1168,135 @@ int runDelayFeedbackTest()
     return passed ? 0 : 2;
 }
 
+int runDelayCharacterTest()
+{
+    constexpr double sampleRate = 48000.0;
+    constexpr int blockSize = 512;
+    constexpr int totalSamples = 24576;
+    constexpr int delaySamples = 2400; // 50 ms
+
+    auto render = [&] (float sineHz, float tone, float fuzz)
+    {
+        namberry::PostEffects fx;
+        juce::dsp::ProcessSpec spec;
+        spec.sampleRate = sampleRate;
+        spec.maximumBlockSize = blockSize;
+        spec.numChannels = 2;
+        fx.prepare (spec);
+        fx.setBypass (false);
+        fx.setChorusBypass (true);
+        fx.setFlangerBypass (true);
+        fx.setPhaserBypass (true);
+        fx.setReverbBypass (true);
+        fx.setDelayBypass (false);
+        fx.setDelayMix (1.0f);
+        fx.setDelayTimeMs (50.0f);
+        fx.setDelayFeedback (0.0f);
+        fx.setDelayPingPong (false);
+        fx.setDelayTone (tone);
+        fx.setDelayFuzz (fuzz);
+
+        std::vector<float> out ((size_t) totalSamples, 0.0f);
+        juce::AudioBuffer<float> buffer (2, blockSize);
+        juce::MidiBuffer midi;
+
+        for (int offset = 0; offset < totalSamples; offset += blockSize)
+        {
+            buffer.clear();
+
+            for (int i = 0; i < blockSize; ++i)
+            {
+                const int n = offset + i;
+                float sample = 0.0f;
+
+                if (sineHz > 0.0f)
+                    sample = 0.3f * (float) std::sin (
+                        2.0 * juce::MathConstants<double>::pi * (double) sineHz
+                        * (double) n / sampleRate);
+                else if (n == 0)
+                    sample = 1.0f;
+
+                buffer.setSample (0, i, sample);
+                buffer.setSample (1, i, sample);
+            }
+
+            fx.processBlock (buffer, midi);
+
+            for (int i = 0; i < blockSize; ++i)
+                out[(size_t) (offset + i)] = buffer.getSample (0, i);
+        }
+
+        return out;
+    };
+
+    // Tone: a 4 kHz repeat through the dark setting is heavily low-passed,
+    // while the bright setting keeps it. Use a single echo.
+    const auto dark = render (4000.0f, -100.0f, 0.0f);
+    const auto bright = render (4000.0f, 100.0f, 0.0f);
+
+    auto windowRms = [] (const std::vector<float>& samples)
+    {
+        double sum = 0.0;
+        int count = 0;
+
+        for (size_t i = delaySamples;
+             i < delaySamples + (size_t) totalSamples / 2; ++i)
+        {
+            sum += (double) samples[i] * samples[i];
+            ++count;
+        }
+
+        return std::sqrt (sum / juce::jmax (1, count));
+    };
+
+    const double darkRms = windowRms (dark);
+    const double brightRms = windowRms (bright);
+    const bool toneOk = darkRms < brightRms * 0.4 && brightRms > 1.0e-4;
+
+    // Fuzz: saturation adds a 3rd harmonic to a 220 Hz repeat.
+    const auto clean = render (220.0f, 0.0f, 0.0f);
+    const auto fuzzy = render (220.0f, 0.0f, 100.0f);
+
+    std::vector<float> cleanWindow (clean.begin() + delaySamples,
+                                    clean.begin() + delaySamples + 12000);
+    std::vector<float> fuzzyWindow (fuzzy.begin() + delaySamples,
+                                    fuzzy.begin() + delaySamples + 12000);
+
+    auto distortion = [] (const std::vector<float>& samples)
+    {
+        const auto fundamental = goertzelMagnitude (samples, 220.0, sampleRate);
+        const auto third = goertzelMagnitude (samples, 660.0, sampleRate);
+        return fundamental > 0.0f ? third / fundamental : 0.0f;
+    };
+
+    const double cleanDistortion = distortion (cleanWindow);
+    const double fuzzyDistortion = distortion (fuzzyWindow);
+
+    bool finite = true;
+    float peak = 0.0f;
+
+    for (float value : fuzzy)
+    {
+        finite = finite && std::isfinite (value);
+        peak = juce::jmax (peak, std::abs (value));
+    }
+
+    const bool fuzzOk = finite && peak < 2.0f
+                     && fuzzyDistortion > cleanDistortion * 4.0
+                     && fuzzyDistortion > 0.01;
+
+    const bool passed = toneOk && fuzzOk;
+
+    std::cout << "delay character darkRms=" << darkRms
+              << " brightRms=" << brightRms
+              << " clean3rd=" << cleanDistortion
+              << " fuzzy3rd=" << fuzzyDistortion
+              << " peak=" << peak
+              << " " << (passed ? "PASS" : "FAIL") << "\n";
+
+    return passed ? 0 : 2;
+}
+
 int runDelayPingPongTest()
 {
     constexpr double sampleRate = 48000.0;
@@ -1689,13 +1818,15 @@ int runChorusEnsembleTest()
         input[static_cast<size_t> (i)] = 0.4f * lowpass;
     }
 
-    auto render = [&] (float depth)
+    auto render = [&] (float depth, float mix = 50.0f, bool stereo = true)
     {
         namberry::PostEffects fx;
         juce::dsp::ProcessSpec spec;
         spec.sampleRate = sampleRate;
         spec.maximumBlockSize = blockSize;
         spec.numChannels = 2;
+        fx.setChorusMix (mix);
+        fx.setChorusStereo (stereo);
         fx.prepare (spec);
         fx.setBypass (false);
         fx.setChorusBypass (false);
@@ -1707,7 +1838,6 @@ int runChorusEnsembleTest()
         fx.setChorusDepth (depth);
         fx.setChorusFeedback (0.0f);
         fx.setChorusDelay (15.0f);
-        fx.setChorusMix (50.0f);
 
         RoomRender result;
         result.left.resize (static_cast<size_t> (totalSamples));
@@ -1776,15 +1906,103 @@ int runChorusEnsembleTest()
 
     wetRms = std::sqrt (wetRms / juce::jmax (1, count));
 
+    // Mix 100 % must remove the dry signal: at full wet an impulse has no
+    // immediate sample, only the delayed ensemble taps.
+    auto impulse = [&] (float mix)
+    {
+        namberry::PostEffects fx;
+        juce::dsp::ProcessSpec spec;
+        spec.sampleRate = sampleRate;
+        spec.maximumBlockSize = 256;
+        spec.numChannels = 2;
+        fx.setChorusMix (mix);
+        fx.setChorusStereo (true);
+        fx.prepare (spec);
+        fx.setBypass (false);
+        fx.setChorusBypass (false);
+        fx.setFlangerBypass (true);
+        fx.setPhaserBypass (true);
+        fx.setDelayBypass (true);
+        fx.setReverbBypass (true);
+        fx.setChorusRate (0.8f);
+        fx.setChorusDepth (100.0f);
+        fx.setChorusFeedback (0.0f);
+        fx.setChorusDelay (15.0f);
+
+        juce::AudioBuffer<float> buffer (2, 4096);
+        buffer.clear();
+        buffer.setSample (0, 0, 1.0f);
+        buffer.setSample (1, 0, 1.0f);
+
+        juce::MidiBuffer midi;
+        fx.processBlock (buffer, midi);
+        return buffer;
+    };
+
+    const auto halfMixImpulse = impulse (50.0f);
+    const auto fullWetImpulse = impulse (100.0f);
+
+    float wetTail = 0.0f;
+    for (int i = 1; i < fullWetImpulse.getNumSamples(); ++i)
+        wetTail = juce::jmax (wetTail, std::abs (fullWetImpulse.getSample (0, i)));
+
+    const bool mixRangeOk =
+        std::abs (halfMixImpulse.getSample (0, 0) - 0.5f) < 1.0e-3f
+        && std::abs (fullWetImpulse.getSample (0, 0)) < 1.0e-6f
+        && wetTail > 1.0e-5f;
+
+    // At full wet the level must stay bounded.
+    const auto fullWet = render (100.0f, 100.0f);
+    double fullWetRms = 0.0;
+    float fullWetPeak = 0.0f;
+    int fullWetCount = 0;
+
+    for (int i = static_cast<int> (sampleRate / 10);
+         i < totalSamples - static_cast<int> (sampleRate / 10); ++i)
+    {
+        const float left = fullWet.left[static_cast<size_t> (i)];
+        const float right = fullWet.right[static_cast<size_t> (i)];
+        finite = finite && std::isfinite (left) && std::isfinite (right);
+        fullWetPeak = juce::jmax (fullWetPeak, std::abs (left), std::abs (right));
+        fullWetRms += 0.5 * (static_cast<double> (left) * left
+                             + static_cast<double> (right) * right);
+        ++fullWetCount;
+    }
+
+    fullWetRms = std::sqrt (fullWetRms / juce::jmax (1, fullWetCount));
+
+    const bool fullWetOk = finite && fullWetPeak < 4.0f && fullWetRms > 1.0e-4;
+
+    // Mono mode collapses the wet spread, so both channels are identical.
+    const auto mono = render (100.0f, 100.0f, false);
+    float monoMaxDiff = 0.0f;
+
+    for (int i = static_cast<int> (sampleRate / 10);
+         i < totalSamples - static_cast<int> (sampleRate / 10); ++i)
+    {
+        const float diff = mono.left[static_cast<size_t> (i)]
+                         - mono.right[static_cast<size_t> (i)];
+        monoMaxDiff = juce::jmax (monoMaxDiff, std::abs (diff));
+    }
+
+    const bool monoOk = monoMaxDiff < 1.0e-6f;
+
     const bool passed = finite
                      && flatCorrelation > 0.95
                      && wideCorrelation < 0.9
                      && wideCorrelation < flatCorrelation - 0.1
-                     && wetRms > 1.0e-4;
+                     && wetRms > 1.0e-4
+                     && mixRangeOk
+                     && fullWetOk
+                     && monoOk;
 
     std::cout << "chorus ensemble flat=" << flatCorrelation
               << " wide=" << wideCorrelation
               << " wetRms=" << wetRms
+              << " fullWetRms=" << fullWetRms
+              << " fullWetPeak=" << fullWetPeak
+              << " monoMaxDiff=" << monoMaxDiff
+              << " mixRange=" << (mixRangeOk ? "ok" : "bad")
               << " " << (passed ? "PASS" : "FAIL") << "\n";
 
     return passed ? 0 : 2;
@@ -1965,7 +2183,8 @@ int runFxStateMigrationTest()
     setLegacyValue (state, "roomBypass", 1.0f);
 
     for (const auto* id : { "chorusFeedback", "chorusDelay", "flangerManual",
-                            "phaserFeedback", "phaserStages" })
+                            "phaserFeedback", "phaserStages", "chorusStereo",
+                            "delayTone", "delayFuzz" })
         removeFromState (state, id);
 
     loadState (state);
@@ -1973,6 +2192,7 @@ int runFxStateMigrationTest()
     auto& params = processor.getValueTreeState();
     const float chorusMix = params.getRawParameterValue ("chorusMix")->load();
     const float chorusDepth = params.getRawParameterValue ("chorusDepth")->load();
+    const float chorusStereo = params.getRawParameterValue ("chorusStereo")->load();
     const float flangerFeedback = params.getRawParameterValue ("flangerFeedback")->load();
     const float phaserDepth = params.getRawParameterValue ("phaserDepth")->load();
     const float chorusFeedback = params.getRawParameterValue ("chorusFeedback")->load();
@@ -1982,6 +2202,8 @@ int runFxStateMigrationTest()
     const float phaserStages = params.getRawParameterValue ("phaserStages")->load();
     const float delayFeedback = params.getRawParameterValue ("delayFeedback")->load();
     const float delayPingPong = params.getRawParameterValue ("delayPingPong")->load();
+    const float delayTone = params.getRawParameterValue ("delayTone")->load();
+    const float delayFuzz = params.getRawParameterValue ("delayFuzz")->load();
     const float roomAmount = params.getRawParameterValue ("roomAmount")->load();
 
     auto migratedState = params.copyState();
@@ -1994,6 +2216,7 @@ int runFxStateMigrationTest()
 
     bool passed = std::abs (chorusMix - 20.0f) < 0.01f
                && std::abs (chorusDepth - 35.0f) < 0.01f
+               && chorusStereo > 0.5f
                && std::abs (flangerFeedback - 38.0f) < 0.01f
                && std::abs (phaserDepth - 50.0f) < 0.01f
                && std::abs (chorusFeedback - 15.0f) < 0.01f
@@ -2003,6 +2226,8 @@ int runFxStateMigrationTest()
                && std::abs (phaserStages - 8.0f) < 0.01f
                && std::abs (delayFeedback - 4.0f) < 0.01f
                && delayPingPong > 0.5f
+               && std::abs (delayTone) < 0.01f
+               && std::abs (delayFuzz) < 0.01f
                && std::abs (roomAmount - 0.0f) < 0.01f
                && oldRoomsRemoved;
 
@@ -2035,14 +2260,28 @@ int runFxStateMigrationTest()
 
     passed = passed && std::abs (v7RoomAmount - 40.0f) < 0.01f && v7ImagesRemoved;
 
+    // The chorus mono/stereo switch is a version-13 parameter and persists.
+    auto stereoOffState = params.copyState();
+    stereoOffState.setProperty ("fxVersion", 13, nullptr);
+    setValue (stereoOffState, "chorusStereo", 0.0f);
+    loadState (stereoOffState);
+
+    const float savedChorusStereo =
+        params.getRawParameterValue ("chorusStereo")->load();
+
+    passed = passed && savedChorusStereo < 0.5f;
+
     std::cout << "migration chorusMix=" << chorusMix
               << " chorusDepth=" << chorusDepth
+              << " chorusStereo=" << chorusStereo
+              << " savedStereo=" << savedChorusStereo
               << " flangerFeedback=" << flangerFeedback
               << " phaserDepth=" << phaserDepth
               << " new=" << chorusFeedback << "/" << chorusDelay << "/"
               << flangerManual << "/" << phaserFeedback << "/" << phaserStages
               << " delayFeedback=" << delayFeedback
               << " pingPong=" << (delayPingPong > 0.5f ? "yes" : "no")
+              << " delayTone=" << delayTone << "/" << delayFuzz
               << " roomAmount=" << roomAmount
               << " plain=" << plainRoomAmount
               << " v7=" << v7RoomAmount
@@ -3117,6 +3356,9 @@ int runPresetTest()
     };
 
     setParameter ("chorusMix", 1.0f);
+    setParameter ("chorusStereo", 0.0f);
+    setParameter ("delayTone", 0.75f);
+    setParameter ("delayFuzz", 0.4f);
     setParameter ("phaserStages", 1.0f);
     setParameter ("reverbDecay", 0.8f);
     setParameter ("reverbIrBypass", 0.0f);
@@ -3156,6 +3398,12 @@ int runPresetTest()
     auto& restoredParams = restored.getValueTreeState();
 
     const float chorusMix = restoredParams.getRawParameterValue ("chorusMix")->load();
+    const float chorusStereo =
+        restoredParams.getRawParameterValue ("chorusStereo")->load();
+    const float delayTone =
+        restoredParams.getRawParameterValue ("delayTone")->load();
+    const float delayFuzz =
+        restoredParams.getRawParameterValue ("delayFuzz")->load();
     const float phaserStages = restoredParams.getRawParameterValue ("phaserStages")->load();
     const float reverbDecay = restoredParams.getRawParameterValue ("reverbDecay")->load();
     const float reverbIrBypass =
@@ -3182,7 +3430,10 @@ int runPresetTest()
                       && reverbIrRestored;
 
     const bool passed = loaded && filesOk
-                     && std::abs (chorusMix - 50.0f) < 0.01f
+                     && std::abs (chorusMix - 100.0f) < 0.01f
+                     && chorusStereo < 0.5f
+                     && std::abs (delayTone - 50.0f) < 0.01f
+                     && std::abs (delayFuzz - 40.0f) < 0.01f
                      && std::abs (phaserStages - 12.0f) < 0.01f
                      && std::abs (reverbDecay - 0.8f) < 0.01f
                      && reverbIrBypass < 0.5f
@@ -3198,6 +3449,8 @@ int runPresetTest()
               << " loaded=" << loaded
               << " files=" << filesOk
               << " chorusMix=" << chorusMix
+              << " chorusStereo=" << chorusStereo
+              << " delayTone=" << delayTone << "/" << delayFuzz
               << " phaserStages=" << phaserStages
               << " reverbDecay=" << reverbDecay
               << " reverbIrBypass=" << reverbIrBypass
@@ -3695,6 +3948,9 @@ int main (int argc, char** argv)
 
     if (argc > 1 && juce::String (argv[1]) == "--delay-ping-pong")
         return runDelayPingPongTest();
+
+    if (argc > 1 && juce::String (argv[1]) == "--delay-character")
+        return runDelayCharacterTest();
 
     if (argc > 1 && juce::String (argv[1]) == "--room")
         return runRoomTest();

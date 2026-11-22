@@ -251,7 +251,6 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
         juce::NormalisableRange<float>(-24.0f, 24.0f, 0.1f), 0.0f,
         juce::AudioParameterFloatAttributes().withLabel ("dB")));
 
-    // ---- UI preference: reduced motion ----
     // ---- Section bypass (right-click tab icons) ----
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         "preFxBypass", "Pre FX Bypass", false));
@@ -279,8 +278,10 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
         juce::AudioParameterFloatAttributes().withLabel ("ms")));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "chorusMix", "Chorus Mix",
-        juce::NormalisableRange<float>(0.0f, 50.0f, 1.0f), 50.0f,
+        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 50.0f,
         juce::AudioParameterFloatAttributes().withLabel ("%")));
+    params.push_back(std::make_unique<juce::AudioParameterBool>(
+        "chorusStereo", "Chorus Stereo", true));
 
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         "flangerBypass", "Flanger Bypass", true));
@@ -340,6 +341,14 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         "delayFeedback", "Delay Feedback",
         juce::NormalisableRange<float>(0.0f, 10.0f, 0.1f), 4.0f));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "delayTone", "Delay Tone",
+        juce::NormalisableRange<float>(-100.0f, 100.0f, 1.0f), 0.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("%")));
+    params.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "delayFuzz", "Delay Fuzz",
+        juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 0.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("%")));
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         "delayPingPong", "Delay Ping-Pong", true));
 
@@ -407,8 +416,9 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
         juce::NormalisableRange<float>(0.0f, 100.0f, 1.0f), 0.0f,
         juce::AudioParameterFloatAttributes().withLabel ("%")));
 
+    // ---- UI preference: performance mode (historic ID: reducedMotion) ----
     params.push_back(std::make_unique<juce::AudioParameterBool>(
-        "reducedMotion", "Reduced Motion", false));
+        "reducedMotion", "Performance Mode", false));
 
     params.push_back(std::make_unique<juce::AudioParameterBool>(
         "irBypass", "IR Bypass", false));
@@ -432,7 +442,10 @@ namespace {
 constexpr int kPostFxStateVersion = 3;
 constexpr int kIrStateVersion = 4;
 constexpr int kPostEqStateVersion = 6;
-constexpr int kFxStateVersion = 12;
+constexpr int kReverbIrLevelStateVersion = 12;
+constexpr int kChorusStereoStateVersion = 13;
+constexpr int kDelayToneStateVersion = 14;
+constexpr int kFxStateVersion = kDelayToneStateVersion;
 
 juce::ValueTree findParameterState (const juce::ValueTree& state, const juce::String& id)
 {
@@ -566,7 +579,24 @@ void migrateReverbIrLevelState (juce::ValueTree& state)
     // wet-output boost/cut. Unity gain preserves existing project levels.
     addParameterIfMissing (state, "reverbIrLevel",
                            namberry::ReverbIrLoader::kDefaultLevelDb);
-    state.setProperty ("fxVersion", kFxStateVersion, nullptr);
+    state.setProperty ("fxVersion", kReverbIrLevelStateVersion, nullptr);
+}
+
+void migrateChorusStereoState (juce::ValueTree& state)
+{
+    // Version 13 adds the chorus mono/stereo switch. Stereo is the legacy
+    // ensemble behaviour, so older projects keep their spread.
+    addParameterIfMissing (state, "chorusStereo", 1.0f);
+    state.setProperty ("fxVersion", kChorusStereoStateVersion, nullptr);
+}
+
+void migrateDelayCharacterState (juce::ValueTree& state)
+{
+    // Version 14 adds the delay tone tilt and fuzz drive. Both default to 0,
+    // which leaves the legacy repeats untouched.
+    addParameterIfMissing (state, "delayTone", 0.0f);
+    addParameterIfMissing (state, "delayFuzz", 0.0f);
+    state.setProperty ("fxVersion", kDelayToneStateVersion, nullptr);
 }
 
 void migrateFxCamelCaseState (juce::ValueTree& state)
@@ -816,6 +846,7 @@ NAMBerryProcessor::NAMBerryProcessor()
     postFxParams_.chorusDepth = cacheFx ("chorusDepth");
     postFxParams_.chorusFeedback = cacheFx ("chorusFeedback");
     postFxParams_.chorusDelay = cacheFx ("chorusDelay");
+    postFxParams_.chorusStereo = cacheFx ("chorusStereo");
     postFxParams_.flangerBypass = cacheFx ("flangerBypass");
     postFxParams_.flangerMix = cacheFx ("flangerMix");
     postFxParams_.flangerRate = cacheFx ("flangerRate");
@@ -834,6 +865,8 @@ NAMBerryProcessor::NAMBerryProcessor()
     postFxParams_.delayTimeMs = cacheFx ("delayTimeMs");
     postFxParams_.delayFeedback = cacheFx ("delayFeedback");
     postFxParams_.delayPingPong = cacheFx ("delayPingPong");
+    postFxParams_.delayTone = cacheFx ("delayTone");
+    postFxParams_.delayFuzz = cacheFx ("delayFuzz");
     postFxParams_.reverbBypass = cacheFx ("reverbBypass");
     postFxParams_.reverbMix = cacheFx ("reverbMix");
     postFxParams_.reverbDecay = cacheFx ("reverbDecay");
@@ -844,6 +877,7 @@ NAMBerryProcessor::NAMBerryProcessor()
     postFxParams_.reverbIrLeftCutoff = cacheFx ("reverbIrLeftCutoff");
     postFxParams_.reverbIrRightCutoff = cacheFx ("reverbIrRightCutoff");
     postFxParams_.reverbIrLevel = cacheFx ("reverbIrLevel");
+    performanceModeParam_ = cacheFx ("reducedMotion");
 
     // Instantiate all DSP modules
     dropTuner_ = std::make_unique<DropTuner>();
@@ -1114,8 +1148,10 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     }
 
     // Spectrum tap for the Post EQ graph: captures the shaped signal before
-    // the cabinet. pushBlock only copies samples into a lock-free FIFO.
-    postEqSpectrum_.pushBlock (buffer);
+    // the cabinet. pushBlock only copies samples into a lock-free FIFO, and
+    // performance mode skips it entirely.
+    if (performanceModeParam_ == nullptr || performanceModeParam_->load() <= 0.5f)
+        postEqSpectrum_.pushBlock (buffer);
 
     // 9. IR Loader (two IRs, crossfaded by one blend control)
     {
@@ -1146,6 +1182,7 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         postEffects_->setChorusDepth (value (fx.chorusDepth));
         postEffects_->setChorusFeedback (value (fx.chorusFeedback));
         postEffects_->setChorusDelay (value (fx.chorusDelay));
+        postEffects_->setChorusStereo (value (fx.chorusStereo) > 0.5f);
 
         postEffects_->setFlangerBypass (value (fx.flangerBypass) > 0.5f);
         postEffects_->setFlangerMix (value (fx.flangerMix));
@@ -1166,6 +1203,8 @@ void NAMBerryProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         postEffects_->setDelayTimeMs (value (fx.delayTimeMs));
         postEffects_->setDelayFeedback (value (fx.delayFeedback));
         postEffects_->setDelayPingPong (value (fx.delayPingPong) > 0.5f);
+        postEffects_->setDelayTone (value (fx.delayTone));
+        postEffects_->setDelayFuzz (value (fx.delayFuzz));
 
         postEffects_->setReverbBypass (value (fx.reverbBypass) > 0.5f);
         postEffects_->setReverbMix (value (fx.reverbMix));
@@ -1355,8 +1394,14 @@ void NAMBerryProcessor::setStateInformation (const void* data, int sizeInBytes)
             if (version < 11)
                 migrateReverbIrCutoffState (state);
 
-            if (version < kFxStateVersion)
+            if (version < kReverbIrLevelStateVersion)
                 migrateReverbIrLevelState (state);
+
+            if (version < kChorusStereoStateVersion)
+                migrateChorusStereoState (state);
+
+            if (version < kDelayToneStateVersion)
+                migrateDelayCharacterState (state);
 
             apvts_.replaceState (state);
 

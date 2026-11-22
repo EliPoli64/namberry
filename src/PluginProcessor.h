@@ -161,6 +161,7 @@ private:
         std::atomic<float>* chorusDepth = nullptr;
         std::atomic<float>* chorusFeedback = nullptr;
         std::atomic<float>* chorusDelay = nullptr;
+        std::atomic<float>* chorusStereo = nullptr;
         std::atomic<float>* flangerBypass = nullptr;
         std::atomic<float>* flangerMix = nullptr;
         std::atomic<float>* flangerRate = nullptr;
@@ -179,6 +180,8 @@ private:
         std::atomic<float>* delayTimeMs = nullptr;
         std::atomic<float>* delayFeedback = nullptr;
         std::atomic<float>* delayPingPong = nullptr;
+        std::atomic<float>* delayTone = nullptr;
+        std::atomic<float>* delayFuzz = nullptr;
         std::atomic<float>* reverbBypass = nullptr;
         std::atomic<float>* reverbMix = nullptr;
         std::atomic<float>* reverbDecay = nullptr;
@@ -192,6 +195,10 @@ private:
     };
 
     CachedPostFxParams postFxParams_;
+
+    // Cached so processBlock can skip the spectrum tap in performance mode
+    // without constructing a parameter-ID string.
+    std::atomic<float>* performanceModeParam_ = nullptr;
 
     std::atomic<int> pendingLatencySamples_ { 0 };
     std::atomic<int> appliedLatencySamples_ { 0 };

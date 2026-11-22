@@ -33,7 +33,7 @@
 Input → Input Gain (−24…+24 dB, default 0 dB) → Tuner (detect) → Impersonator (pickup shaper) → Pitch (capo/drop) → Noise Gate → Acoustic Sim → Compressor → NAM Pedal/Preamp → Pre-Amp EQ →
 NAM Amp Loader (Gain, Bass, Mid, Treble, Presence, Depth, Output) →
 Post-Amp EQ (8-band graphical) → IR Loader (IR 1 / IR 2 + Blend) →
-Post Effects (Chorus/Flanger/Phaser/Delay/Reverb) → Reverb IR (two parallel stereo convolution slots with independent Mix, tail Cutoff and a local wet boost/cut Master) → Room (short dark ambience) → Master (+6 dB fixed trim) → Output
+Post Effects (Chorus / Vibrato, Flanger, Phaser, Delay, Reverb) → Reverb IR (two parallel stereo convolution slots with independent Mix, tail Cutoff and a local wet boost/cut Master) → Room (short dark ambience) → Master (+6 dB fixed trim) → Output
 ```
 
 ### 3.2 UI Section Order
@@ -59,7 +59,9 @@ The editor should be organized into the following five sections, in this exact o
    - Output
 3. Post Amp EQ
    - Full-width, full-height graphical 8-band EQ
+   - A label above the graph shows the focused band number and its frequency (or the focused HPF/LPF)
    - Draggable nodes for frequency and gain, mouse wheel for Q
+   - Double-clicking a node disables that band by flattening its gain; the node becomes a hollow outline (marked **OFF**) and a second double-click restores the previous gain
    - Focused-band Boost and Q knobs that retarget to the selected band; the Q knob also follows the selected HPF/LPF
    - Adjustable high-pass and low-pass filters with draggable cutoff handles
    - Live magnitude spectrum of the post-EQ signal drawn behind the response curve
@@ -67,7 +69,7 @@ The editor should be organized into the following five sections, in this exact o
 4. IR
    - 2 IR rows (filename screen, **LOAD**, arrows), one Blend knob, section bypass
 5. Post Effects
-   - Chorus
+   - Chorus / Vibrato (100 % Mix removes the dry signal)
    - Flanger
    - Phaser
    - Delay
@@ -79,6 +81,8 @@ This order keeps the pedal before the amp, keeps all pre-amp shaping before the 
 Each tab uses a hardware icon (pedal, amp, EQ, speaker, sparkle) with a small label. Right-click any tab to bypass that section; the icon dims and shows a red LED while bypassed.
 
 A persistent bottom strip groups **Input Gain** (−24…+24 dB, default 0 dB), the tab buttons and **Room** / **Master** (master Output) into one centred row, with the knobs sitting immediately beside the tab bar. The tab buttons are a fixed, generous size with a larger icon and label.
+
+The header **Performance** toggle (parameter ID `reducedMotion`, kept for state compatibility) makes the editor lighter without changing audio: panel hover glows snap instead of animating and their timers stop, the Post EQ spectrum FFT and its repaints are skipped, the audio-thread spectrum tap is bypassed, and the tuner drops the moving strobe bands. The preference is saved with the plugin state.
 
 ### 3.2 Class Structure (High-Level)
 
@@ -102,7 +106,7 @@ A persistent bottom strip groups **Input Gain** (−24…+24 dB, default 0 dB), 
   - `ChorusEnsemble` (three-voice stereo chorus) and `ModulatedDelay` (flanger delay core with feedback)
   - `Phaser` (selectable 4/8/12-stage all-pass cascade)
   - `RoomSim` (two short, offset filtered delays with low feedback and a single amount control)
-  - `Delay` (ping-pong stereo or centred mono, with feedback, mix, time)
+  - `Delay` (ping-pong stereo or centred mono, with feedback, mix, time, tone tilt and fuzz saturation)
   - `Reverb` (algorithmic or convolution-based)
   - `DropTuner` (fundamental frequency detection for the tuner display)
   - `Impersonator` (bridge/neck pickup-shaping preamp)
@@ -168,18 +172,19 @@ A persistent bottom strip groups **Input Gain** (−24…+24 dB, default 0 dB), 
 - **Goal**: Provide three independent, footswitchable modulation pedals with the parameter ranges from `fx-spec.md`.
 - **Implementation**:
   - A shared `ModulationLfo` class provides sine and triangle modulation with smoothed rate and optional per-channel phase offset.
-  - **Chorus**: A Boss-style three-voice stereo ensemble. One mono delay buffer is read at three taps with 0°/120°/240° LFO phases panned left/centre/right. Each voice sums a slow sine LFO (the Rate knob) with a faster shallow sine (6× Rate, clamped to 2–8 Hz). Controls: Rate 0.1–5 Hz (0.8), Depth 0–100 % (50), Feedback 0–70 % (15), Delay 5–30 ms (15), Mix 0–50 % (50).
+  - **Chorus**: A Boss-style three-voice stereo ensemble. One mono delay buffer is read at three taps with 0°/120°/240° LFO phases panned left/centre/right. Each voice sums a slow sine LFO (the Rate knob) with a faster shallow sine (6× Rate, clamped to 2–8 Hz). Controls: Rate 0.1–5 Hz (0.8), Depth 0–100 % (50), Feedback 0–70 % (15), Delay 5–30 ms (15), Mix 0–100 % (50), and a **Stereo** switch (on by default).
   - **Flanger**: A shorter stereo delay using a triangle LFO and a signed feedback path. Controls: Rate 0.05–10 Hz (0.4), Depth 0–100 % (60), Manual 0.5–10 ms (2), Feedback −95…+95 % (40), Mix 0–50 % (50).
   - **Phaser**: Cascaded first-order all-pass stages with a sine LFO sweeping around 600 Hz by up to ±1.5 octaves at full depth. Controls: Rate 0.05–8 Hz (0.5), Depth 0–100 % (70), Feedback 0–90 % (30), Stages 4/8/12 (8), Mix 0–50 % (50).
-  - The mix range ends at the old 50 % maximum; the wet path gets a 2× boost so maximum mix is both capped and louder. Chorus uses Lagrange3rd fractional delay taps with a 120 Hz high-pass, a 5.5 kHz low-pass and gentle saturation for a BBD-like wet voice; flanger uses a linear fractional delay line with feedback. The phaser uses 4, 8 or 12 all-pass stages and feedback.
+  - Mix runs from 0 % (dry) to 100 % (no dry, pure vibrato); 50 % keeps the classic chorus blend. The wet path is boosted 2× up to 50 % mix; above that the wet gain stays fixed and only the dry fades, so full wet does not jump in level. The **Stereo** switch crossfades the panned voices to a centred mono wet signal so the whole effect can run in mono. Chorus uses Lagrange3rd fractional delay taps with a 120 Hz high-pass, a 5.5 kHz low-pass and gentle saturation for a BBD-like wet voice; flanger uses a linear fractional delay line with feedback. The phaser uses 4, 8 or 12 all-pass stages and feedback.
   - Each effect has its own bypass footswitch and resets its delay/filter state when bypassed.
 
 ### 4.7 Delay
 - **Goal**: Musical delay that can bounce echoes between stereo channels or keep them centred.
-- **Implementation**: Two `juce::dsp::DelayLine` channels with Time (10 ms–2 s), Feedback (0–10, where 0 is one repeat and 10 is a near-endless tail), Mix (0–100%), and a Ping-Pong/Mono toggle (default Ping-Pong).
+- **Implementation**: Two `juce::dsp::DelayLine` channels with Time (10 ms–2 s), Feedback (0–10, where 0 is one repeat and 10 is a near-endless tail), Mix (0–100%), Tone (−100…+100 %, default 0, neutral), Fuzz (0–100 %, default 0) and a Ping-Pong/Mono toggle (default Ping-Pong).
   - Ping-Pong sums the input to mono, feeds the left delay, then feeds the right delay from the left echo. The right echo is scaled by Feedback and returned to the left, so repeats alternate L/R once per feedback loop.
   - Mono feeds one delay from the summed input and copies the centred echo to both outputs. The dry signal stays stereo in both modes.
   - Switching mode or bypassing the delay clears both delay lines so stale cross-fed repeats cannot leak through.
+  - Tone is a one-pole tilt at 800 Hz: negative values keep the lows and remove highs (dark repeats), positive values keep the highs and remove lows (bright repeats), and 0 is exactly flat. Fuzz blends the delay-line input into a `tanh` soft clipper whose drive rises with the control (unity small-signal gain, compressed peaks), so repeats get tape-like saturation without running away. Both are smoothed over 20 ms and applied to the delay-line input, which means the character compounds with every feedback repeat. State version 14 adds both parameters at their neutral defaults.
 
 ### 4.8 Room
 - **Goal**: Make a lone guitar sound bigger with short, audible stereo early reflections, without changing the dry level or touching the Reverb effect.
@@ -267,7 +272,7 @@ A persistent bottom strip groups **Input Gain** (−24…+24 dB, default 0 dB), 
   - With no IR loaded, both Mix knobs at 0 %, or while bypassed the stage is an exact passthrough. Engaging bypass clears both convolution tails so stale reverb cannot leak through. `reset()` also snaps the Mix gains without unloading the IRs.
   - The editor reuses the cabinet loader's filename screen, folder popup, **LOAD** button, arrows and drag-and-drop, but gives the screen more width by narrowing the file controls. It presents two rows in a `UnitStyle::Pedal` with accented **Mix L** / **Mix R** knobs, **Cutoff L** / **Cutoff R** knobs, a **Master** knob bound to `reverbIrLevel` for a local wet boost/cut, and a shared bypass footswitch.
   - Each slot has its own last-used folder (`lastReverbIrLeftDirectory` / `lastReverbIrRightDirectory`) and persisted path (`reverbIrLeftPath` / `reverbIrRightPath`), separate from the cabinet IRs. Presets store them as the `FILES` attributes `reverbIrLeft` / `reverbIrRight`; missing files warn without discarding parameter state. A v9 preset's single `reverbIr` path loads into the left slot.
-- **Parameters**: `reverbIrBypass` (default on), `reverbIrLeftMix` and `reverbIrRightMix` (0–100 %, default 25 %), `reverbIrLeftCutoff` and `reverbIrRightCutoff` (0.05–3 s, default 3 s), and `reverbIrLevel` (-24 to +12 dB, default 0 dB). State version 9 added the single `reverbIrMix`; version 10 replaces it with the two slot Mix parameters and seeds both from the old value. Version 11 adds the two Cutoff parameters with the maximum default. Version 12 replaces the pedal's global-Master link with the local Level parameter at unity gain.
+- **Parameters**: `reverbIrBypass` (default on), `reverbIrLeftMix` and `reverbIrRightMix` (0–100 %, default 25 %), `reverbIrLeftCutoff` and `reverbIrRightCutoff` (0.05–3 s, default 3 s), and `reverbIrLevel` (-24 to +12 dB, default 0 dB). State version 9 added the single `reverbIrMix`; version 10 replaces it with the two slot Mix parameters and seeds both from the old value. Version 11 adds the two Cutoff parameters with the maximum default. Version 12 replaces the pedal's global-Master link with the local Level parameter at unity gain. Version 13 adds the chorus stereo switch; version 14 adds the delay Tone/Fuzz parameters.
 
 ---
 
