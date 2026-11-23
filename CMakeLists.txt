@@ -18,6 +18,18 @@ set(NA_DIR "${CMAKE_SOURCE_DIR}/deps/NeuralAudio")
 if(EXISTS "${NA_DIR}/CMakeLists.txt")
     # Trim optional heavy pieces we do not need.
     set(BUILD_UTILS OFF CACHE BOOL "" FORCE)
+
+    # NeuralAudio still uses the pre-1.8 form
+    #   source_group(<name> <dir> FILES <src>...)
+    # Older CMake ignored the stray <dir> argument, CMake 4.5 rejects it with
+    # "source_group given unknown argument". Source groups only affect IDE
+    # folder layout, so a no-op command is enough. The macro shadows the
+    # built-in for the rest of the configure run, so NAMBerry's own CMake code
+    # must not call source_group() while it is in place. Remove the shim once
+    # NeuralAudio fixes its CMakeLists.
+    macro(source_group)
+    endmacro()
+
     add_subdirectory(${NA_DIR} NeuralAudioBuild)
     set(NAM_LINK_TARGET NeuralAudio)
     set(NAM_AVAILABLE TRUE)
