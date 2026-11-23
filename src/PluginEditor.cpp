@@ -3,6 +3,8 @@
 #include "namberry/PostAmpEQ.h"
 #include "namberry/SignalSpectrum.h"
 
+#include <BinaryData.h>
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -21,6 +23,43 @@ constexpr juce::uint32 kPanelLine = 0xff34343a;
 constexpr juce::uint32 kAccent    = 0xff22d3ee;
 constexpr juce::uint32 kText      = 0xffd4d4d8;
 constexpr juce::uint32 kTextDim   = 0xff8b8b93;
+
+// Header wordmark, embedded from src/logoNameWhite.svg. The SVG is parsed
+// once into a Drawable so it stays crisp at any header size.
+const juce::Drawable* headerLogoName()
+{
+    static const std::unique_ptr<juce::Drawable> logo = []
+    {
+        return juce::Drawable::createFromImageData (
+            BinaryData::logoNameWhite_svg, (size_t) BinaryData::logoNameWhite_svgSize);
+    }();
+
+    return logo.get();
+}
+
+/// Square app icon rendered from src/icon.svg for the standalone window.
+const juce::Image& appIconImage()
+{
+    static const juce::Image icon = []
+    {
+        const std::unique_ptr<juce::Drawable> drawable =
+            juce::Drawable::createFromImageData (
+                BinaryData::icon_svg, (size_t) BinaryData::icon_svgSize);
+
+        juce::Image image (juce::Image::ARGB, 256, 256, true);
+
+        if (drawable != nullptr)
+        {
+            juce::Graphics g (image);
+            drawable->drawWithin (g, image.getBounds().toFloat(),
+                                  juce::RectanglePlacement::centred, 1.0f);
+        }
+
+        return image;
+    }();
+
+    return icon;
+}
 
 using APVTS = juce::AudioProcessorValueTreeState;
 
@@ -5017,15 +5056,14 @@ void NAMBerryEditor::paint (juce::Graphics& g)
     for (int y = header.getY() + 3; y < header.getBottom(); y += 3)
         g.drawHorizontalLine (y, (float) header.getX(), (float) header.getRight());
 
-    g.setColour (juce::Colour (kAccent));
-    g.fillEllipse (17.0f, 24.0f, 8.0f, 8.0f);
-    g.setColour (juce::Colour (kAccent).withAlpha (0.25f));
-    g.fillEllipse (13.0f, 20.0f, 16.0f, 16.0f);
-
-    g.setColour (juce::Colours::white);
-    g.setFont (juce::FontOptions (22.0f, juce::Font::bold));
-    g.drawText ("NAMBERRY", header.reduced (34, 0),
-                juce::Justification::centredLeft);
+    if (const auto* logo = headerLogoName(); logo != nullptr)
+    {
+        // The SVG already contains the icon and the wordmark in white.
+        logo->drawWithin (g, juce::Rectangle<float> (10.0f, 8.0f, 140.0f, 44.0f),
+                          juce::RectanglePlacement::centred
+                              | juce::RectanglePlacement::onlyReduceInSize,
+                          1.0f);
+    }
 
     g.setColour (juce::Colour (kAccent).withAlpha (0.5f));
     g.fillRect (getLocalBounds().removeFromTop (60).removeFromBottom (2));
@@ -5115,8 +5153,31 @@ void NAMBerryEditor::applyPerformanceMode (bool enabled)
     repaint();
 }
 
+void NAMBerryEditor::parentHierarchyChanged()
+{
+    applyWindowIcon();
+}
+
+void NAMBerryEditor::applyWindowIcon()
+{
+    if (windowIconSet_ || windowIconAttempts_ > 60)
+        return;
+
+    ++windowIconAttempts_;
+
+    auto* window = dynamic_cast<juce::DocumentWindow*> (getTopLevelComponent());
+
+    if (window == nullptr || window->getPeer() == nullptr)
+        return;
+
+    window->setIcon (appIconImage());
+    windowIconSet_ = true;
+}
+
 void NAMBerryEditor::timerCallback()
 {
+    applyWindowIcon();
+
     if (performanceParam_ != nullptr)
         applyPerformanceMode (performanceParam_->load() > 0.5f);
 

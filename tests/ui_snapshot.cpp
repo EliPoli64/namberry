@@ -112,6 +112,10 @@ void dismissPopup (juce::Component& editor)
 
 bool writePng (const juce::File& file, const juce::Image& image)
 {
+    // FileOutputStream appends to an existing file, so truncate first or every
+    // run would leave the previous PNG at the start of the file.
+    file.deleteFile();
+
     juce::FileOutputStream stream (file);
 
     if (! stream.openedOk())
@@ -246,6 +250,9 @@ int main (int argc, char** argv)
 
         const auto image = editor.createComponentSnapshot (editor.getLocalBounds(), true, 1.0f);
         const auto file = outputDir.getChildFile (juce::String (names[tab]) + ".png");
+
+        // Truncate: FileOutputStream appends when the file already exists.
+        file.deleteFile();
 
         juce::FileOutputStream stream (file);
         if (! stream.openedOk())

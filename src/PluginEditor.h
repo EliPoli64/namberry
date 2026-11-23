@@ -21,6 +21,7 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    void parentHierarchyChanged() override;
 
 private:
     void timerCallback() override;
@@ -44,6 +45,7 @@ private:
                           std::function<void (const juce::File&)> onFileChosen);
 
     void applyPerformanceMode (bool enabled);
+    void applyWindowIcon();
 
     void showPresetMenu();
     void savePresetAs();
@@ -63,6 +65,8 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> reducedMotionAttachment_;
     std::atomic<float>* performanceParam_ = nullptr;
     bool performanceMode_ = false;
+    bool windowIconSet_ = false;
+    int windowIconAttempts_ = 0;
     juce::TextButton presetButton_;
     std::unique_ptr<juce::FileChooser> presetChooser_;
     std::unique_ptr<juce::FileChooser> fileChooser_;

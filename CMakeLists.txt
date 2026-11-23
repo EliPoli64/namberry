@@ -41,9 +41,17 @@ juce_add_plugin(NAMBerry
     PLUGIN_CODE NmBy
     FORMATS VST3 Standalone
     PRODUCT_NAME "NAMberry"
+    ICON_BIG "src/icon.svg"
 )
 
 juce_generate_juce_header(NAMBerry)
+
+# --- Embedded UI assets (header wordmark and app icon) ---
+juce_add_binary_data(NAMBerryBinaryData
+    SOURCES
+        src/logoNameWhite.svg
+        src/icon.svg
+)
 
 # --- Source Files ---
 target_sources(NAMBerry PRIVATE
@@ -81,6 +89,7 @@ target_include_directories(NAMBerry
 # --- Link Libraries ---
 target_link_libraries(NAMBerry
     PRIVATE
+        NAMBerryBinaryData
         juce::juce_audio_utils
         juce::juce_audio_processors
         juce::juce_audio_basics
