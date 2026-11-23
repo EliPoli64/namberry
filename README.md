@@ -1,14 +1,46 @@
-# NAMberry
-
 <p align="center">
   <img src="src/logoNameColored.png" alt="NAMberry logo" width="420">
 </p>
+
+<p align="center">
+  <a href="https://github.com/EliPoli64/namberry/releases/latest"><img src="https://img.shields.io/badge/download-latest%20release-2ea44f" alt="Download the latest release"></a>
+  <a href="https://github.com/EliPoli64/namberry/actions/workflows/build.yml"><img src="https://github.com/EliPoli64/namberry/actions/workflows/build.yml/badge.svg?branch=master" alt="Build and release (main)"></a>
+  <img src="https://img.shields.io/badge/version-0.1.0-blue" alt="Version 0.1.0">
+  <img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT">
+  <img src="https://img.shields.io/badge/formats-VST3%20%7C%20Standalone-9cf" alt="Formats: VST3 and Standalone">
+  <img src="https://img.shields.io/badge/platform-Linux%20x86__64-lightgrey" alt="Platform: Linux x86_64">
+</p>
+
+<p align="center">
+  <b>Two NAM captures, two IRs, and the whole pedalboard in one stereo plugin.</b><br>
+  amp · pedal/preamp · cabinet · EQ · modulation · delay · reverb · capo · tuner
+</p>
+
+<p align="center">
+  <code>two NAM models</code> <code>two IRs + blend</code> <code>capo / drop tune</code>
+  <code>strobe tuner</code> <code>acoustic sim</code> <code>impersonator</code>
+  <code>3-band + 8-band EQ</code> <code>chorus / flanger / phaser</code>
+  <code>delay</code> <code>room</code> <code>reverb</code> <code>presets</code>
+</p>
+
+<p align="center">
+  <a href="https://github.com/EliPoli64/namberry/releases/latest"><b>Download</b></a> ·
+  <a href="#install-the-vst3">Install</a> ·
+  <a href="#building">Build from source</a> ·
+  <a href="#signal-chain">Signal chain</a> ·
+  <a href="#using-namberry">Manual</a> ·
+  <a href="#known-limitations">Limitations</a>
+</p>
+
+# NAMberry
 
 NAMberry is an all-in-one NAM-based guitar amp and effects plugin. It combines a NAM amp capture, a second NAM pedal/preamp capture, two blendable IRs with a single Blend knob, dynamics, a 3-band pre-EQ plus an 8-band graphical post-EQ, modulation, ping-pong/mono delay, room, reverb, and a low-latency pitch stage for capo and drop tuning.
 
 The goal is to stop treating an amp capture as a single plugin in a long external chain. Load two captures, two cabinets, and a complete studio-style effects chain in one stereo plugin, with fast model browsing and a hardware-inspired interface.
 
 > The pedal is not a generic waveshaper. It is a **second NAM model**, loaded independently from the amp.
+
+**Current version:** `0.1.0` — prebuilt Linux Standalone and VST3 are on the [latest release](https://github.com/EliPoli64/namberry/releases/latest).
 
 ---
 
@@ -118,7 +150,8 @@ Then rescan plugins in the DAW.
 
 `.github/workflows/build.yml` builds both targets on every push to the mainline
 branch (`main`, or `master` on the current remote) on Ubuntu, and refreshes the
-rolling **latest** GitHub release with:
+rolling **[latest](https://github.com/EliPoli64/namberry/releases/latest)** GitHub
+release with:
 
 - `NAMberry-linux-standalone.zip` — unzip and run the `NAMberry` binary.
 - `NAMberry-linux-vst3.zip` — copy `NAMberry.vst3` into `~/.vst3`.
@@ -756,8 +789,10 @@ The snapshot tool is headless and does not need a DAW.
 - The plugin is **stereo in / stereo out only**.
 - Model and IR paths are **per-user settings**, not embedded in the DAW project. Moving a project to another machine may require reloading them.
 - `ui-spec.md` is an earlier Qt/QML exploration; the shipped UI is JUCE-native.
-- No NAM models or IR files are included. Use your own `.nam` captures and WAV/AIFF IRs.
-- The repository contains no project `LICENSE` file yet; add one before redistributing.
+- The repository contains no NAM models or IR files. Use your own `.nam` captures and WAV/AIFF IRs.
+- NAMberry is released under the **MIT licence** (see `LICENSE`). JUCE and the
+  optional Rubber Band engine keep their own licensing terms; see
+  [Third-party licences](#third-party-licences).
 
 ---
 
