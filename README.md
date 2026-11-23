@@ -12,6 +12,123 @@ The goal is to stop treating an amp capture as a single plugin in a long externa
 
 ---
 
+## Building
+
+### Prerequisites
+
+- CMake 3.22 or newer.
+- A C++20 compiler.
+- Git.
+- JUCE 8.0.6 cloned into `JUCE/`.
+- NeuralAudio cloned into `deps/NeuralAudio` with submodules.
+- Signalsmith Stretch and Linear cloned into `deps/`.
+
+```bash
+git clone --depth 1 --branch 8.0.6 \
+  https://github.com/juce-framework/JUCE.git JUCE
+
+git clone --depth 1 --recurse-submodules \
+  https://github.com/mikeoliphant/NeuralAudio.git deps/NeuralAudio
+
+git clone --depth 1 \
+  https://github.com/signalsmith-audio/signalsmith-stretch.git deps/signalsmith-stretch
+
+git clone --depth 1 \
+  https://github.com/signalsmith-audio/linear.git deps/signalsmith-linear
+```
+
+`JUCE/` and `deps/` are ignored by git; they must be present locally for a build.
+
+#### Linux packages
+
+On Fedora:
+
+```bash
+sudo dnf install cmake gcc-c++ git alsa-lib-devel \
+  freetype-devel fontconfig-devel \
+  libX11-devel libXext-devel libXrandr-devel libXinerama-devel \
+  libXcursor-devel libXcomposite-devel libXrender-devel \
+  libXfixes-devel libXau-devel libXdmcp-devel libxcb-devel
+```
+
+On Debian/Ubuntu:
+
+```bash
+sudo apt install build-essential cmake git libasound2-dev \
+  libfreetype6-dev libfontconfig1-dev \
+  libx11-dev libxext-dev libxrandr-dev libxinerama-dev \
+  libxcursor-dev libxcomposite-dev libxrender-dev \
+  libxfixes-dev libxau-dev libxdmcp-dev libxcb1-dev
+```
+
+macOS needs the Xcode command-line tools. Windows needs Visual Studio 2022 and CMake.
+
+> The helper scripts detect a local `/tmp/sysroot` used on machines without the Linux `-devel` packages. That directory is a local workaround, not part of the repository. On a fully provisioned machine the sysroot branch is skipped.
+
+### Configure and build
+
+Using presets:
+
+```bash
+cmake --preset standalone
+cmake --build --preset standalone
+```
+
+```bash
+cmake --preset vst3
+cmake --build --preset vst3
+```
+
+Using scripts:
+
+```bash
+./scripts/build-standalone.sh
+./scripts/build-vst3.sh
+```
+
+Add `--clean` to either script to wipe its build directory first.
+
+Artifacts:
+
+| Target | Path |
+|---|---|
+| Standalone | `build-standalone/NAMBerry_artefacts/Release/Standalone/NAMberry` |
+| VST3 | `build-vst3/NAMBerry_artefacts/Release/VST3/NAMberry.vst3` |
+
+The `build/` tree is used by the direct CMake/agent build and for the test targets:
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target NAMBerry_VST3 NAMBerry_Standalone
+```
+
+The presets and helper scripts use the Unix Makefiles generator. On Windows, configure with the Visual Studio generator (or adjust the preset) instead.
+
+### Install the VST3
+
+Copy `NAMberry.vst3` to:
+
+- Linux: `~/.vst3/`
+- macOS: `~/Library/Audio/Plug-Ins/VST3/`
+- Windows: `C:\Program Files\Common Files\VST3\`
+
+Then rescan plugins in the DAW.
+
+### Prebuilt releases (CI)
+
+`.github/workflows/build.yml` builds both targets on every push to the mainline
+branch (`main`, or `master` on the current remote) on Ubuntu, and refreshes the
+rolling **latest** GitHub release with:
+
+- `NAMberry-linux-standalone.zip` — unzip and run the `NAMberry` binary.
+- `NAMberry-linux-vst3.zip` — copy `NAMberry.vst3` into `~/.vst3`.
+- `SHA256SUMS.txt` — checksums.
+
+The release is rebuilt in place, so the asset URLs stay stable. Pull requests and
+feature branches do not publish anything.
+
+---
+
 ## Why this exists
 
 NAM captures sound excellent, but the surrounding workflow is usually fragmented:
@@ -327,123 +444,6 @@ scripts/
 JUCE/                   # cloned, ignored by git
 deps/                   # cloned, ignored by git
 ```
-
----
-
-## Building
-
-### Prerequisites
-
-- CMake 3.22 or newer.
-- A C++20 compiler.
-- Git.
-- JUCE 8.0.6 cloned into `JUCE/`.
-- NeuralAudio cloned into `deps/NeuralAudio` with submodules.
-- Signalsmith Stretch and Linear cloned into `deps/`.
-
-```bash
-git clone --depth 1 --branch 8.0.6 \
-  https://github.com/juce-framework/JUCE.git JUCE
-
-git clone --depth 1 --recurse-submodules \
-  https://github.com/mikeoliphant/NeuralAudio.git deps/NeuralAudio
-
-git clone --depth 1 \
-  https://github.com/signalsmith-audio/signalsmith-stretch.git deps/signalsmith-stretch
-
-git clone --depth 1 \
-  https://github.com/signalsmith-audio/linear.git deps/signalsmith-linear
-```
-
-`JUCE/` and `deps/` are ignored by git; they must be present locally for a build.
-
-#### Linux packages
-
-On Fedora:
-
-```bash
-sudo dnf install cmake gcc-c++ git alsa-lib-devel \
-  freetype-devel fontconfig-devel \
-  libX11-devel libXext-devel libXrandr-devel libXinerama-devel \
-  libXcursor-devel libXcomposite-devel libXrender-devel \
-  libXfixes-devel libXau-devel libXdmcp-devel libxcb-devel
-```
-
-On Debian/Ubuntu:
-
-```bash
-sudo apt install build-essential cmake git libasound2-dev \
-  libfreetype6-dev libfontconfig1-dev \
-  libx11-dev libxext-dev libxrandr-dev libxinerama-dev \
-  libxcursor-dev libxcomposite-dev libxrender-dev \
-  libxfixes-dev libxau-dev libxdmcp-dev libxcb1-dev
-```
-
-macOS needs the Xcode command-line tools. Windows needs Visual Studio 2022 and CMake.
-
-> The helper scripts detect a local `/tmp/sysroot` used on machines without the Linux `-devel` packages. That directory is a local workaround, not part of the repository. On a fully provisioned machine the sysroot branch is skipped.
-
-### Configure and build
-
-Using presets:
-
-```bash
-cmake --preset standalone
-cmake --build --preset standalone
-```
-
-```bash
-cmake --preset vst3
-cmake --build --preset vst3
-```
-
-Using scripts:
-
-```bash
-./scripts/build-standalone.sh
-./scripts/build-vst3.sh
-```
-
-Add `--clean` to either script to wipe its build directory first.
-
-Artifacts:
-
-| Target | Path |
-|---|---|
-| Standalone | `build-standalone/NAMBerry_artefacts/Release/Standalone/NAMberry` |
-| VST3 | `build-vst3/NAMBerry_artefacts/Release/VST3/NAMberry.vst3` |
-
-The `build/` tree is used by the direct CMake/agent build and for the test targets:
-
-```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --target NAMBerry_VST3 NAMBerry_Standalone
-```
-
-The presets and helper scripts use the Unix Makefiles generator. On Windows, configure with the Visual Studio generator (or adjust the preset) instead.
-
-### Install the VST3
-
-Copy `NAMberry.vst3` to:
-
-- Linux: `~/.vst3/`
-- macOS: `~/Library/Audio/Plug-Ins/VST3/`
-- Windows: `C:\Program Files\Common Files\VST3\`
-
-Then rescan plugins in the DAW.
-
-### Prebuilt releases (CI)
-
-`.github/workflows/build.yml` builds both targets on every push to the mainline
-branch (`main`, or `master` on the current remote) on Ubuntu, and refreshes the
-rolling **latest** GitHub release with:
-
-- `NAMberry-linux-standalone.zip` — unzip and run the `NAMberry` binary.
-- `NAMberry-linux-vst3.zip` — copy `NAMberry.vst3` into `~/.vst3`.
-- `SHA256SUMS.txt` — checksums.
-
-The release is rebuilt in place, so the asset URLs stay stable. Pull requests and
-feature branches do not publish anything.
 
 ---
 
