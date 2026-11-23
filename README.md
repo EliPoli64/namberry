@@ -1,5 +1,9 @@
 # NAMberry
 
+<p align="center">
+  <img src="src/logoNameColored.png" alt="NAMberry logo" width="420">
+</p>
+
 NAMberry is an all-in-one NAM-based guitar amp and effects plugin. It combines a NAM amp capture, a second NAM pedal/preamp capture, two blendable IRs with a single Blend knob, dynamics, a 3-band pre-EQ plus an 8-band graphical post-EQ, modulation, ping-pong/mono delay, room, reverb, and a low-latency pitch stage for capo and drop tuning.
 
 The goal is to stop treating an amp capture as a single plugin in a long external chain. Load two captures, two cabinets, and a complete studio-style effects chain in one stereo plugin, with fast model browsing and a hardware-inspired interface.
