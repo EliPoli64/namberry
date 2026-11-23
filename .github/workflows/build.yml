@@ -1,0 +1,106 @@
+name: Build and release (main)
+
+# Builds the Linux Standalone and VST3 from the mainline branch and refreshes
+# the rolling GitHub release. Pull requests and feature branches do not run it.
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: main-release
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Standalone + VST3 (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake git pkg-config zip \
+            libasound2-dev libfreetype6-dev libfontconfig1-dev \
+            libx11-dev libxext-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxcomposite-dev libxrender-dev \
+            libxfixes-dev libxau-dev libxdmcp-dev libxcb1-dev
+
+      - name: Clone JUCE and DSP dependencies
+        run: |
+          mkdir -p deps
+          git clone --depth 1 --branch 8.0.6 \
+            https://github.com/juce-framework/JUCE.git JUCE
+          git clone --depth 1 --recurse-submodules --shallow-submodules \
+            https://github.com/mikeoliphant/NeuralAudio.git deps/NeuralAudio
+          git clone --depth 1 \
+            https://github.com/signalsmith-audio/signalsmith-stretch.git \
+            deps/signalsmith-stretch
+          git clone --depth 1 \
+            https://github.com/signalsmith-audio/linear.git \
+            deps/signalsmith-linear
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build Standalone and VST3
+        run: cmake --build build --target NAMBerry_Standalone NAMBerry_VST3 -j"$(nproc)"
+
+      - name: Package artifacts
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist/NAMberry-linux-standalone
+          cp build/NAMBerry_artefacts/Release/Standalone/NAMberry \
+            dist/NAMberry-linux-standalone/
+          cp README.md LICENSE dist/NAMberry-linux-standalone/
+
+          ( cd build/NAMBerry_artefacts/Release/VST3 \
+              && zip -r "$GITHUB_WORKSPACE/dist/NAMberry-linux-vst3.zip" NAMberry.vst3 )
+
+          ( cd dist \
+              && zip -r NAMberry-linux-standalone.zip NAMberry-linux-standalone )
+
+          rm -rf dist/NAMberry-linux-standalone
+          ( cd dist && sha256sum ./*.zip > SHA256SUMS.txt )
+
+          ls -l dist
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: NAMBerry-linux-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Publish rolling release
+        uses: softprops/action-gh-release@v2
+        with:
+          # A single rolling `latest` tag keeps one release per mainline push
+          # instead of creating a tag for every build.
+          tag_name: latest
+          name: NAMBerry latest (main)
+          make_latest: true
+          fail_on_unmatched_files: true
+          body: |
+            Automated Linux build from `${{ github.ref_name }}`.
+
+            - Commit: [`${{ github.sha }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
+            - Workflow run: [${{ github.run_number }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+            Assets:
+            - `NAMberry-linux-standalone.zip` — Standalone application (unzip, then `chmod +x NAMberry` if needed)
+            - `NAMberry-linux-vst3.zip` — `NAMberry.vst3` bundle (copy into `~/.vst3`)
+            - `SHA256SUMS.txt` — checksums
+
+            Built on Ubuntu (x86_64). For other platforms, see `README.md`.
+          files: dist/*
