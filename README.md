@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="https://github.com/EliPoli64/namberry/releases/latest"><img src="https://img.shields.io/badge/download-latest%20release-2ea44f" alt="Download the latest release"></a>
-  <a href="https://github.com/EliPoli64/namberry/actions/workflows/build.yml"><img src="https://github.com/EliPoli64/namberry/actions/workflows/build.yml/badge.svg?branch=master" alt="Build and release (main)"></a>
+  <a href="https://github.com/EliPoli64/namberry/actions/workflows/build.yml"><img src="https://github.com/EliPoli64/namberry/actions/workflows/build.yml/badge.svg?branch=master" alt="Build, test and release"></a>
   <img src="https://img.shields.io/badge/version-0.1.0-blue" alt="Version 0.1.0">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT">
   <img src="https://img.shields.io/badge/formats-VST3%20%7C%20Standalone-9cf" alt="Formats: VST3 and Standalone">
@@ -148,17 +148,22 @@ Then rescan plugins in the DAW.
 
 ### Prebuilt releases (CI)
 
-`.github/workflows/build.yml` builds both targets on every push to the mainline
-branch (`main`, or `master` on the current remote) on Ubuntu, and refreshes the
-rolling **[latest](https://github.com/EliPoli64/namberry/releases/latest)** GitHub
-release with:
+`.github/workflows/build.yml` runs on every branch push. It builds and tests the
+plugin on Ubuntu, Windows and macOS, then refreshes a rolling Linux release:
+
+- Pushes to the mainline branch (`main`, or `master` on the current remote) update
+  the **stable** release tagged
+  **[latest](https://github.com/EliPoli64/namberry/releases/latest)**.
+- Pushes to any other branch (for example `dev`) update the **beta** release tagged
+  **[beta](https://github.com/EliPoli64/namberry/releases/tag/beta)**.
+
+Both releases are rebuilt in place, so the download URLs stay stable. They contain:
 
 - `NAMberry-linux-standalone.zip` — unzip and run the `NAMberry` binary.
 - `NAMberry-linux-vst3.zip` — copy `NAMberry.vst3` into `~/.vst3`.
 - `SHA256SUMS.txt` — checksums.
 
-The release is rebuilt in place, so the asset URLs stay stable. Pull requests and
-feature branches do not publish anything.
+Pull requests are not handled separately; they are covered by branch pushes.
 
 ---
 

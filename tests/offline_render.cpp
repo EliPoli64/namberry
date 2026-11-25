@@ -2615,7 +2615,7 @@ int runReverbIrStateTest()
                      && std::abs (migratedLeftCutoff - 3.0f) < 1.0e-4f
                      && std::abs (migratedRightCutoff - 3.0f) < 1.0e-4f
                      && std::abs (migratedLevel) < 1.0e-4f
-                     && version == 12
+                     && version == 14
                      && legacyRemoved
                      && keptBypass < 0.5f
                      && std::abs (keptLeft - 0.3f) < 1.0e-4f

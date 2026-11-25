@@ -297,12 +297,22 @@ Create a root `CMakeLists.txt` that:
 - **Linux**: Use Clang + Ninja. Build the VST3 target. Static linking of `libstdc++` and `libgcc` may be necessary for distribution (`-static-libstdc++ -static-libgcc`).
 
 ### 5.3 CI/CD (GitHub Actions)
-Set up a matrix build for `ubuntu-latest`, `windows-latest`, and `macos-latest`. Each job runs:
-```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release
-```
-Artifacts: `.vst3` (all), `.component` (AU, macOS), `.aaxplugin` (if SDK available), and Standalone executables.
+`.github/workflows/build.yml` runs on every branch push and on `workflow_dispatch`:
+
+- A Linux job (`ubuntu-latest`) installs the JUCE build dependencies, clones JUCE 8.0.6
+  and the `deps/` modules, then configures and builds the Standalone, VST3 and both
+  test targets with `cmake -B build -DCMAKE_BUILD_TYPE=Release`. It runs the full
+  deterministic offline DSP test suite plus the headless UI snapshot (under `xvfb-run`)
+  and packages the three Linux release assets.
+- A portability matrix (`windows-latest`, `macos-latest`) performs the same build and
+  offline DSP tests. It does not gate the Linux release; failures there are visible but
+  do not block the published artifacts.
+- Pushes to the mainline branch (`master`, or `main`) refresh the stable release tagged
+  `latest` (`make_latest: true`).
+- Pushes to any other branch refresh the beta release tagged `beta` (`prerelease: true`,
+  `make_latest: false`).
+- Both releases are rebuilt in place so the asset URLs stay stable. Assets are
+  `NAMberry-linux-standalone.zip`, `NAMberry-linux-vst3.zip` and `SHA256SUMS.txt`.
 
 ---
 
@@ -346,7 +356,7 @@ Artifacts: `.vst3` (all), `.component` (AU, macOS), `.aaxplugin` (if SDK availab
 ### Phase 6: Build, Test, & Release (Weeks 11–12)
 - [ ] Finalize CMake static linking flags for all platforms.
 - [ ] Run `pluginval` for validation.
-- [ ] Set up GitHub Actions CI for automated builds.
+- [x] Set up GitHub Actions CI for automated builds.
 - [ ] Write user manual and package installers.
 
 ---
