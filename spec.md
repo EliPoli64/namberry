@@ -190,8 +190,8 @@ The header **Performance** toggle (parameter ID `reducedMotion`, kept for state 
 - **Goal**: Make a lone guitar sound bigger with short, audible stereo early reflections, without changing the dry level or touching the Reverb effect.
 - **Implementation**: A `RoomSim` stage after `PostEffects` and before the master trim.
   - Input channels are summed to mono, then fed to two filtered feedback delays with 28 ms and 34 ms lengths. The offset produces a wide stereo image from the mono source.
-  - Feedback is intentionally low: 3 % at minimum amount and 15 % at full amount. The delayed guitar is the dominant sound; repeats decay almost immediately rather than becoming a reverb tail.
-  - The wet path is 120 Hz high-passed and 6 kHz low-passed so the reflections stay dark but remain audible. Maximum wet gain is 0.8 (about -2 dB). Dry stays at unity.
+  - Feedback is intentionally low: 1 % at minimum amount and 5 % at full amount. The delayed guitar is the dominant sound; repeats decay almost immediately rather than becoming a reverb tail.
+  - The wet path is 200 Hz high-passed and 4.5 kHz low-passed so the reflections stay dark, mid-focused and remain audible. Maximum wet gain is 0.8 (about -2 dB). Dry stays at unity.
   - **Room** (0–100 %, default 0 %) fades the wet path and increases feedback. 0 % is an exact passthrough; stale delay state is cleared when the room is turned back on.
   - All delay lines and filters are allocated in `prepare()` and cleared by `reset()`; the parameter is read from a cached raw APVTS atomic on the audio thread.
   - The parameter is `roomAmount`. State version 8 migrates `imageMix` (or older `roomBlend`) to `roomAmount`, removes `imageWidth`, `imageMix`, `roomSize`, `roomBlend` and `roomBypass`, and adds `delayPingPong` with a default-on value for older states.

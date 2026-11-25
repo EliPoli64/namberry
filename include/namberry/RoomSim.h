@@ -29,10 +29,10 @@ public:
 private:
     static constexpr float kDelayLeftMs = 28.0f;
     static constexpr float kDelayRightMs = 34.0f;
-    static constexpr float kMinFeedback = 0.03f;
-    static constexpr float kMaxFeedback = 0.15f;
-    static constexpr float kWetHighPassHz = 120.0f;
-    static constexpr float kWetLowPassHz = 6000.0f;
+    static constexpr float kMinFeedback = 0.01f;
+    static constexpr float kMaxFeedback = 0.05f;
+    static constexpr float kWetHighPassHz = 200.0f;
+    static constexpr float kWetLowPassHz = 4500.0f;
     static constexpr float kFilterQ = 0.707f;
     static constexpr float kMaxWetGain = 0.8f;
     static constexpr float kSmoothingMs = 30.0f;
