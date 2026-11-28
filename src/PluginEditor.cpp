@@ -16,25 +16,66 @@ namespace namberry {
 namespace {
 
 //==============================================================================
-// Palette
-constexpr juce::uint32 kBg        = 0xff111113;
-constexpr juce::uint32 kPanel     = 0xff202024;
-constexpr juce::uint32 kPanelLine = 0xff34343a;
-constexpr juce::uint32 kAccent    = 0xff22d3ee;
-constexpr juce::uint32 kText      = 0xffd4d4d8;
-constexpr juce::uint32 kTextDim   = 0xff8b8b93;
+// Palette — light studio bench with the brand indigo (#0E0052) and white.
+// The gear carries the colour: gold, tolex, brushed metal and one bright
+// die-cast hue per effect. Dark LCD readouts keep text contrast high.
+constexpr juce::uint32 kBg              = 0xffe4e7f1;
+constexpr juce::uint32 kPanel           = 0xfff5f6fa;
+constexpr juce::uint32 kSurfaceRaised   = 0xff0e0052;
+constexpr juce::uint32 kPanelLine       = 0xffbfc5da;
+constexpr juce::uint32 kPanelLineStrong = 0xff8f96b3;
+constexpr juce::uint32 kKnobBody        = 0xff2b2b33;
+constexpr juce::uint32 kAccent          = 0xff0e0052;
+constexpr juce::uint32 kText            = 0xff191430;
+constexpr juce::uint32 kTextDim         = 0xff4c4870;
 
-// Header wordmark, embedded from src/logoNameWhite.svg. The SVG is parsed
+// Dark LCD screens (filename readouts, tuner, EQ graph): bright text on
+// near-black reads clearly on every chassis colour.
+constexpr juce::uint32 kScreen       = 0xff12151c;
+constexpr juce::uint32 kScreenLine   = 0xff2d3345;
+constexpr juce::uint32 kScreenText   = 0xffe8ecf6;
+constexpr juce::uint32 kScreenDim    = 0xff8d95b2;
+constexpr juce::uint32 kScreenGlow   = 0xff9db4ff;
+// Header wordmark, embedded from src/logoNameColored.svg. The SVG is parsed
 // once into a Drawable so it stays crisp at any header size.
-const juce::Drawable* headerLogoName()
+const juce::Drawable* headerLogoNameColored()
 {
     static const std::unique_ptr<juce::Drawable> logo = []
     {
         return juce::Drawable::createFromImageData (
-            BinaryData::logoNameWhite_svg, (size_t) BinaryData::logoNameWhite_svgSize);
+            BinaryData::logoNameColored_svg, (size_t) BinaryData::logoNameColored_svgSize);
     }();
-
     return logo.get();
+}
+
+/// Baumans typeface used for every label in the editor.
+static juce::Typeface::Ptr baumansTypeface()
+{
+    static juce::Typeface::Ptr typeface = juce::Typeface::createSystemTypefaceFor (
+        BinaryData::BaumansRegular_ttf, (size_t) BinaryData::BaumansRegular_ttfSize);
+    return typeface;
+}
+
+static juce::Font baumansFont (float size)
+{
+    if (auto tf = baumansTypeface())
+        return juce::Font (juce::FontOptions (tf).withHeight (size));
+    return juce::Font (juce::FontOptions (size));
+}
+
+/// Seven-segment typeface used for NAM/IR selection displays.
+static juce::Typeface::Ptr sevenSegmentTypeface()
+{
+    static juce::Typeface::Ptr typeface = juce::Typeface::createSystemTypefaceFor (
+        BinaryData::SevenSegment_ttf, (size_t) BinaryData::SevenSegment_ttfSize);
+    return typeface;
+}
+
+static juce::Font sevenSegmentFont (float size)
+{
+    if (auto tf = sevenSegmentTypeface())
+        return juce::Font (juce::FontOptions (tf).withHeight (size));
+    return juce::Font (juce::FontOptions (size));
 }
 
 /// Square app icon rendered from src/icon.svg for the standalone window.
@@ -87,11 +128,16 @@ void drawBrushedPanel (juce::Graphics& g, juce::Rectangle<float> b,
                                              bottom, b.getX(), b.getBottom(), false));
     g.fillRoundedRectangle (b, radius);
 
-    g.setColour (juce::Colours::white.withAlpha (0.03f));
+    // Fine horizontal brushing.
+    g.setColour (juce::Colours::white.withAlpha (0.10f));
     for (float y = b.getY() + 2.0f; y < b.getBottom(); y += 3.0f)
+        g.drawHorizontalLine ((int) y, b.getX() + 2.0f, b.getRight() - 2.0f);
+    g.setColour (juce::Colours::black.withAlpha (0.05f));
+    for (float y = b.getY() + 3.5f; y < b.getBottom(); y += 3.0f)
         g.drawHorizontalLine ((int) y, b.getX() + 2.0f, b.getRight() - 2.0f);
 }
 
+//==============================================================================
 juce::Array<juce::File> listMatchingFiles (const juce::File& directory,
                                            const juce::StringArray& extensions)
 {
@@ -140,7 +186,7 @@ class HardwareLookAndFeel : public juce::LookAndFeel_V4
 public:
     HardwareLookAndFeel()
     {
-        auto scheme = getDarkColourScheme();
+        auto scheme = getLightColourScheme();
         scheme.setUIColour (ColourScheme::windowBackground, juce::Colour (kBg));
         scheme.setUIColour (ColourScheme::widgetBackground, juce::Colour (kPanel));
         setColourScheme (scheme);
@@ -150,13 +196,13 @@ public:
         setColour (juce::Slider::thumbColourId, juce::Colour (kAccent));
         setColour (juce::Label::textColourId, juce::Colour (kText));
         setColour (juce::ToggleButton::textColourId, juce::Colour (kText));
-        setColour (juce::TextButton::buttonColourId, juce::Colour (0xff35353b));
-        setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff0e7490));
-        setColour (juce::TextButton::textColourOffId, juce::Colour (0xffe4e4e7));
+        setColour (juce::TextButton::buttonColourId, juce::Colour (0xffeef0f6));
+        setColour (juce::TextButton::buttonOnColourId, juce::Colour (kSurfaceRaised));
+        setColour (juce::TextButton::textColourOffId, juce::Colour (kText));
         setColour (juce::TextButton::textColourOnId, juce::Colours::white);
-        setColour (juce::TabbedButtonBar::tabOutlineColourId, juce::Colour (0xff2a2a2f));
+        setColour (juce::TabbedButtonBar::tabOutlineColourId, juce::Colour (kPanelLine));
         setColour (juce::TabbedButtonBar::frontTextColourId, juce::Colours::white);
-        setColour (juce::TabbedButtonBar::tabTextColourId, juce::Colour (kTextDim));
+        setColour (juce::TabbedButtonBar::tabTextColourId, juce::Colour (kText));
     }
 
     void drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height,
@@ -170,12 +216,18 @@ public:
 
         const float angle = rotaryStartAngle
                           + sliderPos * (rotaryEndAngle - rotaryStartAngle);
+        const bool accentKnob = static_cast<int> (
+            slider.getProperties().getWithDefault ("accentKnob", 0)) != 0;
+
+        // Per-unit accent: the LED hue of the pedal this knob lives on.
+        const auto accent = juce::Colour ((juce::uint32) (juce::int64)
+            slider.getProperties().getWithDefault ("knobAccent", (juce::int64) kAccent));
 
         // Tick ring.
-        g.setColour (juce::Colour (0xff5a5a61));
+        g.setColour (juce::Colours::black.withAlpha (0.35f));
         for (int i = 0; i <= 10; ++i)
         {
-            const float a = rotaryStartAngle
+            const auto a = rotaryStartAngle
                           + (rotaryEndAngle - rotaryStartAngle) * (float) i / 10.0f;
             const auto dir = juce::Point<float> (std::sin (a), -std::cos (a));
             g.drawLine ({ centre + dir * (radius + 1.0f),
@@ -188,7 +240,7 @@ public:
         g.setColour (juce::Colours::black.withAlpha (0.45f));
         g.fillEllipse (skirt.translated (0.0f, 2.0f));
         g.setGradientFill (juce::ColourGradient (
-            juce::Colour (0xff4a4a52), centre.x, skirt.getY(),
+            juce::Colour (0xff54545c), centre.x, skirt.getY(),
             juce::Colour (0xff18181b), centre.x, skirt.getBottom(), false));
         g.fillEllipse (skirt);
         g.setColour (juce::Colour (0xff0b0b0d));
@@ -197,33 +249,36 @@ public:
         // Cap.
         auto cap = skirt.reduced (radius * 0.17f);
         g.setGradientFill (juce::ColourGradient (
-            juce::Colour (0xff5f5f68), cap.getX(), cap.getY(),
+            juce::Colour (0xff6a6a74), cap.getX(), cap.getY(),
             juce::Colour (0xff242428), cap.getX(), cap.getBottom(), false));
         g.fillEllipse (cap);
-        g.setColour (juce::Colours::white.withAlpha (0.10f));
+        g.setColour (juce::Colours::white.withAlpha (0.12f));
         g.drawEllipse (cap.reduced (1.0f), 1.0f);
+
+        // Subtle accent rim so every knob ties to its chassis colour.
+        g.setColour (accent.withAlpha (0.55f));
+        g.drawEllipse (skirt.reduced (radius * 0.06f), 1.4f);
+
+        // Accent ring for primary controls.
+        if (accentKnob)
+        {
+            g.setColour (accent.withAlpha (0.95f));
+            g.drawEllipse (skirt.expanded (3.0f), 2.4f);
+        }
 
         // Pointer.
         const auto dir = juce::Point<float> (std::sin (angle), -std::cos (angle));
         const auto p1 = centre + dir * (radius * 0.20f);
         const auto p2 = centre + dir * (radius * 0.86f);
-        const bool accentKnob = static_cast<int> (
-            slider.getProperties().getWithDefault ("accentKnob", 0)) != 0;
-
-        if (accentKnob)
-        {
-            g.setColour (juce::Colour (kAccent).withAlpha (0.95f));
-            g.drawEllipse (skirt.expanded (3.0f), 2.4f);
-        }
-
-        g.setColour (accentKnob ? juce::Colour (kAccent)
-                                : juce::Colour (0xfff4f4f5));
+        g.setColour (accentKnob ? accent : juce::Colour (0xfff4f4f5));
         g.drawLine ({ p1, p2 }, accentKnob ? 3.4f : 2.6f);
 
         if (slider.hasKeyboardFocus (true))
         {
-            g.setColour (juce::Colour (kAccent).withAlpha (0.8f));
+            g.setColour (juce::Colours::white.withAlpha (0.9f));
             g.drawEllipse (skirt.expanded (2.5f), 1.5f);
+            g.setColour (juce::Colours::black.withAlpha (0.4f));
+            g.drawEllipse (skirt.expanded (4.0f), 1.0f);
         }
     }
 
@@ -237,7 +292,7 @@ public:
 
         auto switchArea = text.isEmpty()
                             ? bounds
-                            : bounds.removeFromLeft (36.0f);
+                            : bounds.removeFromLeft (38.0f);
 
         auto base = juce::Rectangle<float> (32.0f, 15.0f)
                         .withCentre (switchArea.getCentre());
@@ -269,15 +324,15 @@ public:
 
         if (text.isNotEmpty())
         {
-            g.setColour (juce::Colour (kText));
-            g.setFont (juce::FontOptions (12.0f));
+            g.setColour (button.findColour (juce::ToggleButton::textColourId));
+            g.setFont (baumansFont (12.0f));
             g.drawFittedText (text, bounds.toNearestInt(),
                               juce::Justification::centredLeft, 1);
         }
 
         if (button.hasKeyboardFocus (true))
         {
-            g.setColour (juce::Colour (kAccent).withAlpha (0.8f));
+            g.setColour (juce::Colours::white.withAlpha (0.9f));
             g.drawRoundedRectangle (fullBounds.reduced (1.0f), 5.0f, 1.5f);
         }
     }
@@ -293,14 +348,14 @@ public:
         else if (isMouseOver)  base = base.brighter (0.10f);
 
         g.setGradientFill (juce::ColourGradient (
-            base.brighter (0.18f), bounds.getX(), bounds.getY(),
-            base.darker (0.22f), bounds.getX(), bounds.getBottom(), false));
+            base.brighter (0.12f), bounds.getX(), bounds.getY(),
+            base.darker (0.16f), bounds.getX(), bounds.getBottom(), false));
         g.fillRoundedRectangle (bounds, 6.0f);
 
-        g.setColour (juce::Colour (0xff0c0c0e));
-        g.drawRoundedRectangle (bounds, 6.0f, 1.2f);
+        g.setColour (juce::Colours::black.withAlpha (0.55f));
+        g.drawRoundedRectangle (bounds, 6.0f, 1.0f);
 
-        g.setColour (juce::Colours::white.withAlpha (0.10f));
+        g.setColour (juce::Colours::white.withAlpha (0.35f));
         g.drawHorizontalLine ((int) bounds.getY() + 2,
                               bounds.getX() + 6.0f, bounds.getRight() - 6.0f);
     }
@@ -308,48 +363,56 @@ public:
     juce::Font getLabelFont (juce::Label& label) override
     {
         // Bigger numeric readouts for the rack controls.
-        return juce::FontOptions (juce::jlimit (12.0f, 17.0f,
-                                                (float) label.getHeight() * 0.85f));
+        return baumansFont (juce::jlimit (12.0f, 17.0f,
+                                          (float) label.getHeight() * 0.85f));
     }
 
     int getTabButtonBestWidth (juce::TabBarButton&, int tabDepth) override
     {
-        // Uniform 160 px tab pitch: enough room for the icon above a readable
-        // label without stretching the bar across the whole window.
-        return tabDepth + 96;
+        // Compact horizontal tab size for the top tab bar.
+        return tabDepth + 92;
     }
 
     void drawTabButton (juce::TabBarButton& button, juce::Graphics& g,
                         bool isMouseOver, bool isMouseDown) override
     {
-        auto bounds = button.getLocalBounds().toFloat().reduced (2.0f);
+        auto bounds = button.getLocalBounds().toFloat();
         const bool front = button.isFrontTab();
-
-        auto body = front ? juce::Colour (0xff3c3c43) : juce::Colour (0xff202024);
-        if (isMouseOver) body = body.brighter (0.10f);
-        if (isMouseDown) body = body.darker (0.12f);
 
         const bool bypassed = static_cast<bool> (
             button.getProperties().getWithDefault ("bypassed", false));
 
-        if (bypassed)
-            body = body.darker (0.25f);
+        auto body = front ? juce::Colour (kSurfaceRaised) : juce::Colour (kPanel);
+        if (isMouseOver && ! front) body = body.brighter (0.06f);
+        if (isMouseDown)            body = body.darker (0.10f);
+        if (bypassed)               body = body.darker (0.10f);
 
         g.setGradientFill (juce::ColourGradient (
-            body.brighter (0.12f), bounds.getX(), bounds.getY(),
-            body.darker (0.18f), bounds.getX(), bounds.getBottom(), false));
-        g.fillRoundedRectangle (bounds, 5.0f);
+            body.brighter (front ? 0.16f : 0.04f), bounds.getX(), bounds.getY(),
+            body.darker (front ? 0.10f : 0.04f), bounds.getX(), bounds.getBottom(), false));
+        g.fillRoundedRectangle (bounds.reduced (3.0f, 4.0f), 8.0f);
 
-        g.setColour (front ? juce::Colour (kAccent) : juce::Colour (0xff2a2a2f));
-        g.drawRoundedRectangle (bounds, 5.0f, front ? 1.6f : 1.0f);
+        if (! front)
+        {
+            g.setColour (juce::Colour (kPanelLine));
+            g.drawRoundedRectangle (bounds.reduced (3.0f, 4.0f), 8.0f, 1.0f);
+        }
 
-        auto content = bounds.reduced (7.0f, 4.0f);
-        auto iconArea = content.removeFromTop (34.0f);
-        auto textArea = content.removeFromTop (16.0f);
+        // Active indicator: a clean white line inside the chip.
+        if (front)
+        {
+            auto indicator = bounds.reduced (12.0f, 4.0f).removeFromBottom (3.0f);
+            g.setColour (juce::Colours::white.withAlpha (0.85f));
+            g.fillRoundedRectangle (indicator, 1.5f);
+        }
 
-        auto iconColour = front ? juce::Colours::white : juce::Colour (kText);
+        auto content = bounds.reduced (8.0f, 5.0f);
+        auto iconArea = content.removeFromTop (content.getHeight() * 0.55f);
+        auto textArea = content;
+
+        auto iconColour = front ? juce::Colours::white : juce::Colour (kTextDim);
         if (bypassed)
-            iconColour = iconColour.withAlpha (0.30f);
+            iconColour = iconColour.withAlpha (0.35f);
 
         g.setColour (iconColour);
 
@@ -357,51 +420,51 @@ public:
 
         if (text == "Pre FX")
         {
-            auto pedal = iconArea.withSizeKeepingCentre (19.0f, 26.0f);
-            g.drawRoundedRectangle (pedal, 2.0f, 1.3f);
-            g.fillEllipse (pedal.getCentreX() - 6.0f, pedal.getY() + 4.0f, 3.8f, 3.8f);
-            g.fillEllipse (pedal.getCentreX() + 2.2f, pedal.getY() + 4.0f, 3.8f, 3.8f);
-            g.drawEllipse (pedal.getCentreX() - 3.5f, pedal.getBottom() - 8.0f,
-                           7.0f, 5.0f, 1.1f);
+            auto pedal = iconArea.withSizeKeepingCentre (18.0f, 22.0f);
+            g.drawRoundedRectangle (pedal, 2.0f, 1.2f);
+            g.fillEllipse (pedal.getCentreX() - 5.0f, pedal.getY() + 3.5f, 3.2f, 3.2f);
+            g.fillEllipse (pedal.getCentreX() + 1.8f, pedal.getY() + 3.5f, 3.2f, 3.2f);
+            g.drawEllipse (pedal.getCentreX() - 3.0f, pedal.getBottom() - 7.0f,
+                           6.0f, 4.0f, 1.0f);
         }
         else if (text == "Amp")
         {
-            auto head = iconArea.withSizeKeepingCentre (29.0f, 18.0f);
-            g.drawRoundedRectangle (head, 2.0f, 1.3f);
-            g.drawHorizontalLine ((int) (head.getY() + 3.5f),
-                                  head.getX() + 3.5f, head.getRight() - 3.5f);
+            auto head = iconArea.withSizeKeepingCentre (24.0f, 15.0f);
+            g.drawRoundedRectangle (head, 2.0f, 1.2f);
+            g.drawHorizontalLine ((int) (head.getY() + 3.0f),
+                                  head.getX() + 3.0f, head.getRight() - 3.0f);
             for (int i = 0; i < 3; ++i)
-                g.fillEllipse (head.getX() + 6.0f + i * 6.0f,
-                               head.getY() + 7.0f, 3.1f, 3.1f);
-            g.drawRect (head.getX() + 3.5f, head.getBottom() - 5.0f,
-                        head.getWidth() - 7.0f, 2.4f, 0.8f);
+                g.fillEllipse (head.getX() + 5.0f + i * 5.0f,
+                               head.getY() + 6.0f, 2.6f, 2.6f);
+            g.drawRect (head.getX() + 3.0f, head.getBottom() - 4.0f,
+                        head.getWidth() - 6.0f, 2.0f, 0.7f);
         }
         else if (text == "Post EQ")
         {
-            const float xs[] = { -8.5f, 0.0f, 8.5f };
-            const float ys[] = { -8.0f, 6.0f, -2.5f };
+            const float xs[] = { -7.0f, 0.0f, 7.0f };
+            const float ys[] = { -7.0f, 5.0f, -2.0f };
             for (int i = 0; i < 3; ++i)
             {
                 const float x = iconArea.getCentreX() + xs[i];
                 g.drawVerticalLine ((int) x, iconArea.getY() + 2.0f,
                                     iconArea.getBottom() - 2.0f);
-                g.fillEllipse (x - 3.0f, iconArea.getCentreY() + ys[i], 6.0f, 6.0f);
+                g.fillEllipse (x - 2.5f, iconArea.getCentreY() + ys[i], 5.0f, 5.0f);
             }
         }
         else if (text == "IR")
         {
-            auto cab = iconArea.withSizeKeepingCentre (24.0f, 28.0f);
-            g.drawRoundedRectangle (cab, 2.0f, 1.3f);
-            const auto cone = cab.reduced (4.5f, 4.5f);
-            g.drawEllipse (cone, 1.2f);
-            g.fillEllipse (cone.getCentreX() - 2.5f, cone.getCentreY() - 2.5f,
-                           5.0f, 5.0f);
+            auto cab = iconArea.withSizeKeepingCentre (20.0f, 24.0f);
+            g.drawRoundedRectangle (cab, 2.0f, 1.2f);
+            const auto cone = cab.reduced (4.0f, 4.0f);
+            g.drawEllipse (cone, 1.0f);
+            g.fillEllipse (cone.getCentreX() - 2.0f, cone.getCentreY() - 2.0f,
+                           4.0f, 4.0f);
         }
         else
         {
             juce::Path spiral;
             const auto centre = iconArea.getCentre();
-            const float maxRadius = juce::jmin (iconArea.getWidth(), iconArea.getHeight()) * 0.42f;
+            const float maxRadius = juce::jmin (iconArea.getWidth(), iconArea.getHeight()) * 0.38f;
             float angle = 0.0f;
             float radius = 1.5f;
             bool started = false;
@@ -425,8 +488,7 @@ public:
                 radius += 0.8f;
             }
 
-            g.setColour (iconColour);
-            g.strokePath (spiral, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved));
+            g.strokePath (spiral, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved));
         }
 
         auto textColour = front ? juce::Colours::white : juce::Colour (kText);
@@ -434,14 +496,14 @@ public:
             textColour = textColour.withAlpha (0.35f);
 
         g.setColour (textColour);
-        g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+        g.setFont (baumansFont (11.0f));
         g.drawFittedText (text, textArea.toNearestInt(),
                           juce::Justification::centred, 1);
 
         if (bypassed)
         {
             g.setColour (juce::Colour (0xffef4444));
-            g.fillEllipse (bounds.getRight() - 8.0f, bounds.getY() + 4.0f, 4.0f, 4.0f);
+            g.fillEllipse (bounds.getRight() - 10.0f, bounds.getY() + 6.0f, 5.0f, 5.0f);
         }
     }
 };
@@ -509,23 +571,23 @@ public:
         addAndMakeVisible (label_);
         label_.setText (labelText, juce::dontSendNotification);
         label_.setJustificationType (juce::Justification::centred);
-        label_.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-        label_.setColour (juce::Label::textColourId, juce::Colour (kText));
+        label_.setFont (baumansFont (11.0f));
+        label_.setColour (juce::Label::textColourId, juce::Colour (kScreenDim));
 
         addAndMakeVisible (editor_);
         editor_.setMultiLine (false);
         editor_.setJustification (juce::Justification::centred);
-        editor_.setFont (juce::FontOptions (18.0f, juce::Font::bold));
+        editor_.setFont (baumansFont (18.0f));
         editor_.setInputRestrictions (7, "0123456789.");
         editor_.setSelectAllWhenFocused (true);
         editor_.setColour (juce::TextEditor::backgroundColourId,
-                           juce::Colour (0xff121214));
+                           juce::Colour (kScreen));
         editor_.setColour (juce::TextEditor::textColourId,
-                           juce::Colour (0xfff4f4f5));
+                           juce::Colour (kScreenText));
         editor_.setColour (juce::TextEditor::outlineColourId,
-                           juce::Colour (kPanelLine));
+                           juce::Colour (kScreenLine));
         editor_.setColour (juce::TextEditor::focusedOutlineColourId,
-                           juce::Colour (kAccent));
+                           juce::Colour (kScreenGlow));
         editor_.onReturnKey = [this] { commit(); };
         editor_.onFocusLost = [this] { commit(); };
         editor_.onEscapeKey = [this]
@@ -629,9 +691,9 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto bg = getLocalBounds().toFloat().reduced (1.0f);
-        g.setColour (juce::Colour (0xff141417));
+        g.setColour (juce::Colour (kScreen));
         g.fillRoundedRectangle (bg, 6.0f);
-        g.setColour (juce::Colour (kPanelLine));
+        g.setColour (juce::Colour (kScreenLine));
         g.drawRoundedRectangle (bg, 6.0f, 1.0f);
 
         auto r = getLocalBounds().reduced (6, 2);
@@ -641,13 +703,9 @@ public:
 
         const auto tuning = tuningColour();
 
-        g.setColour (juce::Colour (kAccent).withAlpha (0.85f));
-        g.setFont (juce::FontOptions (8.0f, juce::Font::bold));
-        g.drawText ("TUNER", noteArea.removeFromTop (11),
-                    juce::Justification::centredLeft);
 
         g.setColour (tuning);
-        g.setFont (juce::FontOptions (20.0f, juce::Font::bold));
+        g.setFont (baumansFont (20.0f));
         g.drawFittedText (hasNote_ ? note_ : "---",
                           noteArea.removeFromTop (23),
                           juce::Justification::centredLeft, 1);
@@ -659,14 +717,14 @@ public:
                 ? "IN TUNE"
                 : juce::String (targetCents_, 1) + " c";
 
-        g.setColour (juce::Colour (kTextDim));
-        g.setFont (juce::FontOptions (9.5f, juce::Font::bold));
+        g.setColour (juce::Colour (kScreenDim));
+        g.setFont (baumansFont (9.5f));
         g.drawFittedText (centsText, noteArea.removeFromTop (14),
                           juce::Justification::centredLeft, 1);
 
-        g.setColour (juce::Colour (0xff121214));
+        g.setColour (juce::Colour (kScreen));
         g.fillRoundedRectangle (guide.toFloat(), 5.0f);
-        g.setColour (juce::Colour (kPanelLine));
+        g.setColour (juce::Colour (kScreenLine));
         g.drawRoundedRectangle (guide.toFloat(), 5.0f, 1.0f);
 
         auto inner = guide.reduced (7, 4);
@@ -675,7 +733,7 @@ public:
         const float halfWidth = inner.getWidth() * 0.44f;
         const float trackY = inner.getCentreY();
 
-        g.setColour (juce::Colour (0xff4a4a52));
+        g.setColour (juce::Colour (0xff3b4360));
         g.drawLine (static_cast<float> (inner.getX()), trackY,
                     static_cast<float> (inner.getRight()), trackY, 1.0f);
 
@@ -683,7 +741,7 @@ public:
         {
             const float x = centreX + (float) c / 50.0f * halfWidth;
             const bool major = (c == 0 || std::abs (c) == 50);
-            g.setColour (major ? juce::Colour (0xffa1a1aa) : juce::Colour (0xff52525b));
+            g.setColour (major ? juce::Colour (kScreenText) : juce::Colour (0xff525b7d));
             g.drawVerticalLine ((int) std::round (x),
                                 major ? trackY - 8.0f : trackY - 4.0f,
                                 major ? trackY + 8.0f : trackY + 4.0f);
@@ -729,8 +787,8 @@ public:
         g.fillPath (topArrow);
         g.fillPath (bottomArrow);
 
-        g.setColour (juce::Colour (kTextDim));
-        g.setFont (juce::FontOptions (8.0f, juce::Font::bold));
+        g.setColour (juce::Colour (kScreenDim));
+        g.setFont (baumansFont (8.0f));
         const float labelY = inner.getBottom() - 11.0f;
         g.drawText ("-50", juce::Rectangle<float> (inner.getX(), labelY, 20.0f, 10.0f),
                     juce::Justification::centredLeft);
@@ -746,7 +804,7 @@ private:
     juce::Colour tuningColour() const
     {
         if (! hasNote_)
-            return juce::Colour (kTextDim);
+            return juce::Colour (kScreenDim);
 
         if (std::abs (targetCents_) < 2.0f)
             return juce::Colour (0xff4ade80);
@@ -782,8 +840,8 @@ public:
         addAndMakeVisible (label_);
         label_.setText (text, juce::dontSendNotification);
         label_.setJustificationType (juce::Justification::centred);
-        label_.setFont (juce::FontOptions (10.5f, juce::Font::bold));
-        label_.setColour (juce::Label::textColourId, juce::Colour (kText));
+        label_.setFont (baumansFont (14.5f));
+        label_.setColour (juce::Label::textColourId, juce::Colours::white);
 
         auto* param = state.getParameter (paramId);
 
@@ -804,7 +862,7 @@ public:
         {
             slider_.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
             slider_.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 66, 18);
-            slider_.setColour (juce::Slider::textBoxTextColourId, juce::Colour (kTextDim));
+            slider_.setColour (juce::Slider::textBoxTextColourId, juce::Colours::white);
             slider_.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
 
             if (param != nullptr && param->getLabel().isNotEmpty())
@@ -820,15 +878,28 @@ public:
 
     void setDarkText (bool dark)
     {
+        preferDarkText_ = dark;
         label_.setColour (juce::Label::textColourId,
-                          dark ? juce::Colour (0xff2c2416) : juce::Colour (kText));
+                          dark ? juce::Colours::black : juce::Colours::white);
         slider_.setColour (juce::Slider::textBoxTextColourId,
-                           dark ? juce::Colour (0xff4a3c22) : juce::Colour (kTextDim));
+                           dark ? juce::Colours::black : juce::Colours::white);
+    }
+
+    /// Adopts the chassis colour of the unit it lives on: white lettering on
+    /// dark die-cast bodies, dark lettering on light metal and gold panels.
+    /// The accent becomes the knob ring / pointer colour.
+    void setUnitTheme (juce::Colour body, juce::Colour accent)
+    {
+        juce::ignoreUnused (body);
+        const auto textColour = preferDarkText_ ? juce::Colours::black : juce::Colours::white;
+        label_.setColour (juce::Label::textColourId, textColour);
+        slider_.setColour (juce::Slider::textBoxTextColourId, textColour);
+        slider_.getProperties().set ("knobAccent", (juce::int64) accent.getARGB());
     }
 
     void setLabelFontSize (float size)
     {
-        label_.setFont (juce::FontOptions (size, juce::Font::bold));
+        label_.setFont (baumansFont (size));
     }
 
     void setStepSize (double step)
@@ -846,7 +917,7 @@ public:
     void resized() override
     {
         auto r = getLocalBounds();
-        label_.setBounds (r.removeFromTop (16));
+        label_.setBounds (r.removeFromTop (18));
 
         if (sliderAttachment_ != nullptr)
             slider_.setBounds (r.reduced (1));
@@ -864,6 +935,7 @@ private:
     std::unique_ptr<APVTS::SliderAttachment> sliderAttachment_;
     std::unique_ptr<APVTS::ButtonAttachment> buttonAttachment_;
     std::unique_ptr<InvertedButtonAttachment> invertedAttachment_;
+    bool preferDarkText_ = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ParamControl)
 };
@@ -877,6 +949,8 @@ public:
     {
         roomKnob_ = std::make_unique<ParamControl> (state, "roomAmount", "Room");
         outputKnob_ = std::make_unique<ParamControl> (state, "masterOutput", "Master");
+        roomKnob_->setDarkText (true);
+        outputKnob_->setDarkText (true);
         addAndMakeVisible (*roomKnob_);
         addAndMakeVisible (*outputKnob_);
     }
@@ -886,10 +960,10 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto bounds = getLocalBounds().toFloat().reduced (1.0f);
-        g.setColour (juce::Colour (0xff26262b));
+        g.setColour (juce::Colour (kPanel));
         g.fillRoundedRectangle (bounds, 7.0f);
-        g.setColour (juce::Colour (0xff0c0c0e));
-        g.drawRoundedRectangle (bounds, 7.0f, 1.2f);
+        g.setColour (juce::Colour (kPanelLine));
+        g.drawRoundedRectangle (bounds, 7.0f, 1.0f);
     }
 
     void resized() override
@@ -935,18 +1009,22 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        auto r = getLocalBounds().reduced (2);
-        auto title = r.removeFromTop (14);
+        // One light plate over the whole switch so the caption stays legible
+        // on any die-cast body colour.
+        auto plate = getLocalBounds().toFloat().reduced (1.0f);
+        g.setColour (juce::Colour (kPanel));
+        g.fillRoundedRectangle (plate, 5.0f);
+        g.setColour (juce::Colour (kPanelLineStrong));
+        g.drawRoundedRectangle (plate, 5.0f, 1.0f);
 
-        g.setColour (juce::Colour (kAccent));
-        g.setFont (juce::FontOptions (8.5f, juce::Font::bold));
+        auto r = getLocalBounds().reduced (2);
+        auto title = r.removeFromTop (18);
+
+        g.setColour (juce::Colour (kTextDim));
+        g.setFont (baumansFont (13.0f));
         g.drawText ("MODE", title, juce::Justification::centred);
 
         auto body = r.reduced (1);
-        g.setColour (juce::Colour (0xff121214));
-        g.fillRoundedRectangle (body.toFloat(), 5.0f);
-        g.setColour (juce::Colour (kPanelLine));
-        g.drawRoundedRectangle (body.toFloat(), 5.0f, 1.0f);
 
         auto drawOption = [&g] (juce::Rectangle<int> area, const juce::String& text, bool active)
         {
@@ -957,7 +1035,7 @@ public:
             }
 
             g.setColour (active ? juce::Colour (kAccent) : juce::Colour (kTextDim));
-            g.setFont (juce::FontOptions (8.5f, juce::Font::bold));
+            g.setFont (baumansFont (13.0f));
             g.drawText (text, area, juce::Justification::centred);
         };
 
@@ -1002,18 +1080,21 @@ public:
 
     void paint (juce::Graphics& g) override
     {
-        auto r = getLocalBounds().reduced (2);
-        auto title = r.removeFromTop (14);
+        // Light plate so the selector reads on any die-cast body colour.
+        auto plate = getLocalBounds().toFloat().reduced (1.0f);
+        g.setColour (juce::Colour (kPanel));
+        g.fillRoundedRectangle (plate, 5.0f);
+        g.setColour (juce::Colour (kPanelLineStrong));
+        g.drawRoundedRectangle (plate, 5.0f, 1.0f);
 
-        g.setColour (juce::Colour (kAccent));
-        g.setFont (juce::FontOptions (8.5f, juce::Font::bold));
+        auto r = getLocalBounds().reduced (2);
+        auto title = r.removeFromTop (18);
+
+        g.setColour (juce::Colour (kTextDim));
+        g.setFont (baumansFont (13.0f));
         g.drawText ("MODE", title, juce::Justification::centred);
 
         auto body = r.reduced (1);
-        g.setColour (juce::Colour (0xff121214));
-        g.fillRoundedRectangle (body.toFloat(), 5.0f);
-        g.setColour (juce::Colour (kPanelLine));
-        g.drawRoundedRectangle (body.toFloat(), 5.0f, 1.0f);
 
         const int active = currentIndex();
 
@@ -1029,7 +1110,7 @@ public:
             }
 
             g.setColour (isActive ? juce::Colour (kAccent) : juce::Colour (kTextDim));
-            g.setFont (juce::FontOptions (8.5f, juce::Font::bold));
+            g.setFont (baumansFont (13.0f));
             g.drawText (options_[i], area, juce::Justification::centred);
         }
     }
@@ -1044,7 +1125,7 @@ private:
     int optionAt (juce::Point<int> position) const
     {
         auto r = getLocalBounds().reduced (2);
-        r.removeFromTop (14);
+        r.removeFromTop (18);
         auto body = r.reduced (1);
 
         for (int i = 0; i < numOptions; ++i)
@@ -1124,7 +1205,7 @@ public:
         if (! dragOver_)
             return;
 
-        g.setColour (juce::Colour (0xff2dd4bf));
+        g.setColour (juce::Colour (kAccent));
         g.drawRect (getLocalBounds(), 2);
     }
 
@@ -1179,28 +1260,26 @@ public:
     {
         auto bounds = getLocalBounds().toFloat().reduced (1.5f);
 
-        g.setColour (juce::Colour (0xff070c0b));
+        g.setColour (juce::Colour (kScreen));
         g.fillRoundedRectangle (bounds, 5.0f);
 
-        g.setColour (juce::Colour (0xff2dd4bf)
- .withAlpha (hasFile_ ? 0.55f : 0.28f));
-        g.drawRoundedRectangle (bounds.reduced (0.5f), 5.0f, 1.2f);
+        g.setColour (juce::Colour (kScreenLine)
+                     .withAlpha (hasFile_ ? 1.0f : 0.55f));
+        g.drawRoundedRectangle (bounds.reduced (0.5f), 5.0f, 1.0f);
 
         auto content = bounds.reduced (10.0f, 6.0f);
 
         if (caption_.isNotEmpty())
         {
-            g.setColour (juce::Colour (0xff2dd4bf).withAlpha (0.55f));
-            g.setFont (juce::FontOptions (9.0f, juce::Font::bold));
+            g.setColour (juce::Colour (kScreenDim));
+            g.setFont (baumansFont (9.0f));
             g.drawText (caption_, content.toNearestInt().removeFromTop (14),
                         juce::Justification::centredLeft);
         }
 
-        g.setColour (hasFile_ ? juce::Colour (0xffb8fff1)
-                              : juce::Colour (0xff3f6b64));
-        g.setFont (juce::FontOptions (
-            juce::jlimit (12.0f, 24.0f, content.getHeight() * 0.60f),
-            juce::Font::bold));
+        g.setColour (hasFile_ ? juce::Colour (kScreenText)
+                              : juce::Colour (0xff59617e));
+        g.setFont (sevenSegmentFont (juce::jlimit (12.0f, 24.0f, content.getHeight() * 0.60f)));
         g.drawFittedText (text_, content.toNearestInt(),
                           juce::Justification::centred, 1, 0.72f);
     }
@@ -1221,8 +1300,9 @@ class Footswitch : public juce::Component
 {
 public:
     Footswitch (APVTS& state, const juce::String& paramId, juce::Colour ledColour,
+                juce::Colour bodyColour = juce::Colour (0xff191430),
                 bool invertState = true)
-        : ledColour_ (ledColour), invert_ (invertState)
+        : ledColour_ (ledColour), bodyColour_ (bodyColour), invert_ (invertState)
     {
         addAndMakeVisible (button_);
         button_.setButtonText ({});
@@ -1235,7 +1315,7 @@ public:
     void resized() override
     {
         auto r = getLocalBounds();
-        r.removeFromTop (18);
+        r.removeFromTop (26);
         button_.setBounds (r.withSizeKeepingCentre (52, 52));
     }
 
@@ -1244,29 +1324,25 @@ public:
         const bool on = invert_ ? ! button_.getToggleState()
                                 : button_.getToggleState();
 
-        auto ledArea = getLocalBounds().removeFromTop (18);
+        auto ledArea = getLocalBounds().removeFromTop (26);
         const auto ledCentre = ledArea.getCentre().toFloat();
 
         if (on)
         {
-            g.setColour (ledColour_.withAlpha (0.35f));
-            g.fillEllipse (juce::Rectangle<float> (18.0f, 18.0f).withCentre (ledCentre));
+            g.setColour (ledColour_.withAlpha (0.45f));
+            g.fillEllipse (juce::Rectangle<float> (16.0f, 16.0f).withCentre (ledCentre));
         }
 
-        g.setColour (on ? ledColour_ : juce::Colour (0xff1b1b1e));
+        g.setColour (on ? ledColour_ : juce::Colour (0xff2b2b33));
         g.fillEllipse (juce::Rectangle<float> (8.0f, 8.0f).withCentre (ledCentre));
-        g.setColour (juce::Colours::black.withAlpha (0.7f));
+        g.setColour (juce::Colours::white.withAlpha (0.55f));
         g.drawEllipse (juce::Rectangle<float> (8.0f, 8.0f).withCentre (ledCentre), 1.0f);
 
-        g.setColour (on ? juce::Colour (0xffe4e4e7) : juce::Colour (kTextDim));
-        g.setFont (juce::FontOptions (9.0f, juce::Font::bold));
-        g.drawText (on ? "ON" : "OFF",
-                    ledArea.withTrimmedLeft (ledArea.getCentreX() - ledArea.getX() + 8),
-                    juce::Justification::centredLeft);
 
-        auto sw = getLocalBounds().withTrimmedTop (18)
+        auto sw = getLocalBounds().withTrimmedTop (26)
                       .withSizeKeepingCentre (52, 52).toFloat();
 
+        // Chrome stomp switch.
         g.setColour (juce::Colours::black.withAlpha (0.45f));
         g.fillEllipse (sw.translated (0.0f, 3.0f));
 
@@ -1279,12 +1355,13 @@ public:
 
         auto cap = sw.reduced (7.0f);
         g.setGradientFill (juce::ColourGradient (
-            juce::Colour (0xff414147), cap.getCentreX(), cap.getY(),
+            on ? juce::Colour (0xff5c5c66) : juce::Colour (0xff414147),
+            cap.getCentreX(), cap.getY(),
             juce::Colour (0xff151517), cap.getCentreX(), cap.getBottom(), false));
         g.fillEllipse (cap);
 
         auto inner = cap.reduced (cap.getWidth() * 0.24f);
-        g.setColour (juce::Colour (0xff232327));
+        g.setColour (on ? ledColour_.withAlpha (0.45f) : juce::Colour (0xff232327));
         g.fillEllipse (inner);
         g.setColour (juce::Colour (0xff55555e));
         g.drawEllipse (inner, 1.0f);
@@ -1294,6 +1371,7 @@ private:
     InvisibleToggle button_;
     std::unique_ptr<APVTS::ButtonAttachment> attachment_;
     juce::Colour ledColour_;
+    juce::Colour bodyColour_;
     bool invert_ = true;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Footswitch)
@@ -1313,6 +1391,9 @@ public:
     }
 
     static constexpr int preferredWidth = ParamControl::cellWidth + 8 + 64;
+
+    /// The wrapped knob, so the owner can apply its unit theme.
+    juce::Component* knobControl() const { return &knob_; }
 
     void resized() override
     {
@@ -1342,7 +1423,7 @@ public:
         addAndMakeVisible (label_);
         label_.setText (labelText, juce::dontSendNotification);
         label_.setJustificationType (juce::Justification::centred);
-        label_.setFont (juce::FontOptions (9.5f, juce::Font::bold));
+        label_.setFont (baumansFont (11.0f));
         label_.setColour (juce::Label::textColourId, juce::Colour (kTextDim));
 
         addAndMakeVisible (slider_);
@@ -1428,7 +1509,7 @@ public:
 
         label_.setText ("TYPE", juce::dontSendNotification);
         label_.setJustificationType (juce::Justification::centred);
-        label_.setFont (juce::FontOptions (8.0f, juce::Font::bold));
+        label_.setFont (baumansFont (8.0f));
         label_.setColour (juce::Label::textColourId, juce::Colour (kTextDim));
         addAndMakeVisible (label_);
 
@@ -1450,9 +1531,9 @@ public:
             button.setTooltip (tooltips[i]);
             button.setClickingTogglesState (true);
             button.setMouseCursor (juce::MouseCursor::PointingHandCursor);
-            button.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff171c20));
+            button.setColour (juce::TextButton::buttonColourId, juce::Colour (0xffe8eaf2));
             button.setColour (juce::TextButton::buttonOnColourId,
-                              juce::Colour (kAccent).withAlpha (0.32f));
+                              juce::Colour (0xffcfd4ee));
             button.setColour (juce::TextButton::textColourOffId, juce::Colour (kTextDim));
             button.setColour (juce::TextButton::textColourOnId, juce::Colour (kText));
             button.onClick = [this, i]
@@ -1691,12 +1772,10 @@ public:
             return;
 
         // Recessed screen.
-        g.setGradientFill (juce::ColourGradient (
-            juce::Colour (0xff0a1014), screenArea_.getX(), screenArea_.getY(),
-            juce::Colour (0xff050708), screenArea_.getX(), screenArea_.getBottom(), false));
+        g.setColour (juce::Colour (kScreen));
         g.fillRoundedRectangle (screenArea_, 6.0f);
-        g.setColour (juce::Colour (0xff1d3438));
-        g.drawRoundedRectangle (screenArea_, 6.0f, 1.2f);
+        g.setColour (juce::Colour (kScreenLine));
+        g.drawRoundedRectangle (screenArea_, 6.0f, 1.0f);
 
         drawStatusLine (g);
         drawFocusPanel (g);
@@ -1711,13 +1790,13 @@ public:
         {
             g.setColour (juce::Colours::black.withAlpha (0.42f));
             g.fillRoundedRectangle (screenArea_, 6.0f);
-            g.setColour (juce::Colour (kTextDim));
-            g.setFont (juce::FontOptions (18.0f, juce::Font::bold));
+            g.setColour (juce::Colour (kScreenText));
+            g.setFont (baumansFont (18.0f));
             g.drawText ("BYPASSED", screenArea_, juce::Justification::centred);
         }
 
         g.setColour (juce::Colour (kTextDim).withAlpha (0.82f));
-        g.setFont (juce::FontOptions (9.5f, juce::Font::bold));
+        g.setFont (baumansFont (9.5f));
         g.drawFittedText ("DRAG: FREQ / GAIN    WHEEL: Q    DOUBLE-CLICK: DISABLE BAND    RIGHT-CLICK: MENU    KNOBS + TYPE: FOCUSED BAND / FILTER",
                           hintArea_, juce::Justification::centredLeft, 1, 0.85f);
     }
@@ -1925,6 +2004,8 @@ private:
 
     static juce::Colour bandColour (int band)
     {
+        // One vivid hue per band so nodes, curves and the focus strip stay
+        // recognisable at a glance on the dark EQ screen.
         static const juce::uint32 colours[] = {
             0xff22d3ee, 0xff34d399, 0xffa3e635, 0xfffbbf24,
             0xfffb923c, 0xfff472b6, 0xffc084fc, 0xff60a5fa
@@ -1941,7 +2022,7 @@ private:
         if (selectedPass_ != Pass::None)
             return juce::Colour (0xff93c5fd);
 
-        return juce::Colour (kTextDim);
+        return juce::Colour (kScreenDim);
     }
 
     juce::String focusTitle() const
@@ -2078,13 +2159,13 @@ private:
     {
         const bool hasBand = selectedBand_ >= 0;
         const bool hasPass = selectedPass_ != Pass::None;
-        const auto highlight = focusColour();
+        const auto highlight = focusColour().darker (0.35f);
 
         boostKnob_.setActive (hasBand);
         qKnob_.setActive (hasBand || hasPass);
         typeSelector_.setActive (hasBand);
-        boostKnob_.setLabelColour (hasBand ? highlight : juce::Colour (kTextDim));
-        qKnob_.setLabelColour (hasBand || hasPass ? highlight : juce::Colour (kTextDim));
+        boostKnob_.setLabelColour (hasBand ? highlight : juce::Colour (0xff1a1a1a));
+        qKnob_.setLabelColour (hasBand || hasPass ? highlight : juce::Colour (0xff1a1a1a));
 
         if (hasBand)
         {
@@ -2252,13 +2333,25 @@ private:
     //==========================================================================
     void drawStatusLine (juce::Graphics& g)
     {
-        auto area = topArea_.withTrimmedRight (188);
+        const int statusWidth = 320;
+        const int statusHeight = 22;
+        auto area = juce::Rectangle<int> (
+            topArea_.getCentreX() - statusWidth / 2,
+            topArea_.getCentreY() - statusHeight / 2,
+            statusWidth, statusHeight);
 
         if (area.isEmpty())
             return;
 
+        // Light panel background with black text, matching the other control
+        // labels in the editor.
+        g.setColour (juce::Colour (kPanel));
+        g.fillRoundedRectangle (area.toFloat(), 5.0f);
+        g.setColour (juce::Colour (kPanelLine));
+        g.drawRoundedRectangle (area.toFloat().reduced (0.5f), 5.0f, 1.0f);
+
         const bool hasSelection = selectedBand_ >= 0 || selectedPass_ != Pass::None;
-        auto colour = hasSelection ? focusColour() : juce::Colour (kTextDim);
+        auto colour = hasSelection ? focusColour() : juce::Colour (kScreenDim);
 
         if (cachedBypassed_)
             colour = colour.withAlpha (0.55f);
@@ -2266,14 +2359,14 @@ private:
         if (hasSelection)
         {
             g.setColour (colour.withAlpha (0.9f));
-            g.fillEllipse ((float) area.getX() + 1.0f,
+            g.fillEllipse ((float) area.getX() + 8.0f,
                            (float) area.getCentreY() - 4.0f, 8.0f, 8.0f);
         }
 
-        g.setColour (colour);
-        g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
-        g.drawFittedText (selectionText(), area.withTrimmedLeft (16),
-                          juce::Justification::centredLeft, 1, 0.8f);
+        g.setColour (hasSelection ? juce::Colour (0xff1a1a1a) : juce::Colour (kTextDim));
+        g.setFont (sevenSegmentFont (15.0f));
+        g.drawFittedText (selectionText(), area,
+                          juce::Justification::centred, 1, 0.8f);
     }
 
     void drawFocusPanel (juce::Graphics& g)
@@ -2283,19 +2376,17 @@ private:
         if (area.isEmpty())
             return;
 
-        g.setGradientFill (juce::ColourGradient (
-            juce::Colour (0xff171a1e), area.getX(), area.getY(),
-            juce::Colour (0xff0c0e10), area.getX(), area.getBottom(), false));
+        g.setColour (juce::Colour (kPanel));
         g.fillRoundedRectangle (area, 6.0f);
-        g.setColour (juce::Colour (0xff1d3438));
-        g.drawRoundedRectangle (area, 6.0f, 1.2f);
+        g.setColour (juce::Colour (kPanelLine));
+        g.drawRoundedRectangle (area, 6.0f, 1.0f);
 
-        g.setColour (focusColour().withAlpha (0.7f));
+        g.setColour (focusColour().darker (0.25f).withAlpha (0.8f));
         g.fillRoundedRectangle (area.getX() + 8.0f, area.getY() + 2.0f,
                                 area.getWidth() - 16.0f, 2.0f, 1.0f);
 
-        g.setColour (focusColour());
-        g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
+        g.setColour (juce::Colour (0xff1a1a1a));
+        g.setFont (sevenSegmentFont (12.0f));
         g.drawText (focusTitle(), focusTitleArea_.toFloat(), juce::Justification::centred);
     }
 
@@ -2323,8 +2414,8 @@ private:
             const auto x = frequencyToX (frequency);
             auto label = juce::Rectangle<float> (x - 22.0f, plotArea_.getBottom() + 2.0f,
                                                  44.0f, 14.0f);
-            g.setColour (juce::Colour (kTextDim).withAlpha (0.8f));
-            g.setFont (juce::FontOptions (8.5f));
+            g.setColour (juce::Colour (kScreenDim).withAlpha (0.8f));
+            g.setFont (baumansFont (8.5f));
             g.drawText (frequencyLabel (frequency), label,
                         juce::Justification::centred);
         }
@@ -2334,7 +2425,7 @@ private:
             const auto y = gainToY ((float) db);
             const bool zero = db == 0;
 
-            g.setColour (zero ? juce::Colour (kAccent).withAlpha (0.22f)
+            g.setColour (zero ? juce::Colour (kScreenGlow).withAlpha (0.30f)
                               : juce::Colours::white.withAlpha (0.055f));
             g.drawHorizontalLine ((int) std::round (y), plotArea_.getX(), plotArea_.getRight());
 
@@ -2342,8 +2433,8 @@ private:
             {
                 const auto label = db > 0 ? "+" + juce::String (db)
                                           : juce::String (db);
-                g.setColour (juce::Colour (kTextDim).withAlpha (0.8f));
-                g.setFont (juce::FontOptions (8.5f));
+                g.setColour (juce::Colour (kScreenDim).withAlpha (0.8f));
+                g.setFont (baumansFont (8.5f));
                 g.drawText (label,
                             juce::Rectangle<float> (screenArea_.getX() + 5.0f, y - 7.0f,
                                                     30.0f, 14.0f),
@@ -2357,7 +2448,7 @@ private:
         const auto highPassX = frequencyToX (cachedSettings_.highPassFrequency);
         const auto lowPassX = frequencyToX (cachedSettings_.lowPassFrequency);
 
-        g.setColour (juce::Colour (0xff60a5fa).withAlpha (cachedBypassed_ ? 0.025f : 0.055f));
+        g.setColour (juce::Colour (kScreenGlow).withAlpha (cachedBypassed_ ? 0.025f : 0.05f));
         g.fillRect (juce::Rectangle<float> (plotArea_.getX(), plotArea_.getY(),
                                             highPassX - plotArea_.getX(),
                                             plotArea_.getHeight()));
@@ -2453,21 +2544,21 @@ private:
         fill.lineTo (plotArea_.getX(), plotArea_.getBottom());
         fill.closeSubPath();
 
-        const auto trace = juce::Colour (0xffe2e8f0);
+        const auto trace = juce::Colour (kScreenGlow);
         g.setGradientFill (juce::ColourGradient (
-            trace.withAlpha (cachedBypassed_ ? 0.06f : 0.15f),
+            trace.withAlpha (cachedBypassed_ ? 0.05f : 0.12f),
             plotArea_.getX(), plotArea_.getY(),
             trace.withAlpha (0.01f), plotArea_.getX(), plotArea_.getBottom(), false));
         g.fillPath (fill);
 
-        g.setColour (trace.withAlpha (cachedBypassed_ ? 0.22f : 0.50f));
+        g.setColour (trace.withAlpha (cachedBypassed_ ? 0.20f : 0.45f));
         g.strokePath (curve, juce::PathStrokeType (1.3f, juce::PathStrokeType::curved,
                                                    juce::PathStrokeType::rounded));
 
         auto legend = juce::Rectangle<float> (plotArea_.getRight() - 104.0f,
                                               plotArea_.getY() + 4.0f, 100.0f, 12.0f);
         g.setColour (trace.withAlpha (cachedBypassed_ ? 0.25f : 0.55f));
-        g.setFont (juce::FontOptions (8.5f, juce::Font::bold));
+        g.setFont (baumansFont (8.5f));
         g.drawText ("POST-EQ SIGNAL", legend, juce::Justification::centredRight);
     }
 
@@ -2513,8 +2604,8 @@ private:
         fill.lineTo (plotArea_.getX(), plotArea_.getBottom());
         fill.closeSubPath();
 
-        const auto accent = juce::Colour (kAccent);
-        const auto alpha = cachedBypassed_ ? 0.05f : 0.20f;
+        const auto accent = juce::Colour (0xffe2e8f0);
+        const auto alpha = cachedBypassed_ ? 0.05f : 0.16f;
         g.setGradientFill (juce::ColourGradient (
             accent.withAlpha (alpha), plotArea_.getX(), plotArea_.getY(),
             accent.withAlpha (0.015f), plotArea_.getX(), plotArea_.getBottom(), false));
@@ -2545,18 +2636,18 @@ private:
                                      frequencyToX (frequency));
         const auto selected = selectedPass_ == pass;
 
-        g.setColour (juce::Colour (0xff93c5fd).withAlpha (
-            cachedBypassed_ ? 0.18f : (selected ? 0.75f : 0.40f)));
+        g.setColour (juce::Colour (kScreenGlow).withAlpha (
+            cachedBypassed_ ? 0.15f : (selected ? 0.70f : 0.35f)));
         g.drawVerticalLine ((int) std::round (x), plotArea_.getY(), plotArea_.getBottom());
 
         auto handle = passHandleBounds (pass);
-        g.setColour (juce::Colour (selected ? 0xffbfdbfe : 0xff1e3a5f));
+        g.setColour (selected ? juce::Colour (0xffbfdbfe) : juce::Colour (0xff1e3a5f));
         g.fillRoundedRectangle (handle, 4.0f);
         g.setColour (juce::Colour (0xff93c5fd).withAlpha (selected ? 0.95f : 0.55f));
         g.drawRoundedRectangle (handle, 4.0f, 1.0f);
 
         g.setColour (selected ? juce::Colour (0xff06121f) : juce::Colour (0xffdbeafe));
-        g.setFont (juce::FontOptions (8.5f, juce::Font::bold));
+        g.setFont (baumansFont (8.5f));
         g.drawText (isHighPass ? "HPF" : "LPF", handle, juce::Justification::centred);
     }
 
@@ -2587,7 +2678,7 @@ private:
             if (disabled)
             {
                 // Hollow node: the band is at 0 dB and does not affect the sound.
-                g.setColour (juce::Colour (0xff14161a));
+                g.setColour (juce::Colour (kKnobBody));
                 g.fillEllipse (juce::Rectangle<float> (radius * 2.0f, radius * 2.0f)
                                    .withCentre (centre));
                 g.setColour (colour.withAlpha (cachedBypassed_ ? 0.22f : 0.55f));
@@ -2608,7 +2699,7 @@ private:
 
             g.setColour (disabled ? colour.withAlpha (cachedBypassed_ ? 0.35f : 0.80f)
                                   : juce::Colour (0xff111113));
-            g.setFont (juce::FontOptions (9.0f, juce::Font::bold));
+            g.setFont (baumansFont (9.0f));
             g.drawText (juce::String (band + 1),
                         juce::Rectangle<float> (radius * 2.0f, radius * 2.0f)
                             .withCentre (centre),
@@ -2883,6 +2974,22 @@ public:
     {
         items_.push_back (item);
         addAndMakeVisible (item);
+        applyUnitTheme (item);
+    }
+
+    /// Controls pick up the chassis colours of their unit: lettering flips to
+    /// dark on light metal and gold panels, and knobs inherit the LED accent.
+    void applyUnitTheme (juce::Component* item)
+    {
+        if (auto* control = dynamic_cast<ParamControl*> (item))
+        {
+            control->setUnitTheme (bodyColour_, accentColour_);
+        }
+        else if (auto* withKnob = dynamic_cast<FooterWithKnob*> (item))
+        {
+            if (auto* knob = dynamic_cast<ParamControl*> (withKnob->knobControl()))
+                knob->setUnitTheme (bodyColour_, accentColour_);
+        }
     }
 
     /// Performance mode stops the decorative hover timer; the glow snaps to
@@ -2907,6 +3014,7 @@ public:
     {
         rows_.push_back ({ row, height, false });
         addAndMakeVisible (row);
+        applyUnitTheme (row);
     }
 
     /// Adds a row that absorbs leftover vertical space. The supplied height is
@@ -2915,6 +3023,7 @@ public:
     {
         rows_.push_back ({ row, minimumHeight, true });
         addAndMakeVisible (row);
+        applyUnitTheme (row);
     }
 
     void setFooter (juce::Component* footer, int height, int width = 64)
@@ -2923,7 +3032,10 @@ public:
         footerHeight_ = height;
         footerWidth_ = width;
         if (footer_ != nullptr)
+        {
             addAndMakeVisible (footer_);
+            applyUnitTheme (footer_);
+        }
     }
 
     void setPreferredHeight (int height) { preferredHeight_ = height; }
@@ -2959,14 +3071,14 @@ public:
         if (style_ == UnitStyle::RackUnit)
         {
             g.setColour (accentColour_);
-            g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+            g.setFont (baumansFont (12.0f));
             g.drawText (title_, getLocalBounds().withTrimmedLeft (30).removeFromTop (titleHeight()),
                         juce::Justification::centredLeft);
         }
 
         if (highlight_ > 0.001f)
         {
-            g.setColour (accentColour_.withAlpha (0.18f * highlight_));
+            g.setColour (accentColour_.withAlpha (0.22f * highlight_));
             g.drawRoundedRectangle (bounds.reduced (1.0f), 10.0f, 2.0f);
         }
     }
@@ -2976,7 +3088,7 @@ public:
 
     void resized() override
     {
-        auto r = getLocalBounds().reduced (pad_);
+        auto r = getLocalBounds().reduced (pad_, pad_ / 2);
         r.removeFromTop (titleHeight());
 
         if (style_ == UnitStyle::Pedal)
@@ -2994,6 +3106,8 @@ public:
             const int cellHeight = itemCellHeight_ > 0
                 ? itemCellHeight_
                 : ParamControl::cellHeight;
+
+            const int contentHeight = gridRows * cellHeight + 12;
 
             auto layoutItems = [&] (int startY)
             {
@@ -3015,7 +3129,7 @@ public:
                     }
                 }
 
-                return startY + gridRows * cellHeight + 6;
+                return startY + contentHeight;
             };
 
             auto layoutRows = [&] (int startY)
@@ -3031,7 +3145,7 @@ public:
                         : row.height;
 
                     row.component->setBounds (r.getX(), y, r.getWidth(), height);
-                    y += height + 6;
+                    y += height + 12;
                     ++index;
                 }
 
@@ -3166,7 +3280,7 @@ private:
     {
         switch (style_)
         {
-            case UnitStyle::Pedal:    return 44;
+            case UnitStyle::Pedal:    return 30;
             case UnitStyle::AmpHead:  return 34;
             default:                  return 26;
         }
@@ -3174,30 +3288,65 @@ private:
 
     void paintPedal (juce::Graphics& g, juce::Rectangle<float> b)
     {
-        g.setColour (juce::Colours::black.withAlpha (0.40f));
-        g.fillRoundedRectangle (b.translated (0.0f, 4.0f), 16.0f);
+        // Shadow on the board.
+        g.setColour (juce::Colours::black.withAlpha (0.50f));
+        g.fillRoundedRectangle (b.translated (0.0f, 6.0f), 16.0f);
 
-        g.setGradientFill (juce::ColourGradient (
-            bodyColour_.brighter (0.22f), b.getCentreX(), b.getY(),
-            bodyColour_.darker (0.55f), b.getCentreX(), b.getBottom(), false));
-        g.fillRoundedRectangle (b, 16.0f);
+        // Die-cast enclosure: lit at the top, richer at the bottom, with
+        // side shading for a three-dimensional look.
+        {
+            juce::ColourGradient gradient (bodyColour_.brighter (0.28f),
+                                          b.getCentreX(), b.getY(),
+                                          bodyColour_.darker (0.42f),
+                                          b.getCentreX(), b.getBottom(), false);
+            gradient.addColour (0.5, bodyColour_);
+            g.setGradientFill (gradient);
+            g.fillRoundedRectangle (b, 16.0f);
+        }
+
+        // Side shading: darker at the left and right edges.
+        {
+            juce::ColourGradient side (juce::Colours::black.withAlpha (0.22f),
+                                      b.getX(), b.getCentreY(),
+                                      juce::Colours::transparentBlack,
+                                      b.getX() + b.getWidth() * 0.18f,
+                                      b.getCentreY(), false);
+            side.addColour (1.0, juce::Colours::black.withAlpha (0.22f));
+            g.setGradientFill (side);
+            g.fillRoundedRectangle (b, 16.0f);
+        }
+
+        // Top bevel highlight and dark outline.
+        g.setColour (juce::Colours::white.withAlpha (0.26f));
+        g.drawRoundedRectangle (b.reduced (2.0f), 14.0f, 1.2f);
+        g.setColour (juce::Colours::black.withAlpha (0.60f));
+        g.drawRoundedRectangle (b, 16.0f, 1.5f);
+
+        // Screen-printed title, placed right on top of the footswitch with a
+        // much larger font so it reads like a pedal name plate. Multi-word
+        // names are split across two centred lines.
+        // Place the name plate right above the footswitch at the bottom of
+        // the pedal. (withBottom + withHeight keeps the top fixed, so compute
+        // the top explicitly instead of chaining.)
+        auto titleArea = juce::Rectangle<float> (
+            b.getX() + 13.0f,
+            b.getBottom() - 140.0f,
+            b.getWidth() - 26.0f,
+            40.0f);
+        const juce::String titleText = title_.replace (" ", "\n");
 
         g.setColour (juce::Colours::black.withAlpha (0.55f));
-        g.drawRoundedRectangle (b, 16.0f, 1.5f);
-        g.setColour (juce::Colours::white.withAlpha (0.13f));
-        g.drawRoundedRectangle (b.reduced (2.0f), 14.0f, 1.0f);
+        g.setFont (baumansFont (22.0f));
+        g.drawFittedText (titleText, titleArea.translated (0.0f, 1.5f).toNearestInt(),
+                          juce::Justification::centred, 2, 0.7f);
 
-        auto plate = b.reduced (13.0f, 0.0f).withTrimmedTop (9.0f).withHeight (30.0f);
-        g.setColour (juce::Colours::black.withAlpha (0.35f));
-        g.fillRoundedRectangle (plate, 7.0f);
-        g.setColour (accentColour_.withAlpha (0.55f));
-        g.drawRoundedRectangle (plate, 7.0f, 1.0f);
+        g.setColour (juce::Colours::white.withAlpha (0.95f));
+        g.setFont (baumansFont (22.0f));
+        g.drawFittedText (titleText, titleArea.toNearestInt(),
+                          juce::Justification::centred, 2, 0.7f);
 
-        g.setColour (juce::Colour (0xfff4f4f5));
-        g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
-        // Shrink long titles (e.g. "IMPERSONATOR") so they always fit the plate.
-        g.drawFittedText (title_, plate.toNearestInt(),
-                          juce::Justification::centred, 1, 0.5f);
+        // Stronger LED jewel with a glow halo.
+        // (LED is drawn by the Footswitch; nothing extra here.)
 
         drawScrew (g, b.getX() + 11.0f, b.getY() + 11.0f, 3.5f);
         drawScrew (g, b.getRight() - 11.0f, b.getY() + 11.0f, 3.5f);
@@ -3207,19 +3356,22 @@ private:
 
     void paintAmp (juce::Graphics& g, juce::Rectangle<float> b)
     {
-        g.setColour (juce::Colours::black.withAlpha (0.45f));
-        g.fillRoundedRectangle (b.translated (0.0f, 4.0f), 12.0f);
+        g.setColour (juce::Colours::black.withAlpha (0.50f));
+        g.fillRoundedRectangle (b.translated (0.0f, 5.0f), 12.0f);
 
-        // Tolex cabinet.
+        // Tolex cabinet with a subtle pebble texture.
         g.setGradientFill (juce::ColourGradient (
-            juce::Colour (0xff202024), b.getX(), b.getY(),
+            juce::Colour (0xff232329), b.getX(), b.getY(),
             juce::Colour (0xff0c0c0e), b.getX(), b.getBottom(), false));
         g.fillRoundedRectangle (b, 12.0f);
+        g.setColour (juce::Colours::white.withAlpha (0.03f));
+        for (float y = b.getY() + 4.0f; y < b.getBottom(); y += 5.0f)
+            g.drawHorizontalLine ((int) y, b.getX() + 6.0f, b.getRight() - 6.0f);
 
         // Gold faceplate behind the knobs.
         auto face = b.reduced (10.0f).withTrimmedTop (6.0f).withHeight (145.0f);
         g.setGradientFill (juce::ColourGradient (
-            juce::Colour (0xffe2cf9a), face.getX(), face.getY(),
+            juce::Colour (0xffe6d4a2), face.getX(), face.getY(),
             juce::Colour (0xff9c8655), face.getX(), face.getBottom(), false));
         g.fillRoundedRectangle (face, 6.0f);
         g.setColour (juce::Colours::white.withAlpha (0.10f));
@@ -3228,24 +3380,40 @@ private:
         g.setColour (juce::Colour (0xff5a4a28));
         g.drawRoundedRectangle (face, 6.0f, 1.2f);
 
-        // Grille cloth.
+        // Etched model name on the faceplate.
+        g.setColour (juce::Colour (0xff4a3a1c));
+        g.setFont (baumansFont (12.0f));
+        g.drawText (title_, face.withTrimmedBottom (111.0f).reduced (12.0f, 0.0f),
+                    juce::Justification::centredLeft);
+        g.setColour (juce::Colours::white.withAlpha (0.18f));
+        g.drawHorizontalLine ((int) (face.getY() + 34.0f),
+                              face.getX() + 8.0f, face.getRight() - 8.0f);
+
+        // Grille cloth with a woven crosshatch.
         auto grille = b.reduced (12.0f).withTrimmedTop (160.0f).withTrimmedBottom (14.0f);
         g.setGradientFill (juce::ColourGradient (
-            juce::Colour (0xff151517), grille.getX(), grille.getY(),
+            juce::Colour (0xff1a1a1e), grille.getX(), grille.getY(),
             juce::Colour (0xff09090b), grille.getX(), grille.getBottom(), false));
         g.fillRoundedRectangle (grille, 7.0f);
-        g.setColour (juce::Colour (0xff1f1f23));
+        g.setColour (juce::Colour (0xff232329));
         for (float x = grille.getX() + 6.0f; x < grille.getRight(); x += 9.0f)
             g.drawLine (x, grille.getY() + 6.0f, x, grille.getBottom() - 6.0f, 0.7f);
         for (float y = grille.getY() + 6.0f; y < grille.getBottom(); y += 9.0f)
             g.drawLine (grille.getX() + 6.0f, y, grille.getRight() - 6.0f, y, 0.7f);
-        g.setColour (juce::Colour (0xff2a2a2f));
+        g.setColour (juce::Colours::black.withAlpha (0.35f));
         g.drawRoundedRectangle (grille, 7.0f, 1.2f);
 
-        g.setColour (juce::Colour (0xff25e07a));
-        g.fillEllipse (b.getRight() - 34.0f, b.getY() + 18.0f, 7.0f, 7.0f);
-        g.setColour (juce::Colours::black.withAlpha (0.5f));
-        g.drawEllipse (b.getRight() - 34.0f, b.getY() + 18.0f, 7.0f, 7.0f, 1.0f);
+        // Jewel pilot light.
+        const auto jewel = juce::Rectangle<float> (9.0f, 9.0f)
+                               .withCentre ({ b.getRight() - 30.0f, b.getY() + 21.0f });
+        g.setColour (juce::Colour (0xffff5a3c).withAlpha (0.35f));
+        g.fillEllipse (jewel.expanded (5.0f));
+        g.setGradientFill (juce::ColourGradient (
+            juce::Colour (0xffff9c6e), jewel.getX(), jewel.getY(),
+            juce::Colour (0xffc22b12), jewel.getX(), jewel.getBottom(), false));
+        g.fillEllipse (jewel);
+        g.setColour (juce::Colours::white.withAlpha (0.55f));
+        g.fillEllipse (jewel.getX() + 2.0f, jewel.getY() + 1.5f, 2.6f, 2.6f);
 
         drawScrew (g, b.getX() + 10.0f, b.getY() + 10.0f, 3.5f);
         drawScrew (g, b.getRight() - 10.0f, b.getY() + 10.0f, 3.5f);
@@ -3255,22 +3423,23 @@ private:
 
     void paintRack (juce::Graphics& g, juce::Rectangle<float> b)
     {
-        g.setColour (juce::Colours::black.withAlpha (0.40f));
-        g.fillRoundedRectangle (b.translated (0.0f, 3.0f), 6.0f);
+        g.setColour (juce::Colours::black.withAlpha (0.45f));
+        g.fillRoundedRectangle (b.translated (0.0f, 4.0f), 6.0f);
 
-        drawBrushedPanel (g, b, juce::Colour (0xff303036), juce::Colour (0xff151517), 6.0f);
-        g.setColour (juce::Colour (0xff0a0a0c));
+        // Brushed aluminium front panel.
+        drawBrushedPanel (g, b, juce::Colour (0xffe2e6f0), juce::Colour (0xffb3bacb), 6.0f);
+        g.setColour (juce::Colours::black.withAlpha (0.55f));
         g.drawRoundedRectangle (b, 6.0f, 1.5f);
 
         // Rack ears.
         auto leftEar = b.withWidth (22.0f);
         auto rightEar = b.withTrimmedLeft (b.getWidth() - 22.0f);
         g.setGradientFill (juce::ColourGradient (
-            juce::Colour (0xff3a3a41), leftEar.getX(), leftEar.getY(),
-            juce::Colour (0xff1a1a1d), leftEar.getX(), leftEar.getBottom(), false));
+            juce::Colour (0xffc9cfdd), leftEar.getX(), leftEar.getY(),
+            juce::Colour (0xff8f96ab), leftEar.getX(), leftEar.getBottom(), false));
         g.fillRect (leftEar);
         g.fillRect (rightEar);
-        g.setColour (juce::Colour (0xff0b0b0d));
+        g.setColour (juce::Colours::black.withAlpha (0.45f));
         g.drawLine (leftEar.getRight(), leftEar.getY(), leftEar.getRight(), leftEar.getBottom());
         g.drawLine (rightEar.getX(), rightEar.getY(), rightEar.getX(), rightEar.getBottom());
 
@@ -3279,11 +3448,12 @@ private:
         drawScrew (g, rightEar.getCentreX(), b.getY() + 18.0f, 3.4f);
         drawScrew (g, rightEar.getCentreX(), b.getBottom() - 18.0f, 3.4f);
 
-        g.setColour (accentColour_.withAlpha (0.55f));
-        g.fillRect (b.getX() + 26.0f, b.getY() + 24.0f, b.getWidth() - 52.0f, 2.0f);
+        // Accent strip under the title.
+        g.setColour (accentColour_);
+        g.fillRect (b.getX() + 26.0f, b.getY() + 22.0f, b.getWidth() - 52.0f, 2.0f);
 
         // Vent slots bottom-right.
-        g.setColour (juce::Colours::black.withAlpha (0.35f));
+        g.setColour (juce::Colours::black.withAlpha (0.30f));
         for (int i = 0; i < 6; ++i)
             g.fillRoundedRectangle (b.getRight() - 98.0f + i * 12.0f,
                                     b.getBottom() - 18.0f, 8.0f, 8.0f, 2.0f);
@@ -3417,9 +3587,9 @@ public:
     {
         auto bounds = getLocalBounds().toFloat().reduced (1.0f);
 
-        g.setColour (juce::Colour (dragOver_ ? 0xff2a2a2f : 0xff121214));
+        g.setColour (juce::Colour (dragOver_ ? 0xff242b3a : 0xff1a1f2b));
         g.fillRoundedRectangle (bounds, 6.0f);
-        g.setColour (juce::Colour (dragOver_ ? kAccent : kPanelLine));
+        g.setColour (juce::Colour (dragOver_ ? kScreenGlow : kScreenLine));
         g.drawRoundedRectangle (bounds, 6.0f, dragOver_ ? 2.0f : 1.0f);
     }
 
@@ -3580,9 +3750,9 @@ public:
     void paint (juce::Graphics& g) override
     {
         auto b = getLocalBounds().toFloat().reduced (1.0f);
-        g.setColour (juce::Colour (dragOver_ ? 0xff2a2a2f : 0xff141417));
+        g.setColour (juce::Colour (dragOver_ ? 0xffd7d9f2 : kPanel));
         g.fillRoundedRectangle (b, 6.0f);
-        g.setColour (juce::Colour (dragOver_ ? kAccent : 0xff2a2a2f));
+        g.setColour (juce::Colour (dragOver_ ? kAccent : kPanelLine));
         g.drawRoundedRectangle (b, 6.0f, dragOver_ ? 2.0f : 1.0f);
     }
 
@@ -3820,18 +3990,18 @@ public:
         auto panel = panelBounds_.toFloat();
 
         g.setGradientFill (juce::ColourGradient (
-            juce::Colour (0xff29292f), panel.getX(), panel.getY(),
-            juce::Colour (0xff151517), panel.getX(), panel.getBottom(), false));
+            juce::Colour (kPanel), panel.getX(), panel.getY(),
+            juce::Colour (0xffe7e9f2), panel.getX(), panel.getBottom(), false));
         g.fillRoundedRectangle (panel, 10.0f);
 
-        g.setColour (juce::Colour (kAccent));
-        g.drawRoundedRectangle (panel, 10.0f, 1.5f);
+        g.setColour (juce::Colour (kPanelLineStrong));
+        g.drawRoundedRectangle (panel, 10.0f, 1.0f);
 
         auto header = panelBounds_.reduced (14, 10);
         header.removeFromBottom (8);
 
-        g.setColour (juce::Colours::white);
-        g.setFont (juce::FontOptions (15.0f, juce::Font::bold));
+        g.setColour (juce::Colour (kText));
+        g.setFont (baumansFont (15.0f));
         g.drawFittedText (current_.getFileName().isNotEmpty()
                               ? current_.getFileName()
                               : current_.getFullPathName(),
@@ -3839,14 +4009,14 @@ public:
                           juce::Justification::centredLeft, 1);
 
         g.setColour (juce::Colour (kTextDim));
-        g.setFont (juce::FontOptions (9.5f));
+        g.setFont (baumansFont (9.5f));
         g.drawFittedText (current_.getFullPathName(), header.removeFromTop (14),
                           juce::Justification::centredLeft, 1);
 
         if (entries_.empty())
         {
             g.setColour (juce::Colour (kTextDim));
-            g.setFont (juce::FontOptions (12.0f));
+            g.setFont (baumansFont (12.0f));
             g.drawFittedText ("No matching files in this folder",
                               list_.getBounds(), juce::Justification::centred, 2);
         }
@@ -3913,9 +4083,9 @@ private:
         auto bounds = juce::Rectangle<int> (0, 0, width, height);
 
         if (selected)
-            g.fillAll (juce::Colour (0xff2d2d35));
+            g.fillAll (juce::Colour (0xffcfd4ee));
         else if (row % 2 == 1)
-            g.fillAll (juce::Colour (0x12ffffff));
+            g.fillAll (juce::Colour (0x0a000030));
 
         auto iconArea = bounds.removeFromLeft (30).reduced (7, 6);
 
@@ -3923,7 +4093,7 @@ private:
         {
             g.setColour (juce::Colour (kAccent));
             g.fillRoundedRectangle (iconArea.toFloat(), 2.0f);
-            g.setColour (juce::Colour (0xff0e7490));
+            g.setColour (juce::Colour (kPanel));
             g.fillRect (iconArea.getX(), iconArea.getY() - 2,
                         iconArea.getWidth() / 2, 3);
         }
@@ -3937,11 +4107,9 @@ private:
                         static_cast<float> (iconArea.getCentreY()), 1.0f);
         }
 
-        g.setColour (entry.isDirectory ? juce::Colour (0xfff4f4f5)
-                                       : juce::Colour (kText));
-        g.setFont (juce::FontOptions (13.0f,
-                                      entry.isDirectory ? juce::Font::bold
-                                                        : juce::Font::plain));
+        g.setColour (entry.isDirectory ? juce::Colour (kText)
+                                       : juce::Colour (kTextDim));
+        g.setFont (baumansFont (13.0f));
         g.drawFittedText (entry.name, bounds.reduced (6, 0),
                           juce::Justification::centredLeft, 1);
     }
@@ -4046,7 +4214,7 @@ private:
 //==============================================================================
 NAMBerryEditor::NAMBerryEditor (NAMBerryProcessor& p)
     : AudioProcessorEditor (&p), processor_ (p),
-      tabBar_ (juce::TabbedButtonBar::TabsAtBottom)
+      tabBar_ (juce::TabbedButtonBar::TabsAtTop)
 {
     lnf_ = std::make_unique<HardwareLookAndFeel>();
     setLookAndFeel (lnf_.get());
@@ -4054,6 +4222,9 @@ NAMBerryEditor::NAMBerryEditor (NAMBerryProcessor& p)
     addAndMakeVisible (reducedMotionButton_);
     reducedMotionButton_.setButtonText ("Performance");
     reducedMotionButton_.setTooltip ("Performance mode: stops UI animations and the live spectrum to save CPU");
+    // Dark lettering: the toggle now sits on the light header chrome.
+    reducedMotionButton_.setColour (juce::ToggleButton::textColourId,
+                                    juce::Colour (kText));
     reducedMotionAttachment_ = std::make_unique<APVTS::ButtonAttachment> (
         processor_.getValueTreeState(), "reducedMotion", reducedMotionButton_);
     performanceParam_ = processor_.getValueTreeState()
@@ -4088,11 +4259,13 @@ NAMBerryEditor::NAMBerryEditor (NAMBerryProcessor& p)
 
     inputGainKnob_ = std::make_unique<ParamControl> (processor_.getValueTreeState(),
                                                      "inputGain", "In");
+    if (auto* control = dynamic_cast<ParamControl*> (inputGainKnob_.get()))
+        control->setDarkText (true);
     addAndMakeVisible (*inputGainKnob_);
 
     setResizable (true, true);
-    setResizeLimits (1000, 600, 4000, 1000);
-    setSize (1280, 640);
+    setResizeLimits (1000, 650, 4000, 1200);
+    setSize (1280, 720);
 
     startTimerHz (30);
 }
@@ -4162,9 +4335,10 @@ void NAMBerryEditor::buildUi()
         return raw;
     };
 
-    auto makeFootswitch = [this, &state] (const juce::String& id, juce::Colour led)
+    auto makeFootswitch = [this, &state] (const juce::String& id, juce::Colour led,
+                                          juce::Colour body)
     {
-        auto fs = std::make_unique<Footswitch> (state, id, led);
+        auto fs = std::make_unique<Footswitch> (state, id, led, body);
         auto* raw = fs.get();
         ownedControls_.push_back (std::move (fs));
         return raw;
@@ -4282,11 +4456,11 @@ void NAMBerryEditor::buildUi()
     };
 
     tabBar_.clearTabs();
-    tabBar_.addTab ("Pre FX", juce::Colour (0xff1c1c20), -1);
-    tabBar_.addTab ("Amp", juce::Colour (0xff1c1c20), -1);
-    tabBar_.addTab ("Post EQ", juce::Colour (0xff1c1c20), -1);
-    tabBar_.addTab ("IR", juce::Colour (0xff1c1c20), -1);
-    tabBar_.addTab ("Post FX", juce::Colour (0xff1c1c20), -1);
+    tabBar_.addTab ("Pre FX", juce::Colours::transparentBlack, -1);
+    tabBar_.addTab ("Amp", juce::Colours::transparentBlack, -1);
+    tabBar_.addTab ("Post EQ", juce::Colours::transparentBlack, -1);
+    tabBar_.addTab ("IR", juce::Colours::transparentBlack, -1);
+    tabBar_.addTab ("Post FX", juce::Colours::transparentBlack, -1);
     tabBar_.setCurrentTabIndex (currentTabIndex_, false);
 
     const char* tabNames[] = { "Pre FX", "Amp", "Post EQ", "IR", "Post FX" };
@@ -4298,22 +4472,24 @@ void NAMBerryEditor::buildUi()
 
     updateTabVisuals();
 
-    // Unit colours.
-    const juce::Colour impersonatorBody (0xff4a2e2e), impersonatorAccent (0xfff59e0b);
-    const juce::Colour capoBody    (0xff7a4a10), capoAccent    (0xfffbbf24);
-    const juce::Colour gateBody    (0xff34343c), gateAccent    (0xffcbd5e1);
-    const juce::Colour compBody    (0xff82380f), compAccent    (0xfffb923c);
-    const juce::Colour acousticBody (0xff45301c), acousticAccent (0xffe8c39e);
-    const juce::Colour pedalBody   (0xff1f5f37), pedalAccent   (0xff4ade80);
-    const juce::Colour eqBody      (0xff3f3f46), eqAccent      (0xffd4d4d8);
-    const juce::Colour ampBody     (0xff141416), ampAccent     (0xffd4af37);
-    const juce::Colour rackBody    (0xff26262b), rackAccent    (0xff9ca3af);
-    const juce::Colour chorusBody  (0xff1e3a8a), chorusAccent  (0xff60a5fa);
-    const juce::Colour flangerBody (0xff4c1d95), flangerAccent (0xffc084fc);
-    const juce::Colour phaserBody  (0xff831843), phaserAccent  (0xfff472b6);
-    const juce::Colour delayBody   (0xff713f12), delayAccent   (0xfffacc15);
-    const juce::Colour reverbBody  (0xff1e3a5f), reverbAccent  (0xff93c5fd);
-    const juce::Colour reverbIrBody (0xff153a4a), reverbIrAccent (0xff67e8f9);
+    // Unit colours. Body hues are bright die-cast stompbox finishes that stay
+    // distinct against the white and indigo chrome; accents are the LED /
+    // knob-ring colours and stay light enough to glow on dark bodies.
+    const juce::Colour impersonatorBody (0xffc74736), impersonatorAccent (0xffff8f66);
+    const juce::Colour capoBody     (juce::Colour (0xffc98322).darker (0.30f)), capoAccent     (0xffffc94d);
+    const juce::Colour gateBody     (0xff5c6a85), gateAccent     (0xffc3cfe6);
+    const juce::Colour compBody     (juce::Colour (0xffc25f22).darker (0.25f)), compAccent     (0xffffa25c);
+    const juce::Colour acousticBody (juce::Colour (0xffc9995e).darker (0.35f)), acousticAccent (0xfff2d9ae);
+    const juce::Colour pedalBody    (0xff2e8f57), pedalAccent    (0xff6ee39a);
+    const juce::Colour eqBody       (0xff5b62b8), eqAccent       (0xffa3a9f2);
+    const juce::Colour faceplateGold (0xffd8c08a), ampAccent     (0xffd4af37);
+    const juce::Colour rackBody     (0xffdfe3ee), rackAccent     (0xff0e0052);
+    const juce::Colour chorusBody   (0xff3584c9), chorusAccent   (0xff7cc4f5);
+    const juce::Colour flangerBody  (0xff7a4fc9), flangerAccent  (0xffb794f6);
+    const juce::Colour phaserBody   (juce::Colour (0xffc2477f).darker (0.20f)), phaserAccent   (0xfff47ab3);
+    const juce::Colour delayBody    (juce::Colour (0xffd9a441).darker (0.35f)), delayAccent    (0xffffcf5c);
+    const juce::Colour reverbBody   (0xff2f5fbf), reverbAccent   (0xff74a7f2);
+    const juce::Colour reverbIrBody (0xff1d8496), reverbIrAccent (0xff66d9e8);
 
     // 1. Pre FX -------------------------------------------------------------
     // The tuner sits permanently in the editor header, so the pedalboard keeps
@@ -4339,16 +4515,17 @@ void NAMBerryEditor::buildUi()
         };
     }
 
-    if (auto* impersonatorPanel = makePanel (0, "IMPERSONATOR", UnitStyle::Pedal, 1, 120,
+    if (auto* impersonatorPanel = makePanel (0, "ALTER EGO", UnitStyle::Pedal, 1, 120,
                                              impersonatorBody, impersonatorAccent))
     {
         auto mode = std::make_unique<ModeSwitch> (state, "impersonatorToNeck");
         auto* rawMode = mode.get();
         ownedControls_.push_back (std::move (mode));
+        impersonatorPanel->setItemCellHeight (148);
         impersonatorPanel->addItem (rawMode);
         impersonatorPanel->addItem (makeControl ("impersonatorLevel", "Level"));
         impersonatorPanel->setFooter (
-            makeFootswitch ("impersonatorBypass", impersonatorAccent), 82);
+            makeFootswitch ("impersonatorBypass", impersonatorAccent, impersonatorBody), 92);
     }
 
     if (auto* pitchPanel = makePanel (0, "PITCH", UnitStyle::Pedal, 2, 164,
@@ -4358,7 +4535,7 @@ void NAMBerryEditor::buildUi()
         pitchPanel->addItem (makeControl ("capoTone", "Tone Match"));
         pitchPanel->addItem (makeControl ("capoMix", "Mix"));
         pitchPanel->addItem (makeControl ("capoQuality", "Quality", ParamControl::Kind::Toggle));
-        pitchPanel->setFooter (makeFootswitch ("capoBypass", capoAccent), 82);
+        pitchPanel->setFooter (makeFootswitch ("capoBypass", capoAccent, capoBody), 92);
     }
 
     if (auto* gate = makePanel (0, "GATE", UnitStyle::Pedal, 1, 120,
@@ -4367,22 +4544,21 @@ void NAMBerryEditor::buildUi()
         gate->addItem (makeControl ("gateThreshold", "Threshold"));
         gate->addItem (makeControl ("gateAttack", "Attack"));
         gate->addItem (makeControl ("gateRelease", "Release"));
-        gate->setFooter (makeFootswitch ("gateBypass", gateAccent), 82);
+        gate->setFooter (makeFootswitch ("gateBypass", gateAccent, gateBody), 92);
     }
 
     if (auto* acoustic = makePanel (0, "ACOUSTIC", UnitStyle::Pedal, 2, 164,
                                     acousticBody, acousticAccent))
     {
-        auto mode = std::make_unique<AcousticModeSwitch> (state, "acousticSimMode");
-        auto* rawMode = mode.get();
-        ownedControls_.push_back (std::move (mode));
-        acoustic->addItem (rawMode);
+        auto mode = makeControl ("acousticSimMode", "Mode");
+        mode->setStepSize (1.0);
+        acoustic->setItemCellHeight (120);
+        acoustic->addItem (mode);
         acoustic->addItem (makeControl ("acousticSimTop", "Top"));
         acoustic->addItem (makeControl ("acousticSimBody", "Body"));
         acoustic->addItem (makeControl ("acousticSimPiezo", "Piezo"));
         acoustic->addItem (makeControl ("acousticSimLevel", "Level"));
-        acoustic->setFooter (makeFootswitch ("acousticSimBypass", acousticAccent), 82);
-        acoustic->setPreferredHeight (450);
+        acoustic->setFooter (makeFootswitch ("acousticSimBypass", acousticAccent, acousticBody), 92);
     }
 
     if (auto* comp = makePanel (0, "COMP", UnitStyle::Pedal, 2, 164,
@@ -4394,7 +4570,7 @@ void NAMBerryEditor::buildUi()
         comp->addItem (makeControl ("compRelease", "Release"));
         comp->addItem (makeControl ("compMakeup", "Makeup"));
         comp->addItem (makeControl ("compTight", "Tight", ParamControl::Kind::Toggle));
-        comp->setFooter (makeFootswitch ("compBypass", compAccent), 82);
+        comp->setFooter (makeFootswitch ("compBypass", compAccent, compBody), 92);
     }
 
     if (auto* pedal = makePanel (0, "PEDAL", UnitStyle::Pedal, 3, 238,
@@ -4409,7 +4585,7 @@ void NAMBerryEditor::buildUi()
         pedal->addItem (makeControl ("pedalGain", "Gain"));
         pedal->addItem (makeControl ("pedalOutput", "Volume"));
         pedal->addRow (makeNamBox ("PEDAL MODEL", true), 140);
-        pedal->setFooter (makeFootswitch ("pedalBypass", pedalAccent), 82);
+        pedal->setFooter (makeFootswitch ("pedalBypass", pedalAccent, pedalBody), 92);
     }
 
     if (auto* preEq = makePanel (0, "PRE-EQ", UnitStyle::Pedal, 3, 238,
@@ -4425,7 +4601,7 @@ void NAMBerryEditor::buildUi()
         }
 
         auto volume = std::make_unique<FooterWithKnob> (
-            *makeFootswitch ("preEqBypass", eqAccent),
+            *makeFootswitch ("preEqBypass", eqAccent, eqBody),
             *makeControl ("preEqVolume", "Volume"));
         auto* rawVolume = volume.get();
         ownedControls_.push_back (std::move (volume));
@@ -4433,8 +4609,10 @@ void NAMBerryEditor::buildUi()
     }
 
     // 2. Amp ----------------------------------------------------------------
+    // The body colour is the gold faceplate the knobs sit on, so lettering
+    // turns dark automatically over the brushed gold.
     if (auto* amp = makePanel (1, "AMP", UnitStyle::AmpHead, 8, 760,
-                               ampBody, ampAccent))
+                               faceplateGold, ampAccent))
     {
         auto addAmpControl = [&] (const juce::String& id, const juce::String& text,
                                   ParamControl::Kind kind = ParamControl::Kind::Knob,
@@ -4562,6 +4740,7 @@ void NAMBerryEditor::buildUi()
     {
         auto* bypass = makeControl ("irBypass", "Bypass", ParamControl::Kind::Toggle, true);
         bypass->setLabelFontSize (12.5f);
+        bypass->setDarkText (true);
         ir->addRow (bypass, 64);
 
         for (int slot = 0; slot < IrLoader::kNumSlots; ++slot)
@@ -4608,8 +4787,9 @@ void NAMBerryEditor::buildUi()
         }
 
         // The only knob on this rack: a crossfade between IR A and IR B.
-        auto blend = std::make_unique<CenteredRow> (
-            makeControl ("irBlend", "Blend  A - B"));
+        auto* blendControl = makeControl ("irBlend", "Blend  A - B");
+        blendControl->setDarkText (true);
+        auto blend = std::make_unique<CenteredRow> (blendControl);
         auto* rawBlend = blend.get();
         ownedControls_.push_back (std::move (blend));
         ir->addRow (rawBlend, 110);
@@ -4627,7 +4807,7 @@ void NAMBerryEditor::buildUi()
         chorus->addItem (makeControl ("chorusDelay", "Delay"));
         chorus->addItem (makeControl ("chorusMix", "Mix"));
         chorus->addItem (makeControl ("chorusStereo", "Stereo", ParamControl::Kind::Toggle));
-        chorus->setFooter (makeFootswitch ("chorusBypass", chorusAccent), 82);
+        chorus->setFooter (makeFootswitch ("chorusBypass", chorusAccent, chorusBody), 92);
     }
 
     if (auto* flanger = makePanel (4, "FLANGER", UnitStyle::Pedal, 2, 0,
@@ -4638,7 +4818,7 @@ void NAMBerryEditor::buildUi()
         flanger->addItem (makeControl ("flangerManual", "Manual"));
         flanger->addItem (makeControl ("flangerFeedback", "Feedback"));
         flanger->addItem (makeControl ("flangerMix", "Mix"));
-        flanger->setFooter (makeFootswitch ("flangerBypass", flangerAccent), 82);
+        flanger->setFooter (makeFootswitch ("flangerBypass", flangerAccent, flangerBody), 92);
     }
 
     if (auto* phaser = makePanel (4, "PHASER", UnitStyle::Pedal, 2, 0,
@@ -4653,7 +4833,7 @@ void NAMBerryEditor::buildUi()
         phaser->addItem (stages);
 
         phaser->addItem (makeControl ("phaserMix", "Mix"));
-        phaser->setFooter (makeFootswitch ("phaserBypass", phaserAccent), 82);
+        phaser->setFooter (makeFootswitch ("phaserBypass", phaserAccent, phaserBody), 92);
     }
 
     if (auto* delay = makePanel (4, "DELAY", UnitStyle::Pedal, 2, 0,
@@ -4665,7 +4845,7 @@ void NAMBerryEditor::buildUi()
         delay->addItem (makeControl ("delayPingPong", "Ping-Pong", ParamControl::Kind::Toggle));
         delay->addItem (makeControl ("delayTone", "Tone"));
         delay->addItem (makeControl ("delayFuzz", "Fuzz"));
-        delay->setFooter (makeFootswitch ("delayBypass", delayAccent), 82);
+        delay->setFooter (makeFootswitch ("delayBypass", delayAccent, delayBody), 92);
     }
 
     if (auto* reverb = makePanel (4, "REVERB", UnitStyle::Pedal, 2, 0,
@@ -4674,7 +4854,7 @@ void NAMBerryEditor::buildUi()
         reverb->addItem (makeControl ("reverbMix", "Mix"));
         reverb->addItem (makeControl ("reverbDecay", "Decay"));
         reverb->addItem (makeControl ("reverbWidth", "Width"));
-        reverb->setFooter (makeFootswitch ("reverbBypass", reverbAccent), 82);
+        reverb->setFooter (makeFootswitch ("reverbBypass", reverbAccent, reverbBody), 92);
     }
 
     // Convolution reverb: two full stereo IRs in parallel, each with its own
@@ -4752,7 +4932,7 @@ void NAMBerryEditor::buildUi()
         addReverbIrControl ("reverbIrLevel", "Master");
         addReverbIrControl ("reverbIrRightMix", "Mix  R", true);
         addReverbIrControl ("reverbIrRightCutoff", "Cutoff R");
-        reverbIr->setFooter (makeFootswitch ("reverbIrBypass", reverbIrAccent), 82);
+        reverbIr->setFooter (makeFootswitch ("reverbIrBypass", reverbIrAccent, reverbIrBody), 92);
     }
 
     layoutContent();
@@ -4762,7 +4942,7 @@ void NAMBerryEditor::buildUi()
 void NAMBerryEditor::layoutContent()
 {
     constexpr int gap = 8;
-    constexpr int margin = 8;
+    constexpr int margin = 6;
 
     if (tabPanels_.empty())
         return;
@@ -4986,19 +5166,29 @@ void NAMBerryEditor::resized()
     if (headerTuner_ != nullptr)
         headerTuner_->setBounds (tunerArea);
 
-    constexpr int bottomHeight = 112;
+    // Global controls share the top row with the section tabs: Input Gain at
+    // the input (left edge), Room / Master at the output (right edge), and the
+    // tab bar centred between them.
+    constexpr int topRowHeight = 108;
+    constexpr int tabHeight = 64;
     constexpr int knobHeight = ParamControl::cellHeight;
     constexpr int knobWidth = ParamControl::cellWidth;
-    constexpr int tabHeight = 64;
-    constexpr int tabGap = 12;
+    constexpr int sidePodWidth = knobWidth * 2 + 16;
 
-    auto tabArea = r.removeFromBottom (bottomHeight);
-    const int bottomY = tabArea.getBottom();
-    const int knobY = bottomY - bottomHeight + (bottomHeight - knobHeight) / 2;
-    const int tabY  = bottomY - bottomHeight + (bottomHeight - tabHeight) / 2;
+    auto topRow = r.removeFromTop (topRowHeight);
+    const int knobY = topRow.getY() + (topRow.getHeight() - knobHeight) / 2;
 
-    // Measure the tab bar's natural width at a generous width first.
-    tabBar_.setBounds (tabArea.withSizeKeepingCentre (juce::jmin (tabArea.getWidth(), 900), tabHeight));
+    if (inputGainKnob_ != nullptr)
+        inputGainKnob_->setBounds (topRow.getX() + 10, knobY, knobWidth, knobHeight);
+
+    if (bottomKnobs_ != nullptr)
+        bottomKnobs_->setBounds (topRow.getRight() - 10 - sidePodWidth, knobY,
+                                 sidePodWidth, knobHeight);
+
+    // Measure the tab bar's natural width at a generous width first, then
+    // shrink and centre the bar so the buttons never drift off-centre.
+    tabBar_.setBounds (topRow.withSizeKeepingCentre (
+        juce::jmin (900, topRow.getWidth() - 32), tabHeight));
 
     int minX = tabBar_.getWidth();
     int maxRight = 0;
@@ -5012,29 +5202,18 @@ void NAMBerryEditor::resized()
             }
 
     const int naturalWidth = juce::jmax (0, maxRight - minX);
-    const auto strip = tabArea.reduced (8, 0);
-    const int knobsWidth = knobWidth * 2 + tabGap;
-    const int fixedWidth = knobWidth + knobsWidth + tabGap * 2;
-    const int barWidth = juce::jlimit (
-        240, juce::jmax (240, strip.getWidth() - fixedWidth),
-        naturalWidth > 0 ? naturalWidth : 660);
+    const int leftEdge = topRow.getX() + 10 + knobWidth + 12;
+    const int rightEdge = topRow.getRight() - 10 - sidePodWidth - 12;
+    const int available = juce::jmax (240, rightEdge - leftEdge);
+    const int barWidth = juce::jlimit (240, available,
+                                       naturalWidth > 0 ? naturalWidth : 660);
+    const int barX = juce::jlimit (leftEdge, juce::jmax (leftEdge, rightEdge - barWidth),
+                                   topRow.getX() + (topRow.getWidth() - barWidth) / 2);
 
-    // Input gain, the tab buttons and Room/Master form one centred group so
-    // the knobs sit right beside the bar instead of at the window edges.
-    const int groupWidth = fixedWidth + barWidth;
-    const int groupX = strip.getX() + juce::jmax (0, (strip.getWidth() - groupWidth) / 2);
-    const int barX = groupX + knobWidth + tabGap;
+    tabBar_.setBounds (barX, topRow.getY() + (topRowHeight - tabHeight) / 2,
+                       barWidth, tabHeight);
 
-    if (inputGainKnob_ != nullptr)
-        inputGainKnob_->setBounds (groupX, knobY, knobWidth, knobHeight);
-
-    tabBar_.setBounds (barX, tabY, barWidth, tabHeight);
-
-    if (bottomKnobs_ != nullptr)
-        bottomKnobs_->setBounds (barX + barWidth + tabGap, knobY,
-                                 knobsWidth, knobHeight);
-
-    viewport_.setBounds (r.reduced (4, 2));
+    viewport_.setBounds (r.reduced (6, 4));
     layoutContent();
 
     if (filePopup_ != nullptr)
@@ -5047,26 +5226,33 @@ void NAMBerryEditor::paint (juce::Graphics& g)
 
     auto header = getLocalBounds().removeFromTop (60);
 
+    // Light chrome: the coloured wordmark stays legible on the pale surface.
     g.setGradientFill (juce::ColourGradient (
-        juce::Colour (0xff26262b), 0.0f, 0.0f,
-        juce::Colour (0xff121214), 0.0f, (float) header.getBottom(), false));
+        juce::Colour (kPanel), 0.0f, 0.0f,
+        juce::Colour (kBg), 0.0f, (float) header.getBottom(), false));
     g.fillRect (header);
 
-    g.setColour (juce::Colours::white.withAlpha (0.025f));
-    for (int y = header.getY() + 3; y < header.getBottom(); y += 3)
-        g.drawHorizontalLine (y, (float) header.getX(), (float) header.getRight());
-
-    if (const auto* logo = headerLogoName(); logo != nullptr)
+    if (const auto* logo = headerLogoNameColored(); logo != nullptr)
     {
-        // The SVG already contains the icon and the wordmark in white.
         logo->drawWithin (g, juce::Rectangle<float> (10.0f, 8.0f, 140.0f, 44.0f),
                           juce::RectanglePlacement::centred
                               | juce::RectanglePlacement::onlyReduceInSize,
                           1.0f);
     }
 
-    g.setColour (juce::Colour (kAccent).withAlpha (0.5f));
-    g.fillRect (getLocalBounds().removeFromTop (60).removeFromBottom (2));
+    g.setColour (juce::Colour (kAccent).withAlpha (0.55f));
+    g.fillRect (header.removeFromBottom (1));
+
+    // Bench deck: a pale studio surface the hardware sits on.
+    const auto deck = viewport_.getBounds().toFloat().reduced (2.0f);
+    g.setGradientFill (juce::ColourGradient (
+        juce::Colour (0xffdde1ee), deck.getX(), deck.getY(),
+        juce::Colour (0xffccd1e3), deck.getX(), deck.getBottom(), false));
+    g.fillRoundedRectangle (deck, 12.0f);
+    g.setColour (juce::Colours::black.withAlpha (0.18f));
+    g.drawRoundedRectangle (deck, 12.0f, 1.2f);
+    g.setColour (juce::Colours::white.withAlpha (0.45f));
+    g.drawRoundedRectangle (deck.reduced (1.5f), 10.0f, 1.0f);
 }
 
 void NAMBerryEditor::mouseDown (const juce::MouseEvent& event)

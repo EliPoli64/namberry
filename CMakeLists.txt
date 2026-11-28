@@ -62,7 +62,10 @@ juce_generate_juce_header(NAMBerry)
 juce_add_binary_data(NAMBerryBinaryData
     SOURCES
         src/logoNameWhite.svg
+        src/logoNameColored.svg
         src/icon.svg
+        src/fonts/Baumans-Regular.ttf
+        src/fonts/Seven-Segment.ttf
 )
 
 # --- Source Files ---

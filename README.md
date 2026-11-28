@@ -232,7 +232,7 @@ Input
 
 Each tab shows a hardware icon (pedal, amp, EQ, speaker, sparkle). **Right-click any tab** to bypass that whole section; the icon dims and shows a red LED while bypassed.
 
-The bottom strip exposes **Input Gain** (−24…+24 dB, default 0 dB), the tab buttons, and **Room** and **Master** (master volume) as one centred group, with the knobs sitting immediately beside the tab bar rather than at the window edges. NAMBerry applies a fixed +6 dB output trim in addition to the saved Master value. The header contains the **Performance** toggle and the **PRESET** menu.
+The tab bar is centred at the top of the window. The same row carries the always-visible global controls: **Input Gain** (−24…+24 dB, default 0 dB) at the left end of the chain and **Room** / **Master** (master volume) at the right end. NAMBerry applies a fixed +6 dB output trim in addition to the saved Master value. The header contains the tuner, the **Performance** toggle and the **PRESET** menu.
 
 ---
 
@@ -382,17 +382,18 @@ DAW project state stores all parameter values through `AudioProcessorValueTreeSt
 
 ### UI
 
-The editor is JUCE-native and hardware-inspired:
+The editor is JUCE-native and hardware-inspired: a light studio palette (white and the NAMberry indigo `#0E0052`) with one distinct die-cast colour per effect, high-contrast lettering, a light header with the coloured wordmark, and dark LCD readouts for filenames, the tuner and the EQ screen:
 
-- left-to-right signal chain in a horizontally scrollable viewport,
-- a persistent centred bottom strip with **Input Gain**, the tabs, and **Room** / **Output** grouped together,
-- pedal enclosures, an amp head and rack units,
-- large 48 px hardware controls (the browser list is desktop-sized),
+- left-to-right signal chain on a light bench deck, in a horizontally scrollable viewport,
+- realistic stompbox pedals on Pre FX and Post FX (screen-printed titles, coloured die-cast enclosures with 3D shading, metal knobs with chassis-coloured arcs/pointers, LEDs with glow halos, footswitches),
+- an amplifier head on the Amp tab (tolex cabinet, gold faceplate, grille cloth with the model display, jewel pilot light),
+- brushed-aluminium rack units for the Post EQ and the IR cabinet loader,
+- a centred top tab bar with section icons (right-click any tab to bypass that section); **Input Gain** sits at the left end of that row and **Room** / **Master** at the right end,
 - footswitch LEDs show **active** (not bypassed) state,
-- the Performance toggle stops the hover-glow animation, the live Post EQ spectrum and the remaining decorative timers,
+- the Performance toggle stops the panel hover-glow animation, the live Post EQ spectrum and the remaining decorative timers,
 - a numeric reference field for the tuner.
 
-At the default 1280×640 editor size, all pedals on every tab fit without horizontal scrolling; narrower windows still use the scrollable viewport.
+At the default 1280×720 editor size, all panels on every tab fit without horizontal scrolling; narrower windows still use the scrollable viewport.
 
 `ui-spec.md` records an earlier Qt 6/QML exploration, but the shipped implementation uses JUCE native components. Qt Quick was not available in the build environment, and embedding a second event loop in a plugin was not practical.
 
@@ -630,13 +631,13 @@ The two IRs are gained so they always sum to unity, so the cabinet level stays c
 - Chorus: rate, depth, feedback, delay, mix, a **Stereo** switch and bypass. It uses a Boss-style three-voice stereo ensemble with a slow wide LFO, a fast shallow LFO, 120° voice phases and BBD-style wet tone shaping. Mix now runs 0–100 %: 50 % is the classic chorus blend, and 100 % removes the dry signal for a pure three-voice vibrato without a level jump. **Stereo** spreads the voices across the field; turning it off folds them to mono.
 - Flanger: rate, depth, manual, feedback, mix, bypass. Mix tops out at 50 %, with a 2× wet boost.
 - Phaser: rate, depth, feedback, stages, mix, bypass. Mix tops out at 50 %, with a 2× wet boost.
-- Room: **Room** in the bottom strip. 0 % is an exact passthrough and the default; higher values add a short, dark stereo tail without changing the dry level. There is no separate bypass.
+- Room: **Room** in the top control row. 0 % is an exact passthrough and the default; higher values add a short, dark stereo tail without changing the dry level. There is no separate bypass.
 - Delay: mix, time, feedback, **Tone**, **Fuzz**, Ping-Pong/Mono toggle, bypass. Ping-Pong bounces the echoes between left and right; Mono keeps them centred. Feedback is 0–10: 0 is one repeat and 10 is an almost endless tail. Tone tilts the repeats between dark and bright at 0 % (neutral); Fuzz drives them into tape-like saturation at 100 %.
 - Reverb: mix, decay, width, bypass. Its dry level is normalized so increasing reverb never boosts the dry guitar.
 - Reverb IR: two long filename rows (L and R), each with **LOAD**, arrows and drag-and-drop, plus accented **Mix L** / **Mix R**, **Cutoff L** / **Cutoff R**, a **Master** knob that boosts or cuts the wet output locally (-24 to +12 dB), and one bypass footswitch. The stereo IRs run in parallel as wet sends; each Mix sets its send level and crossfades the dry guitar out, with 100 % giving no dry signal and 0 % in both slots giving an exact passthrough. Cutoff fades that slot's IR tail after the chosen time. The pedal starts bypassed and each slot keeps its own last-used folder.
-- Master **Output** is in the bottom strip beside the tabs.
+- Master **Output** is in the top control row at the right end, beside the tabs.
 
-Use **Room** in the bottom strip to add a little ambience; there is no separate room bypass. Switching the delay off discards its feedback tail.
+Use **Room** in the top control row to add a little ambience; there is no separate room bypass. Switching the delay off discards its feedback tail.
 
 ### Performance mode
 

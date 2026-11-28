@@ -7,6 +7,21 @@
 > per-band curve-type switch in the focus strip, a Flat button and a bypass
 > toggle. The QML component sketches below are historical and are not part of
 > the build.
+>
+> **2026 UI refresh:** the editor now uses a light studio palette built on white
+> and the NAMberry brand indigo (`#0E0052`) with high-contrast lettering and one
+> distinct die-cast colour per effect. The header is light too, with the coloured
+> wordmark. The hardware rendering returned in an improved form: realistic
+> stompbox pedals (screen-printed titles, 3D die-cast enclosures, metal knobs
+> with chassis-coloured arcs/pointers, LEDs with glow halos, footswitches) on Pre
+> FX and Post FX, an amplifier head on the Amp tab (tolex, gold faceplate,
+> grille cloth with the model display, jewel pilot light), and brushed-aluminium
+> rack units for the Post EQ and the IR cabinet loader. The tab bar is centred in
+> a top control row that also carries **Input Gain** at the left end and **Room** /
+> **Master** at the right end. Filenames, the tuner and the EQ graph use dark LCD
+> readouts for visibility on every chassis colour. The Post EQ interaction model
+> and the set of stable component names used by the headless snapshot test were
+> preserved.
 
 This document describes the visual language and interaction model for the **NAMberry** plugin editor: a grounded, playful, stompbox-inspired interface built around a clear signal flow. The editor must feel like a tiny pedalboard and amp stack, not a dense rack of controls.
 

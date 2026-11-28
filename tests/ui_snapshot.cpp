@@ -163,7 +163,7 @@ int main (int argc, char** argv)
     }
 
     namberry::NAMBerryEditor editor (processor);
-    editor.setSize (1280, 640);
+    editor.setSize (1280, 720);
 
     juce::TabbedButtonBar* tabBar = nullptr;
     for (int i = 0; i < editor.getNumChildComponents(); ++i)

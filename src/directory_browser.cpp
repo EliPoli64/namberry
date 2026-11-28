@@ -1,8 +1,21 @@
 #include "namberry/DirectoryBrowser.h"
 
 #include <algorithm>
+#include <BinaryData.h>
 
 namespace namberry {
+
+static juce::Typeface::Ptr baumansTypefaceDB()
+{
+    static juce::Typeface::Ptr t = juce::Typeface::createSystemTypefaceFor (
+        BinaryData::BaumansRegular_ttf, (size_t) BinaryData::BaumansRegular_ttfSize);
+    return t;
+}
+static juce::Font baumansFontDB (float size)
+{
+    if (auto tf = baumansTypefaceDB()) return juce::Font (juce::FontOptions (tf).withHeight (size));
+    return juce::Font (juce::FontOptions (size));
+}
 
 DirectoryBrowser::DirectoryBrowser()
 {
@@ -10,7 +23,7 @@ DirectoryBrowser::DirectoryBrowser()
     setWantsKeyboardFocus (true);
 
     addAndMakeVisible (pathLabel_);
-    pathLabel_.setFont (juce::FontOptions (12.0f));
+    pathLabel_.setFont (baumansFontDB (12.0f));
     pathLabel_.setColour (juce::Label::textColourId, juce::Colour (0xffa1a1aa));
     pathLabel_.setJustificationType (juce::Justification::centredLeft);
 
@@ -242,9 +255,7 @@ void DirectoryBrowser::paintListBoxItem (int row, juce::Graphics& g,
 
     g.setColour (entry.isDirectory ? juce::Colour (0xfff4f4f5)
                                    : juce::Colour (0xffd4d4d8));
-    g.setFont (juce::FontOptions (14.0f,
-                                  entry.isDirectory ? juce::Font::bold
-                                                    : juce::Font::plain));
+    g.setFont (baumansFontDB (14.0f));
     g.drawFittedText (entry.name, bounds.reduced (6, 0),
                       juce::Justification::centredLeft, 1);
 }
@@ -282,7 +293,7 @@ void DirectoryBrowser::paint (juce::Graphics& g)
     g.drawRoundedRectangle (panel, 12.0f, 1.5f);
 
     g.setColour (juce::Colours::white);
-    g.setFont (juce::FontOptions (18.0f, juce::Font::bold));
+    g.setFont (baumansFontDB (18.0f));
     g.drawText (title_,
                 innerBounds_.reduced (18).removeFromTop (32),
                 juce::Justification::centredLeft);
